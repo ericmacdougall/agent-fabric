@@ -59,7 +59,8 @@ func Main(m *testing.M, prefix string) int {
 	return m.Run()
 }
 
-// Open returns a store on the test database, closed at the end of the test.
+// Open returns a store on an emptied test database, closed at the end of the
+// test. Emptying makes each test (and each -count iteration) independent.
 func Open(t *testing.T) *store.Store {
 	t.Helper()
 	st, err := store.Open(context.Background(), DSN)
@@ -67,5 +68,8 @@ func Open(t *testing.T) *store.Store {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(st.Close)
+	if err := st.Truncate(context.Background()); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
 	return st
 }
