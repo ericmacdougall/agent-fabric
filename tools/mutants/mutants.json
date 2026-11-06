@@ -837,5 +837,18 @@
     "\t\treturn s.finish(ctx, mission, attempt, fence, \"abandoned\", \"\", \"start failed: \"+err.Error())\n\t}\n\t// S3: count physical starts"
    ]
   ]
+ },
+ {
+  "id": "M65_renewed_refusal_unstored",
+  "invariant": "refusals_stored_and_replayed",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestRenewedLeaseRefusalReplays",
+  "edits": [
+   [
+    "\t\t\tpreRefusal = fmt.Errorf(\"%w: lease renewed after the sweep read it\", domain.ErrInvalidTransition)\n",
+    "\t\t\tresp := Response{Status: \"refused\", Reason: \"lease renewed\", ErrKind: \"invalid_transition\", Version: m.Version}\n\t\t\treturn resp, &Refusal{Response: resp, Err: fmt.Errorf(\"%w: lease renewed\", domain.ErrInvalidTransition)}\n"
+   ]
+  ]
  }
 ]

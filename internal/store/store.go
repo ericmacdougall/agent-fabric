@@ -304,6 +304,7 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	if err := json.Unmarshal(stateJSON, &m); err != nil {
 		return Response{}, fmt.Errorf("mission %s snapshot: %w", cmd.Mission, err)
 	}
+	var preRefusal error // a refusal decided before the reducer; stored like any other (S5)
 	if cmd.Kind == domain.CmdExpireLease {
 		// Authority rechecked before the mutation (review H10 / RV-22): a
 		// lease renewed after the sweep read its page is not expired.
@@ -313,8 +314,7 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 			return Response{}, err
 		}
 		if fresh != nil && *fresh {
-			resp := Response{Status: "refused", Reason: "lease renewed after the sweep read it", ErrKind: "invalid_transition", Version: m.Version}
-			return resp, &Refusal{Response: resp, Err: fmt.Errorf("%w: lease renewed", domain.ErrInvalidTransition)}
+			preRefusal = fmt.Errorf("%w: lease renewed after the sweep read it", domain.ErrInvalidTransition)
 		}
 	}
 
@@ -326,7 +326,13 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		}
 	}
 
-	events, derr := reducer.Decide(m, cmd, env)
+	var events []domain.Event
+	var derr error
+	if preRefusal != nil {
+		derr = preRefusal
+	} else {
+		events, derr = reducer.Decide(m, cmd, env)
+	}
 	resp := Response{Status: "ok", Version: m.Version}
 	if derr != nil {
 		resp.Status = "refused"

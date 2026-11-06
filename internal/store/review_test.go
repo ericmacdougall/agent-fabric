@@ -156,3 +156,34 @@ func TestRV8_OversizedCommandRefused(t *testing.T) {
 		t.Fatalf("oversized command left %d rows", n)
 	}
 }
+
+// S5 (Kimi P3 reconciliation): a renewed-lease refusal is stored like any
+// response, so the same key later replays it instead of deciding again.
+func TestRenewedLeaseRefusalReplays(t *testing.T) {
+	st, ctx := openTest(t)
+	st.Lease = 100 * time.Millisecond
+	mk(t, st, ctx, "m_1")
+	ok(t, st, ctx, "chat", "admit", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_1"})
+	fence := startAttempt(t, st, ctx, "m_1", "r_1")
+	time.Sleep(150 * time.Millisecond)
+	if err := st.Heartbeat(ctx, "r_1", fence); err != nil {
+		t.Fatal(err)
+	}
+	cmd := domain.Command{Kind: domain.CmdExpireLease, Mission: "m_1", Attempt: "r_1", Fence: fence}
+	_, err := st.Execute(ctx, "fabd", "expire:f1:observed", cmd)
+	var ref *Refusal
+	if !errors.As(err, &ref) {
+		t.Fatalf("expiry of a renewed lease: want a refusal, got %v", err)
+	}
+	if n := count(t, st, ctx, "SELECT count(*) FROM commands WHERE command_id = 'expire:f1:observed'"); n != 1 {
+		t.Fatalf("the refusal was not stored (%d rows)", n)
+	}
+	time.Sleep(150 * time.Millisecond) // the renewed lease lapses too
+	resp, err := st.Execute(ctx, "fabd", "expire:f1:observed", cmd)
+	if !errors.As(err, &ref) || !resp.Replayed {
+		t.Fatalf("same key after the lease lapsed: want the stored refusal replayed, got %+v %v", resp, err)
+	}
+	if m, _ := st.Mission(ctx, "m_1"); m.Attempts["r_1"].State == domain.AttemptUnknown {
+		t.Fatal("a replayed key expired the attempt")
+	}
+}
