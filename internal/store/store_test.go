@@ -455,7 +455,18 @@ func TestOutboxPagesAndCursor(t *testing.T) {
 	for i := 0; i < 9; i++ {
 		ok(t, st, ctx, "host", fmt.Sprintf("w%d", i), domain.Command{Kind: domain.CmdWake, Mission: "m_1", Token: fmt.Sprintf("job_%d", i)})
 	}
-	page, err := st.OutboxPage(ctx, "poster", 4)
+	// The xid8 guard (H5) hides rows newer than any in-progress transaction,
+	// and xids are cluster-wide: a transaction in another package's test
+	// database can hold this page back briefly. Consumers poll after a hint,
+	// so the test polls too (bounded), then asserts the exact page.
+	var page []OutboxRow
+	var err error
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		page, err = st.OutboxPage(ctx, "poster", 4)
+		if err != nil || len(page) == 4 || time.Now().After(deadline) {
+			break
+		}
+	}
 	if err != nil || len(page) != 4 || page[0].ID != 1 || page[3].ID != 4 {
 		t.Fatalf("page 1: %v %v", page, err)
 	}
