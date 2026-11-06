@@ -1,0 +1,17 @@
+{
+  "source": "synthetic fixture: shape of the #14882 slots file, invented contents",
+  "queue_ticket": "GoodQA goodqa#1",
+  "rules": {"max_active_owners": 4},
+  "slots": [
+    {"slot": 1, "name": "alpha", "ticket": "GoodQA goodqa#11"},
+    {"slot": 2, "name": "bravo", "ticket": "#12"},
+    {"slot": 3, "name": "charlie", "ticket": ""},
+    {"slot": 4, "name": "delta", "ticket": "GoodQA demo#14"},
+    {"slot": 5, "name": "echo (over the cap)", "ticket": "#15"}
+  ],
+  "queued_in_order": [
+    "foxtrot follow-up for #101",
+    {"name": "golf", "ticket": "GoodQA goodqa#102"},
+    {"item": "hotel with no ticket"}
+  ]
+}

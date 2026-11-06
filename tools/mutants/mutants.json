@@ -499,5 +499,44 @@
     "\tif false {\n\t\treturn AnswerResult{}"
    ]
   ]
+ },
+ {
+  "id": "M39_import_replay_counted_as_admit",
+  "invariant": "import_rerun_reports_replay",
+  "pkg": "./internal/importer",
+  "file": "internal/importer/importer.go",
+  "expect": "TestImportIdempotent",
+  "edits": [
+   [
+    "\t\tcase resp.Replayed:\n",
+    "\t\tcase false && resp.Replayed:\n"
+   ]
+  ]
+ },
+ {
+  "id": "M40_import_wal_source_dropped",
+  "invariant": "ask_source_names_wal_entry",
+  "pkg": "./internal/importer",
+  "file": "internal/importer/importer.go",
+  "expect": "TestImportIdempotent",
+  "edits": [
+   [
+    "\t\tif walID.MatchString(it.Ask) {",
+    "\t\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M41_import_size_cap_removed",
+  "invariant": "untrusted_input_bounded",
+  "pkg": "./internal/importer",
+  "file": "internal/importer/importer.go",
+  "expect": "TestImportRefusesBadInput",
+  "edits": [
+   [
+    "\tif len(b) > MaxFileBytes {",
+    "\tif false {"
+   ]
+  ]
  }
 ]

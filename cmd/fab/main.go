@@ -13,14 +13,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strings"
 	"text/tabwriter"
 	"time"
 
 	"fabric/internal/domain"
 	"fabric/internal/host"
+	"fabric/internal/importer"
 	"fabric/internal/store"
 )
 
@@ -277,165 +276,28 @@ func expireMain(args []string) error {
 
 // --- import of the #14882 queue files (DESIGN.md 4.1), shadow only ---
 
-type slotsFile struct {
-	Source      string `json:"source"`
-	QueueTicket string `json:"queue_ticket"`
-	Rules       struct {
-		MaxActiveOwners int `json:"max_active_owners"`
-	} `json:"rules"`
-	Slots []struct {
-		Slot   int    `json:"slot"`
-		Name   string `json:"name"`
-		Ticket string `json:"ticket"`
-	} `json:"slots"`
-	QueuedInOrder []json.RawMessage `json:"queued_in_order"`
-}
-
-type queueFile struct {
-	Items []struct {
-		Ask            string `json:"ask"`
-		Need           string `json:"need"`
-		DefaultApplied string `json:"default_applied"`
-		Status         string `json:"status"`
-	} `json:"items"`
-}
-
-func ticketRef(raw, fallback string) string {
-	raw = strings.TrimSpace(raw)
-	if strings.HasPrefix(raw, "GoodQA ") {
-		return raw
-	}
-	if strings.HasPrefix(raw, "#") {
-		return "GoodQA goodqa" + raw
-	}
-	return fallback
-}
-
 func importMain(args []string) error {
 	fs := flag.NewFlagSet("import", flag.ContinueOnError)
-	slotsPath := fs.String("slots", "", "active-slots.json")
-	queuePath := fs.String("queue", "", "user-decisions-queue.json")
-	mainWAL := fs.String("wal", "", "absolute path of the main WAL the ask ids come from (for wal: sources)")
+	var o importer.Options
+	fs.StringVar(&o.SlotsPath, "slots", "", "active-slots.json")
+	fs.StringVar(&o.QueuePath, "queue", "", "user-decisions-queue.json")
+	fs.StringVar(&o.MainWAL, "wal", "", "absolute path of the main WAL the ask ids come from (for wal: sources)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *slotsPath == "" || *queuePath == "" || *mainWAL == "" {
-		return errors.New("--slots, --queue and --wal are required")
-	}
-	var sf slotsFile
-	var qf queueFile
-	if err := readJSON(*slotsPath, &sf); err != nil {
-		return err
-	}
-	if err := readJSON(*queuePath, &qf); err != nil {
-		return err
-	}
-	return withStore(func(ctx context.Context, st *store.Store) error {
-		if sf.Rules.MaxActiveOwners > 0 {
-			if err := st.SetCap(ctx, sf.Rules.MaxActiveOwners); err != nil {
-				return err
-			}
-		}
-		fallback := sf.QueueTicket
-		if fallback == "" {
-			fallback = "GoodQA goodqa#14882"
-		}
-		src := "file:" + *slotsPath
-		admitted, queued := 0, 0
-		for _, s := range sf.Slots {
-			id := domain.MissionID(fmt.Sprintf("m_slot%d", s.Slot))
-			if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: id, Name: s.Name, Ticket: ticketRef(s.Ticket, fallback), Priority: s.Slot, Source: src}); err != nil {
-				return err
-			}
-			_, err := execute(ctx, st, "import", "import:admit:"+string(id), domain.Command{Kind: domain.CmdAdmitMission, Mission: id})
-			if err != nil && !errors.As(err, new(*store.Refusal)) {
-				return err
-			}
-			if err == nil {
-				admitted++
-			}
-		}
-		for i, raw := range sf.QueuedInOrder {
-			name, ticket := queuedItem(raw)
-			id := domain.MissionID(fmt.Sprintf("m_q%02d", i+1))
-			if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: id, Name: name, Ticket: ticketRef(ticket, fallback), Priority: 10 + i, Source: src}); err != nil {
-				return err
-			}
-			queued++
-		}
-		asks := 0
-		for i, it := range qf.Items {
-			if strings.TrimSpace(it.Need) == "" {
-				continue
-			}
-			// An item that names a real main-WAL ask id is sourced from that
-			// entry; anything else is sourced from the file itself (R12).
-			a := store.Ask{ID: fmt.Sprintf("q_item%02d", i+1), Kind: "decision", Question: it.Need, Recommended: it.DefaultApplied, Source: "file:" + *queuePath}
-			if walID.MatchString(it.Ask) {
-				a.ID = it.Ask
-				a.Source = "wal:" + *mainWAL + "#" + it.Ask
-			}
-			if err := st.CreateAsk(ctx, a); err != nil {
-				return err
-			}
-			asks++
-		}
-		fmt.Printf("import: cap=%d, slots admitted=%d, queued=%d, asks=%d (shadow: no effects posted)\n", sf.Rules.MaxActiveOwners, admitted, queued, asks)
-		return nil
-	})
-}
-
-var walID = regexp.MustCompile(`^w[0-9a-f]{11}$`)
-
-func queuedItem(raw json.RawMessage) (name, ticket string) {
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s, firstTicket(s)
-	}
-	var o struct {
-		Name   string `json:"name"`
-		Item   string `json:"item"`
-		Ticket string `json:"ticket"`
-	}
-	if json.Unmarshal(raw, &o) == nil {
-		n := o.Name
-		if n == "" {
-			n = o.Item
-		}
-		if o.Ticket != "" {
-			return n, o.Ticket
-		}
-		return n, firstTicket(n)
-	}
-	return string(raw), ""
-}
-
-func firstTicket(s string) string {
-	if i := strings.Index(s, "#"); i >= 0 {
-		j := i + 1
-		for j < len(s) && s[j] >= '0' && s[j] <= '9' {
-			j++
-		}
-		if j > i+1 {
-			return s[i:j]
-		}
-	}
-	return ""
-}
-
-func readJSON(path string, v any) error {
-	b, err := os.ReadFile(path)
+	sf, qf, err := importer.Load(o)
 	if err != nil {
 		return err
 	}
-	if len(b) > 4<<20 {
-		return fmt.Errorf("%s: larger than 4 MiB", path)
-	}
-	dec := json.NewDecoder(strings.NewReader(string(b)))
-	return dec.Decode(v)
+	return withStore(func(ctx context.Context, st *store.Store) error {
+		exec := func(ctx context.Context, actor, key string, cmd domain.Command) (store.Response, error) {
+			return execute(ctx, st, actor, key, cmd)
+		}
+		res, err := importer.Run(ctx, st, exec, o, sf, qf)
+		fmt.Println("import:", res)
+		return err
+	})
 }
-
-// --- host ---
 
 func hostMain(args []string) error {
 	if len(args) == 0 || args[0] != "controls" {

@@ -1,0 +1,239 @@
+// Package importer is the one-off shadow import of the #14882 queue files
+// (DESIGN.md 4.1): the active slots become admitted missions, the queue
+// becomes missions in order, and the decisions queue becomes asks. It posts
+// no effects. Every write is keyed, so a second run replays to the same state.
+package importer
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"regexp"
+	"strings"
+
+	"fabric/internal/domain"
+	"fabric/internal/store"
+)
+
+// MaxFileBytes bounds each input file: the files are untrusted JSON.
+const MaxFileBytes = 4 << 20
+
+// DefaultQueueTicket is the queue ticket when the slots file names none.
+const DefaultQueueTicket = "GoodQA goodqa#14882"
+
+// SlotsFile is active-slots.json.
+type SlotsFile struct {
+	Source      string `json:"source"`
+	QueueTicket string `json:"queue_ticket"`
+	Rules       struct {
+		MaxActiveOwners int `json:"max_active_owners"`
+	} `json:"rules"`
+	Slots []struct {
+		Slot   int    `json:"slot"`
+		Name   string `json:"name"`
+		Ticket string `json:"ticket"`
+	} `json:"slots"`
+	QueuedInOrder []json.RawMessage `json:"queued_in_order"`
+}
+
+// QueueFile is user-decisions-queue.json.
+type QueueFile struct {
+	Items []struct {
+		Ask            string `json:"ask"`
+		Need           string `json:"need"`
+		DefaultApplied string `json:"default_applied"`
+		Status         string `json:"status"`
+	} `json:"items"`
+}
+
+// Executor runs one keyed command; the CLI passes its pending-intent wrapper.
+type Executor func(ctx context.Context, actor, key string, cmd domain.Command) (store.Response, error)
+
+// Options name the inputs. The paths become file: sources (R12) and must not
+// contain spaces; MainWAL is the WAL that wal: ask sources point into.
+type Options struct {
+	SlotsPath string
+	QueuePath string
+	MainWAL   string
+}
+
+// Result counts what one run did. A second run over the same files reports
+// zero Admitted and the same total under Replayed.
+type Result struct {
+	Cap      int
+	Admitted int // admitted by this run
+	Replayed int // admission already recorded under its key (served from the store)
+	Refused  int // admission refused, e.g. over the cap
+	Queued   int // queued missions registered (idempotent)
+	Asks     int // asks registered (idempotent)
+	Skipped  int // queue items with no need text
+}
+
+func (r Result) String() string {
+	return fmt.Sprintf("cap=%d, slots admitted=%d replayed=%d refused=%d, queued=%d, asks=%d, skipped=%d (shadow: no effects posted)",
+		r.Cap, r.Admitted, r.Replayed, r.Refused, r.Queued, r.Asks, r.Skipped)
+}
+
+// Load reads and decodes both files, refusing anything over MaxFileBytes.
+func Load(o Options) (SlotsFile, QueueFile, error) {
+	var sf SlotsFile
+	var qf QueueFile
+	if o.SlotsPath == "" || o.QueuePath == "" || o.MainWAL == "" {
+		return sf, qf, errors.New("the slots file, the queue file and the main WAL path are all required")
+	}
+	for _, p := range []string{o.SlotsPath, o.QueuePath, o.MainWAL} {
+		if strings.ContainsAny(p, " \t\n") {
+			return sf, qf, fmt.Errorf("path %q: a provenance source cannot contain whitespace", p)
+		}
+	}
+	if err := readJSON(o.SlotsPath, &sf); err != nil {
+		return sf, qf, err
+	}
+	if err := readJSON(o.QueuePath, &qf); err != nil {
+		return sf, qf, err
+	}
+	return sf, qf, nil
+}
+
+func readJSON(path string, v any) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(b) > MaxFileBytes {
+		return fmt.Errorf("%s: larger than %d bytes", path, MaxFileBytes)
+	}
+	if err := json.Unmarshal(b, v); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
+}
+
+// Run applies the files to the store. exec defaults to st.Execute.
+func Run(ctx context.Context, st *store.Store, exec Executor, o Options, sf SlotsFile, qf QueueFile) (Result, error) {
+	if exec == nil {
+		exec = func(ctx context.Context, actor, key string, cmd domain.Command) (store.Response, error) {
+			return st.Execute(ctx, domain.ActorID(actor), domain.CommandID(key), cmd)
+		}
+	}
+	res := Result{Cap: sf.Rules.MaxActiveOwners}
+	if sf.Rules.MaxActiveOwners > 0 {
+		if err := st.SetCap(ctx, sf.Rules.MaxActiveOwners); err != nil {
+			return res, err
+		}
+	}
+	fallback := sf.QueueTicket
+	if fallback == "" {
+		fallback = DefaultQueueTicket
+	}
+	src := "file:" + o.SlotsPath
+	seen := map[int]bool{}
+	for _, s := range sf.Slots {
+		if s.Slot < 1 || seen[s.Slot] {
+			return res, fmt.Errorf("slot number %d is missing or repeated", s.Slot)
+		}
+		seen[s.Slot] = true
+		id := domain.MissionID(fmt.Sprintf("m_slot%d", s.Slot))
+		if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: id, Name: s.Name, Ticket: TicketRef(s.Ticket, fallback), Priority: s.Slot, Source: src}); err != nil {
+			return res, err
+		}
+		resp, err := exec(ctx, "import", "import:admit:"+string(id), domain.Command{Kind: domain.CmdAdmitMission, Mission: id})
+		var ref *store.Refusal
+		switch {
+		case errors.As(err, &ref):
+			res.Refused++
+		case err != nil:
+			return res, err
+		case resp.Replayed:
+			res.Replayed++
+		default:
+			res.Admitted++
+		}
+	}
+	for i, raw := range sf.QueuedInOrder {
+		name, ticket := QueuedItem(raw)
+		id := domain.MissionID(fmt.Sprintf("m_q%02d", i+1))
+		if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: id, Name: name, Ticket: TicketRef(ticket, fallback), Priority: 10 + i, Source: src}); err != nil {
+			return res, err
+		}
+		res.Queued++
+	}
+	for i, it := range qf.Items {
+		if strings.TrimSpace(it.Need) == "" {
+			res.Skipped++
+			continue
+		}
+		// An item that names a real main-WAL ask id is sourced from that
+		// entry; anything else (including "none") is sourced from the file.
+		a := store.Ask{ID: fmt.Sprintf("q_item%02d", i+1), Kind: "decision", Question: it.Need, Recommended: it.DefaultApplied, Source: "file:" + o.QueuePath}
+		if walID.MatchString(it.Ask) {
+			a.ID = it.Ask
+			a.Source = "wal:" + o.MainWAL + "#" + it.Ask
+		}
+		if err := st.CreateAsk(ctx, a); err != nil {
+			return res, err
+		}
+		res.Asks++
+	}
+	return res, nil
+}
+
+var walID = regexp.MustCompile(`^w[0-9a-f]{11}$`)
+
+// TicketRef normalises "GoodQA p#N" or "#N"; anything else gets fallback.
+func TicketRef(raw, fallback string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "GoodQA ") {
+		return raw
+	}
+	if strings.HasPrefix(raw, "#") {
+		return "GoodQA goodqa" + raw
+	}
+	return fallback
+}
+
+// QueuedItem reads a queue entry that is either a string or an object with
+// name/item and ticket.
+func QueuedItem(raw json.RawMessage) (name, ticket string) {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s, firstTicket(s)
+	}
+	var o struct {
+		Name   string `json:"name"`
+		Item   string `json:"item"`
+		Ticket string `json:"ticket"`
+	}
+	if json.Unmarshal(raw, &o) == nil {
+		n := o.Name
+		if n == "" {
+			n = o.Item
+		}
+		if o.Ticket != "" {
+			return n, o.Ticket
+		}
+		return n, firstTicket(n)
+	}
+	return string(raw), ""
+}
+
+func firstTicket(s string) string {
+	if i := strings.Index(s, "#"); i >= 0 {
+		j := i + 1
+		for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+			j++
+		}
+		if j > i+1 {
+			return s[i:j]
+		}
+	}
+	return ""
+}
