@@ -47,6 +47,8 @@ type hooks struct {
 	holdLocked       func(resource string) // after each capacity row lock in Hold
 	beforeHoldCommit func() error          // returning an error aborts the hold transaction
 	reclaimLocked    func(id string)       // after the reservation row lock in release/expire/settle
+
+	afterEventsRead func() // in VerifiedSnapshot, between the event read and the snapshot read
 }
 
 // Open connects; it does not migrate.
@@ -587,7 +589,13 @@ func (s *Store) Mission(ctx context.Context, id domain.MissionID) (domain.Missio
 
 // Events returns a mission's log in sequence order.
 func (s *Store) Events(ctx context.Context, id domain.MissionID) ([]domain.Event, error) {
-	rows, err := s.pool.Query(ctx, "SELECT payload FROM events WHERE mission_id = $1 ORDER BY seq", string(id))
+	return readEvents(ctx, s.pool, id)
+}
+
+func readEvents(ctx context.Context, q interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, id domain.MissionID) ([]domain.Event, error) {
+	rows, err := q.Query(ctx, "SELECT payload FROM events WHERE mission_id = $1 ORDER BY seq", string(id))
 	if err != nil {
 		return nil, err
 	}
@@ -607,23 +615,47 @@ func (s *Store) Events(ctx context.Context, id domain.MissionID) ([]domain.Event
 	return out, rows.Err()
 }
 
-// Rebuild replays the log and compares it with the snapshot. The snapshot is
-// derived state; the log is the authority. A mismatch is a bug, returned as an
-// error with both digests.
-func (s *Store) Rebuild(ctx context.Context, id domain.MissionID) (domain.Mission, error) {
-	events, err := s.Events(ctx, id)
+// VerifiedSnapshot replays the log and compares it with the snapshot, both
+// read in one read-only REPEATABLE READ transaction (Kimi projection
+// analysis): a writer committing between two separate reads made a valid
+// history look corrupt. It returns the rebuilt mission and the log it came
+// from, one high-water. A digest mismatch is a bug, returned with both digests.
+func (s *Store) VerifiedSnapshot(ctx context.Context, id domain.MissionID) (domain.Mission, []domain.Event, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return domain.Mission{}, err
+		return domain.Mission{}, nil, err
 	}
-	snap, err := s.Mission(ctx, id)
+	defer tx.Rollback(context.Background()) //nolint:errcheck // read-only
+	events, err := readEvents(ctx, tx, id)
 	if err != nil {
-		return domain.Mission{}, err
+		return domain.Mission{}, nil, err
+	}
+	if s.hooks.afterEventsRead != nil {
+		s.hooks.afterEventsRead()
+	}
+	var stateJSON []byte
+	err = tx.QueryRow(ctx, "SELECT state FROM missions WHERE id = $1", string(id)).Scan(&stateJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Mission{}, nil, fmt.Errorf("%w: mission %s", domain.ErrNotFound, id)
+	}
+	if err != nil {
+		return domain.Mission{}, nil, err
+	}
+	var snap domain.Mission
+	if err := json.Unmarshal(stateJSON, &snap); err != nil {
+		return domain.Mission{}, nil, fmt.Errorf("mission %s snapshot: %w", id, err)
 	}
 	rebuilt := reducer.Replay(id, events)
 	if a, b := reducer.Digest(rebuilt), reducer.Digest(snap); a != b {
-		return rebuilt, fmt.Errorf("mission %s: replay digest %s != snapshot %s", id, a[:12], b[:12])
+		return rebuilt, events, fmt.Errorf("mission %s: replay digest %s != snapshot %s", id, a[:12], b[:12])
 	}
-	return rebuilt, nil
+	return rebuilt, events, tx.Commit(ctx)
+}
+
+// Rebuild is VerifiedSnapshot without the log.
+func (s *Store) Rebuild(ctx context.Context, id domain.MissionID) (domain.Mission, error) {
+	m, _, err := s.VerifiedSnapshot(ctx, id)
+	return m, err
 }
 
 // OutboxRow is one event for a consumer.

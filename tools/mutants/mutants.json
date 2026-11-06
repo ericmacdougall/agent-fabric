@@ -1348,5 +1348,18 @@
     "\t\twctx, cancel := context.WithCancel(ctx)"
    ]
   ]
+ },
+ {
+  "id": "M112_rebuild_per_statement_snapshots",
+  "invariant": "rebuild_one_high_water",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestRebuildConcurrentWriterUsesOneSnapshot",
+  "edits": [
+   [
+    "pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}",
+    "pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly}"
+   ]
+  ]
  }
 ]
