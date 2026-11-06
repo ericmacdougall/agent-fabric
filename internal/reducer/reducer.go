@@ -113,6 +113,7 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		e.Generation = cmd.Generation
 		e.Head = cmd.Head
 		e.Receipt = cmd.Receipt
+		e.Vacuous = cmd.Vacuous
 		return []domain.Event{e}, nil
 
 	case domain.CmdFinishAttempt:
@@ -127,8 +128,24 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		e.WaitKey = cmd.WaitKey
 		e.Reason = cmd.Reason
 		switch cmd.Outcome {
-		case "checkpoint", "ready_for_review", "blocked":
+		case "checkpoint", "blocked":
 			e.AttemptTo = domain.AttemptSucceededUnverified
+		case "ready_for_review":
+			e.AttemptTo = domain.AttemptSucceededUnverified
+			e.Claims = cmd.Claims
+			if why := arbitrate(m, a, cmd.Claims); why != "" {
+				// H3: a ready_for_review claim is a claim, not truth. The
+				// checkpoint is kept, the refusal is recorded as an alert
+				// (R28) and the mission does not enter review.
+				e.Outcome = "checkpoint"
+				e.Reason = "ready_for_review refused: " + why
+				r := ev(domain.EvClaimRefused)
+				r.Attempt = a.ID
+				r.Fence = a.Fence
+				r.Reason = why
+				r.Claims = cmd.Claims
+				return []domain.Event{e, r}, nil
+			}
 		case "wait":
 			if cmd.WaitKey == "" {
 				return nil, fmt.Errorf("%w: wait needs a wait key", domain.ErrInvalidTransition)
@@ -211,10 +228,11 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if a.State.Unresolved() || a.State == domain.AttemptFailedDefinite || a.State == domain.AttemptQuarantined {
 			return nil, fmt.Errorf("%w: accept from attempt in %s", domain.ErrInvalidTransition, a.State)
 		}
-		evd, ok := m.Evidence[domain.EvidenceKey(a.ID, m.Version.IntentRevision, m.Version.CandidateGeneration, m.Head)]
-		if !ok {
+		cur := m.CurrentEvidence(a.ID)
+		if len(cur) == 0 {
 			return nil, domain.ErrEvidenceStale
 		}
+		evd := cur[0]
 		e := ev(domain.EvCandidateAccepted)
 		e.Attempt = a.ID
 		e.Revision = m.Version.IntentRevision
@@ -270,14 +288,24 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if err != nil {
 			return nil, err
 		}
-		if cmd.Effect == "" {
-			return nil, fmt.Errorf("%w: effect id", domain.ErrInvalidTransition)
+		// H1: the id is a pure function of (kind, canonical request) plus the
+		// occurrence, so two identical requests in one mission are two
+		// effects, while a replayed command (same key) is served by the store
+		// and never reaches here twice.
+		base, err := domain.EffectBase(cmd.EffectKind, cmd.Request)
+		if err != nil {
+			return nil, err
 		}
-		if _, dup := m.Effects[cmd.Effect]; dup {
-			return nil, fmt.Errorf("%w: effect %s", domain.ErrDuplicate, cmd.Effect)
+		occurrence := m.Occurrences(base) + 1
+		id := domain.EffectIDFor(base, occurrence)
+		if _, dup := m.Effects[id]; dup {
+			return nil, fmt.Errorf("%w: effect %s", domain.ErrDuplicate, id)
 		}
 		e := ev(domain.EvEffectSubmitted)
-		e.Effect = cmd.Effect
+		e.Effect = id
+		e.EffectKind = cmd.EffectKind
+		e.RequestSHA = base
+		e.Occurrence = occurrence
 		e.Attempt = a.ID
 		e.Fence = a.Fence
 		return []domain.Event{e}, nil
@@ -356,6 +384,33 @@ func liveAttempt(m domain.Mission, cmd domain.Command) (domain.Attempt, error) {
 	return a, nil
 }
 
+// arbitrate (H3, REPORT.md:320-327) checks a ready_for_review claim against
+// the mission's own evidence: every claimed AC must cite a receipt recorded
+// by this attempt for the exact current (revision, generation, head), and the
+// receipt must not be vacuous (R33). It returns the reason the claim fails,
+// or "" when it holds.
+func arbitrate(m domain.Mission, a domain.Attempt, claims []domain.Claim) string {
+	if m.Candidate == domain.CandNone || m.Head == "" {
+		return "no candidate head selected"
+	}
+	if len(claims) == 0 {
+		return "no acceptance claims"
+	}
+	for _, c := range claims {
+		if c.AC == "" || c.Receipt == "" {
+			return "claim without an AC or a receipt"
+		}
+		evd, ok := m.Evidence[domain.EvidenceKey(a.ID, m.Version.IntentRevision, m.Version.CandidateGeneration, m.Head, c.Receipt)]
+		if !ok {
+			return fmt.Sprintf("%s cites %s, which is not this attempt's evidence for the current head", c.AC, c.Receipt)
+		}
+		if evd.Vacuous {
+			return fmt.Sprintf("%s cites %s, a vacuous receipt (passed = failed = 0)", c.AC, c.Receipt)
+		}
+	}
+	return ""
+}
+
 // fenceCheck refuses any message whose fence is not the attempt's own fence.
 // A smaller fence is stale (a late message from a superseded run); a larger one
 // is forged or from the future and is refused the same way.
@@ -419,6 +474,9 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 			s.Execution = domain.ExecBlocked // frees the slot; re-entry is an admission
 			s.WaitKey = ""
 		default:
+			if e.Outcome == "ready_for_review" && s.Candidate == domain.CandUnverified {
+				s.Candidate = domain.CandVerifying
+			}
 			if s.Execution == domain.ExecRunning && s.LiveAttempts() == 0 {
 				s.Execution = domain.ExecAdmitted
 			}
@@ -427,8 +485,8 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		if s.Evidence == nil {
 			s.Evidence = map[string]domain.Evidence{}
 		}
-		s.Evidence[domain.EvidenceKey(e.Attempt, e.Revision, e.Generation, e.Head)] = domain.Evidence{
-			Attempt: e.Attempt, Revision: e.Revision, Generation: e.Generation, Head: e.Head, Receipt: e.Receipt,
+		s.Evidence[domain.EvidenceKey(e.Attempt, e.Revision, e.Generation, e.Head, e.Receipt)] = domain.Evidence{
+			Attempt: e.Attempt, Revision: e.Revision, Generation: e.Generation, Head: e.Head, Receipt: e.Receipt, Vacuous: e.Vacuous,
 		}
 	case domain.EvCandidateSelected:
 		s.Version.CandidateGeneration = e.Generation
@@ -462,7 +520,8 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		if s.Effects == nil {
 			s.Effects = map[domain.EffectID]domain.Effect{}
 		}
-		s.Effects[e.Effect] = domain.Effect{ID: e.Effect, Attempt: e.Attempt, Fence: e.Fence, State: domain.EffectDispatched, Submissions: 1}
+		s.Effects[e.Effect] = domain.Effect{ID: e.Effect, Kind: e.EffectKind, Base: e.RequestSHA, Occurrence: e.Occurrence,
+			Attempt: e.Attempt, Fence: e.Fence, State: domain.EffectDispatched, Submissions: 1}
 	case domain.EvEffectUnknown:
 		f := s.Effects[e.Effect]
 		f.State = domain.EffectUnknown

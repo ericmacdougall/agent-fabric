@@ -67,6 +67,7 @@ def main():
             apply_edits(work, m["file"], m["edits"])
         except RuntimeError as e:
             rows.append((m["id"], m["invariant"], m["expect"], "INVALID_EDIT", "-", "0.0", str(e)))
+            print(f"{m['id']}\tINVALID_EDIT\t{e}", flush=True)
             gate_ok = False
             continue
         cmd = ["go", "test", m["pkg"], "-count=1", "-timeout", f"{args.timeout}s"]

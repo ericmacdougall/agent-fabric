@@ -1,10 +1,12 @@
 package reducer
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
 	"os"
+	"sort"
 	"strconv"
 	"testing"
 
@@ -19,6 +21,8 @@ type fleet struct {
 	logs     map[domain.MissionID][]domain.Event
 	refusals map[string]int
 	emitted  map[domain.EventKind]int
+	reviews  int // times a mission entered VERIFYING through an arbitrated claim
+	repeats  int // effects with occurrence >= 2
 }
 
 func newFleet(capacity int, n int) *fleet {
@@ -58,6 +62,14 @@ func (f *fleet) step(t *testing.T, cmd domain.Command) (events []domain.Event, e
 	}
 	if v := Check(before, after, cmd, events, err, env); v != nil {
 		t.Fatalf("invariant violated: %v\ncmd=%+v\nbefore=%s\nafter=%s", v, cmd, Digest(before), Digest(after))
+	}
+	if after.Candidate == domain.CandVerifying && before.Candidate != domain.CandVerifying {
+		f.reviews++
+	}
+	for _, e := range events {
+		if e.Kind == domain.EvEffectSubmitted && e.Occurrence >= 2 {
+			f.repeats++
+		}
 	}
 	f.missions[cmd.Mission] = after
 	f.logs[cmd.Mission] = append(f.logs[cmd.Mission], events...)
@@ -152,12 +164,27 @@ func randomCommand(r *rand.Rand, f *fleet, id domain.MissionID, step int) domain
 			c.Head = "sha_other"
 		}
 		c.Receipt = fmt.Sprintf("rcpt_%d", step)
+		c.Vacuous = r.Intn(5) == 0
 	case 4:
 		c.Kind = domain.CmdFinishAttempt
 		c.Attempt = pickAttempt()
 		c.Fence = fenceFor(c.Attempt)
 		c.Outcome = []string{"checkpoint", "wait", "ready_for_review", "blocked", "abandoned", "bogus"}[r.Intn(6)]
 		c.WaitKey = fmt.Sprintf("job_%d", r.Intn(3))
+		if c.Outcome == "ready_for_review" {
+			var keys []string
+			for k, e := range m.Evidence {
+				if e.Attempt == c.Attempt {
+					keys = append(keys, k)
+				}
+			}
+			sort.Strings(keys)
+			if len(keys) > 0 && r.Intn(4) != 0 {
+				c.Claims = []domain.Claim{{AC: "AC-1", Receipt: m.Evidence[keys[r.Intn(len(keys))]].Receipt}}
+			} else {
+				c.Claims = []domain.Claim{{AC: "AC-1", Receipt: "rcpt_bogus"}}
+			}
+		}
 	case 5:
 		c.Kind = domain.CmdExpireLease
 		c.Attempt = pickAttempt()
@@ -188,7 +215,8 @@ func randomCommand(r *rand.Rand, f *fleet, id domain.MissionID, step int) domain
 		c.Kind = domain.CmdSubmitEffect
 		c.Attempt = pickAttempt()
 		c.Fence = fenceFor(c.Attempt)
-		c.Effect = domain.EffectID(fmt.Sprintf("e_%s_%d", id, r.Intn(4)))
+		c.EffectKind = []string{"ticket_comment", "push"}[r.Intn(2)]
+		c.Request = json.RawMessage(fmt.Sprintf(`{"ticket": 14791, "body": "b%d"}`, r.Intn(2)))
 	case 13:
 		c.Kind = domain.CmdEffectUnknown
 		if len(effectIDs) > 0 {
@@ -247,7 +275,7 @@ func TestTraces(t *testing.T) {
 	}
 	total := map[string]int{}
 	emitted := map[domain.EventKind]int{}
-	var checks int
+	var checks, reviews, repeats int
 	for i := 0; i < traces; i++ {
 		seed := base + int64(i)*1_000_003
 		r := rand.New(rand.NewSource(seed))
@@ -281,6 +309,8 @@ func TestTraces(t *testing.T) {
 		for k, v := range f.emitted {
 			emitted[k] += v
 		}
+		reviews += f.reviews
+		repeats += f.repeats
 	}
 	// Coverage gates: each safety path must have been exercised.
 	need := []string{domain.ErrStaleFence.Error(), domain.ErrOverCapacity.Error(), domain.ErrUnknownUnresolved.Error(),
@@ -296,7 +326,10 @@ func TestTraces(t *testing.T) {
 			t.Errorf("event %s never emitted (seed base %d)", k, base)
 		}
 	}
-	t.Logf("traces=%d steps=%d checks=%d seed_base=%d refusals=%v", traces, steps, checks, base, total)
+	if reviews == 0 || repeats == 0 || emitted[domain.EvClaimRefused] == 0 {
+		t.Errorf("H1/H3 paths not exercised: reviews=%d repeated_effects=%d claim_refused=%d", reviews, repeats, emitted[domain.EvClaimRefused])
+	}
+	t.Logf("traces=%d steps=%d checks=%d seed_base=%d reviews=%d repeated_effects=%d refusals=%v", traces, steps, checks, base, reviews, repeats, total)
 	t.Logf("emitted=%v", emitted)
 }
 
@@ -400,18 +433,19 @@ func TestPerMissionLiveAttemptsBounded(t *testing.T) {
 
 func TestUnknownRetryBlocked(t *testing.T) {
 	f, id, a, fence := startedMission(t)
-	mustStep(t, f, domain.Command{Kind: domain.CmdSubmitEffect, Mission: id, Attempt: a, Fence: fence, Effect: "e_push"})
-	mustStep(t, f, domain.Command{Kind: domain.CmdEffectUnknown, Mission: id, Effect: "e_push", Reason: "timeout"})
-	_, err := f.step(t, domain.Command{Kind: domain.CmdRetryEffect, Mission: id, Effect: "e_push"})
+	ev := mustStep(t, f, domain.Command{Kind: domain.CmdSubmitEffect, Mission: id, Attempt: a, Fence: fence, EffectKind: "push", Request: json.RawMessage(`{"head":"sha_a"}`)})
+	eid := ev[0].Effect
+	mustStep(t, f, domain.Command{Kind: domain.CmdEffectUnknown, Mission: id, Effect: eid, Reason: "timeout"})
+	_, err := f.step(t, domain.Command{Kind: domain.CmdRetryEffect, Mission: id, Effect: eid})
 	if !errors.Is(err, domain.ErrUnknownUnresolved) {
 		t.Fatalf("retry during UNKNOWN: want ErrUnknownUnresolved, got %v", err)
 	}
-	if got := f.missions[id].Effects["e_push"].Submissions; got != 1 {
+	if got := f.missions[id].Effects[eid].Submissions; got != 1 {
 		t.Fatalf("submissions changed to %d", got)
 	}
-	mustStep(t, f, domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: "e_push", Result: "NOT_APPLIED"})
-	mustStep(t, f, domain.Command{Kind: domain.CmdRetryEffect, Mission: id, Effect: "e_push"})
-	if got := f.missions[id].Effects["e_push"].Submissions; got != 2 {
+	mustStep(t, f, domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: eid, Result: "NOT_APPLIED"})
+	mustStep(t, f, domain.Command{Kind: domain.CmdRetryEffect, Mission: id, Effect: eid})
+	if got := f.missions[id].Effects[eid].Submissions; got != 2 {
 		t.Fatalf("after NOT_APPLIED, retry should be the 2nd submission, got %d", got)
 	}
 }
@@ -432,7 +466,12 @@ func TestAcceptNeedsCurrentEvidence(t *testing.T) {
 	if _, err = f.step(t, domain.Command{Kind: domain.CmdAccept, Mission: id, Attempt: a}); !errors.Is(err, domain.ErrEvidenceStale) {
 		t.Fatalf("accept with other-head evidence: want ErrEvidenceStale, got %v", err)
 	}
-	// No evidence at all: refused.
+	// A vacuous receipt for the current subject (passed = failed = 0): refused (R33).
+	mustStep(t, f, domain.Command{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence,
+		Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration, Head: m.Head, Receipt: "rcpt_vacuous", Vacuous: true})
+	if _, err = f.step(t, domain.Command{Kind: domain.CmdAccept, Mission: id, Attempt: a}); !errors.Is(err, domain.ErrEvidenceStale) {
+		t.Fatalf("accept on a vacuous receipt: want ErrEvidenceStale, got %v", err)
+	}
 	// Current evidence: accepted.
 	mustStep(t, f, domain.Command{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence,
 		Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration, Head: m.Head, Receipt: "rcpt_now"})
@@ -511,5 +550,124 @@ func TestRequestHashStable(t *testing.T) {
 	b.Token = "u"
 	if a.RequestHash() == b.RequestHash() {
 		t.Fatal("different commands hash equal")
+	}
+}
+
+// H1: the effect id is canonical and occurrence-suffixed. Two identical
+// requests under different command keys are two effects; key order and
+// whitespace do not change the identity.
+func TestEffectOccurrences(t *testing.T) {
+	f, id, a, fence := startedMission(t)
+	sub := func(req string) domain.Event {
+		ev := mustStep(t, f, domain.Command{Kind: domain.CmdSubmitEffect, Mission: id, Attempt: a, Fence: fence, EffectKind: "ticket_comment", Request: json.RawMessage(req)})
+		return ev[0]
+	}
+	e1 := sub(`{"ticket": 14791, "body": "same"}`)
+	e2 := sub(`{"body":"same","ticket":14791}`) // reordered keys, no spaces
+	e3 := sub(`{"ticket": 14791, "body": "other"}`)
+	if e1.RequestSHA != e2.RequestSHA || e1.Occurrence != 1 || e2.Occurrence != 2 || e1.Effect == e2.Effect {
+		t.Fatalf("identical requests: %+v vs %+v", e1, e2)
+	}
+	if e3.RequestSHA == e1.RequestSHA || e3.Occurrence != 1 {
+		t.Fatalf("different request shares identity: %+v", e3)
+	}
+	if string(e2.Effect) != fmt.Sprintf("e_%s_2", e1.RequestSHA[:24]) {
+		t.Fatalf("effect id %s is not derived from base and occurrence", e2.Effect)
+	}
+	if n := len(f.missions[id].Effects); n != 3 {
+		t.Fatalf("effects = %d, want 3", n)
+	}
+	_, err := f.step(t, domain.Command{Kind: domain.CmdSubmitEffect, Mission: id, Attempt: a, Fence: fence, EffectKind: "", Request: json.RawMessage(`{}`)})
+	if err == nil {
+		t.Fatal("effect without a kind was accepted")
+	}
+	_, err = f.step(t, domain.Command{Kind: domain.CmdSubmitEffect, Mission: id, Attempt: a, Fence: fence, EffectKind: "push", Request: json.RawMessage(`{not json`)})
+	if err == nil {
+		t.Fatal("non-JSON request was accepted")
+	}
+}
+
+func TestCanonicalEffectKey(t *testing.T) {
+	a, err := domain.EffectBase("ticket_comment", []byte(`{"b": [1, 2, {"z": true, "a": null}], "a": "x<y>&", "n": 1.50}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := domain.EffectBase("ticket_comment", []byte("{\"n\":1.50,\"a\":\"x<y>&\",\n \"b\":[1,2,{\"a\":null,\"z\":true}]}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Fatalf("key order and whitespace changed the effect base: %s vs %s", a[:12], b[:12])
+	}
+	c, _ := domain.EffectBase("push", []byte(`{"b": [1, 2, {"z": true, "a": null}], "a": "x<y>&", "n": 1.50}`))
+	if c == a {
+		t.Fatal("effect kind is not part of the base")
+	}
+	d, _ := domain.EffectBase("ticket_comment", []byte(`{"n": 1.5, "a": "x<y>&", "b": [1, 2, {"a": null, "z": true}]}`))
+	if d == a {
+		t.Fatal("1.50 and 1.5 are different request bytes and must not collide (numbers are kept verbatim)")
+	}
+	if _, err := domain.EffectBase("push", []byte(`{"a":1} trailing`)); err == nil {
+		t.Fatal("trailing data accepted")
+	}
+	big := make([]byte, domain.MaxRequestBytes+1)
+	for i := range big {
+		big[i] = ' '
+	}
+	if _, err := domain.EffectBase("push", big); err == nil {
+		t.Fatal("oversize request accepted (R25)")
+	}
+	cmd1 := domain.Command{Kind: domain.CmdSubmitEffect, Mission: "m_1", EffectKind: "push", Request: json.RawMessage(`{"a": 1, "b": 2}`)}
+	cmd2 := domain.Command{Kind: domain.CmdSubmitEffect, Mission: "m_1", EffectKind: "push", Request: json.RawMessage(`{"b":2,"a":1}`)}
+	if cmd1.RequestHash() != cmd2.RequestHash() {
+		t.Fatal("command hash is not canonical over the request body")
+	}
+}
+
+// H3: a ready_for_review claim moves the candidate to VERIFYING only when
+// every claimed AC cites this attempt's receipt for the current head and the
+// receipt is not vacuous; otherwise the checkpoint is kept, CLAIM_REFUSED is
+// recorded and the candidate stays UNVERIFIED.
+func TestReadyForReviewArbitration(t *testing.T) {
+	f, id, a, fence := startedMission(t)
+	m := f.missions[id]
+	cur := func(receipt string, vacuous bool) {
+		mustStep(t, f, domain.Command{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence,
+			Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration, Head: m.Head, Receipt: receipt, Vacuous: vacuous})
+	}
+	// Evidence for an older head.
+	mustStep(t, f, domain.Command{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence,
+		Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration, Head: "sha_old", Receipt: "rcpt_old"})
+	cur("rcpt_vac", true)
+	cur("rcpt_good", false)
+
+	next := func(claims []domain.Claim) (domain.Event, []domain.Event) {
+		t.Helper()
+		ev := mustStep(t, f, domain.Command{Kind: domain.CmdFinishAttempt, Mission: id, Attempt: a, Fence: fence, Outcome: "ready_for_review", Claims: claims})
+		return ev[0], ev
+	}
+	refused := func(name string, claims []domain.Claim) {
+		t.Helper()
+		fin, evs := next(claims)
+		if fin.Outcome != "checkpoint" || len(evs) != 2 || evs[1].Kind != domain.EvClaimRefused || f.missions[id].Candidate != domain.CandUnverified {
+			t.Fatalf("%s: outcome=%s events=%d candidate=%s", name, fin.Outcome, len(evs), f.missions[id].Candidate)
+		}
+		// Reconcile and start a fresh attempt for the next case; carry evidence over by re-recording.
+		mustStep(t, f, domain.Command{Kind: domain.CmdReconcileAttempt, Mission: id, Attempt: a, Fence: fence, Result: "VERIFIED"})
+		a = domain.AttemptID(string(a) + "x")
+		ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: a, Host: "h_t2", Role: "writer"})
+		fence = ev[0].Fence
+		mustStep(t, f, domain.Command{Kind: domain.CmdAckStart, Mission: id, Attempt: a, Fence: fence})
+		cur("rcpt_vac", true)
+		cur("rcpt_good", false)
+	}
+	refused("no claims", nil)
+	refused("stale head receipt", []domain.Claim{{AC: "AC-1", Receipt: "rcpt_old"}})
+	refused("unknown receipt", []domain.Claim{{AC: "AC-1", Receipt: "rcpt_none"}})
+	refused("vacuous receipt", []domain.Claim{{AC: "AC-1", Receipt: "rcpt_vac"}})
+	refused("one good, one vacuous", []domain.Claim{{AC: "AC-1", Receipt: "rcpt_good"}, {AC: "AC-2", Receipt: "rcpt_vac"}})
+	fin, evs := next([]domain.Claim{{AC: "AC-1", Receipt: "rcpt_good"}})
+	if fin.Outcome != "ready_for_review" || len(evs) != 1 || f.missions[id].Candidate != domain.CandVerifying {
+		t.Fatalf("valid claim: outcome=%s events=%d candidate=%s", fin.Outcome, len(evs), f.missions[id].Candidate)
 	}
 }

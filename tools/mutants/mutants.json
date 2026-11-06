@@ -55,12 +55,12 @@
   "id": "M5_accept_ignores_evidence",
   "invariant": "accepted_current_live_evidence",
   "pkg": "./internal/reducer",
-  "file": "internal/reducer/reducer.go",
+  "file": "internal/domain/state.go",
   "expect": "TestAcceptNeedsCurrentEvidence",
   "edits": [
    [
-    "if !ok {\n\t\t\treturn nil, domain.ErrEvidenceStale",
-    "if !ok && false {\n\t\t\treturn nil, domain.ErrEvidenceStale"
+    "if e.Attempt == attempt && e.Current(m) {",
+    "if e.Attempt == attempt {"
    ]
   ]
  },
@@ -124,12 +124,8 @@
   "expect": "TestTraces",
   "edits": [
    [
-    "s.Evidence[domain.EvidenceKey(e.Attempt, e.Revision, e.Generation, e.Head)]",
-    "s.Evidence[domain.EvidenceKey(e.Attempt, 0, 0, \"\")]"
-   ],
-   [
-    "m.Evidence[domain.EvidenceKey(a.ID, m.Version.IntentRevision, m.Version.CandidateGeneration, m.Head)]",
-    "m.Evidence[domain.EvidenceKey(a.ID, 0, 0, \"\")]"
+    "s.Evidence[domain.EvidenceKey(e.Attempt, e.Revision, e.Generation, e.Head, e.Receipt)]",
+    "s.Evidence[domain.EvidenceKey(e.Attempt, 0, 0, \"\", \"\")]"
    ]
   ]
  },
@@ -190,6 +186,71 @@
    [
     "now() + $3::interval\n\t\tWHERE id = $1 AND state IN",
     "now() + $2::interval\n\t\tWHERE id = $1 AND state IN"
+   ]
+  ]
+ },
+ {
+  "id": "M15_h1_occurrence_not_incremented",
+  "invariant": "effect_key_canonical_occurrence",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestEffectOccurrences",
+  "edits": [
+   [
+    "occurrence := m.Occurrences(base) + 1",
+    "occurrence := 1"
+   ]
+  ]
+ },
+ {
+  "id": "M16_h1_noncanonical_base",
+  "invariant": "effect_key_canonical_occurrence",
+  "pkg": "./internal/reducer",
+  "file": "internal/domain/canonical.go",
+  "expect": "TestCanonicalEffectKey",
+  "edits": [
+   [
+    "\tcanon, err := CanonicalJSON(request)\n\tif err != nil {\n\t\treturn \"\", err\n\t}",
+    "\tcanon, err := request, error(nil)\n\tif err != nil {\n\t\treturn \"\", err\n\t}"
+   ]
+  ]
+ },
+ {
+  "id": "M17_h3_arbitration_skipped",
+  "invariant": "review_needs_current_receipts",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestReadyForReviewArbitration",
+  "edits": [
+   [
+    "if why := arbitrate(m, a, cmd.Claims); why != \"\" {",
+    "if why := arbitrate(m, a, cmd.Claims); why != \"\" && false {"
+   ]
+  ]
+ },
+ {
+  "id": "M18_vacuous_receipt_counts",
+  "invariant": "accepted_current_live_evidence",
+  "pkg": "./internal/reducer",
+  "file": "internal/domain/state.go",
+  "expect": "TestAcceptNeedsCurrentEvidence",
+  "edits": [
+   [
+    "return !e.Vacuous && e.Revision == m.Version.IntentRevision &&",
+    "return e.Revision == m.Version.IntentRevision &&"
+   ]
+  ]
+ },
+ {
+  "id": "M19_h3_vacuous_claim_accepted",
+  "invariant": "review_needs_current_receipts",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestReadyForReviewArbitration",
+  "edits": [
+   [
+    "\t\tif evd.Vacuous {\n\t\t\treturn fmt.Sprintf(\"%s cites %s, a vacuous receipt",
+    "\t\tif evd.Vacuous && false {\n\t\t\treturn fmt.Sprintf(\"%s cites %s, a vacuous receipt"
    ]
   ]
  }

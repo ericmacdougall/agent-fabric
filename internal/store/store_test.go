@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -396,9 +397,10 @@ func TestEventSeqGapFreeAndRebuild(t *testing.T) {
 	fence := startAttempt(t, st, ctx, "m_1", "r_1")
 	ok(t, st, ctx, "host", "ack", domain.Command{Kind: domain.CmdAckStart, Mission: "m_1", Attempt: "r_1", Fence: fence})
 	ok(t, st, ctx, "host", "ev", domain.Command{Kind: domain.CmdRecordEvidence, Mission: "m_1", Attempt: "r_1", Fence: fence, Revision: 0, Generation: 1, Head: "sha_1", Receipt: "rcpt_1"})
-	ok(t, st, ctx, "host", "eff", domain.Command{Kind: domain.CmdSubmitEffect, Mission: "m_1", Attempt: "r_1", Fence: fence, Effect: "e_1"})
-	ok(t, st, ctx, "fabd", "unk", domain.Command{Kind: domain.CmdEffectUnknown, Mission: "m_1", Effect: "e_1"})
-	ok(t, st, ctx, "fabd", "res", domain.Command{Kind: domain.CmdResolveEffect, Mission: "m_1", Effect: "e_1", Result: "CONFIRMED"})
+	eff := ok(t, st, ctx, "host", "eff", domain.Command{Kind: domain.CmdSubmitEffect, Mission: "m_1", Attempt: "r_1", Fence: fence, EffectKind: "ticket_comment", Request: json.RawMessage(`{"ticket": 14791, "body": "checkpoint"}`)})
+	eid := eff.Events[0].Effect
+	ok(t, st, ctx, "fabd", "unk", domain.Command{Kind: domain.CmdEffectUnknown, Mission: "m_1", Effect: eid})
+	ok(t, st, ctx, "fabd", "res", domain.Command{Kind: domain.CmdResolveEffect, Mission: "m_1", Effect: eid, Result: "CONFIRMED"})
 	ok(t, st, ctx, "host", "fin", domain.Command{Kind: domain.CmdFinishAttempt, Mission: "m_1", Attempt: "r_1", Fence: fence, Outcome: "wait", WaitKey: "job_1"})
 	ok(t, st, ctx, "host", "wake", domain.Command{Kind: domain.CmdWake, Mission: "m_1", Token: "job_1"})
 	ok(t, st, ctx, "fabd", "rec", domain.Command{Kind: domain.CmdReconcileAttempt, Mission: "m_1", Attempt: "r_1", Fence: fence, Result: "VERIFIED"})
@@ -566,6 +568,37 @@ func TestHelperCrash(t *testing.T) {
 	}
 	st.Execute(ctx, "chat", "crash-key", domain.Command{Kind: domain.CmdAdmitMission, Mission: id}) //nolint:errcheck
 	t.Fatal("helper did not crash at the cutpoint")
+}
+
+// H1 at the store: two identical requests under different command keys are
+// two effects (occurrence 1 and 2); a replay of the first key, as after a
+// restart, adds nothing.
+func TestEffectOccurrencesStore(t *testing.T) {
+	st, ctx := openTest(t)
+	mk(t, st, ctx, "m_1")
+	ok(t, st, ctx, "chat", "admit", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_1"})
+	fence := startAttempt(t, st, ctx, "m_1", "r_1")
+	cmd := domain.Command{Kind: domain.CmdSubmitEffect, Mission: "m_1", Attempt: "r_1", Fence: fence, EffectKind: "ticket_comment", Request: json.RawMessage(`{"ticket": 14791, "body": "same"}`)}
+	first := ok(t, st, ctx, "host", "c1", cmd)
+	reordered := cmd
+	reordered.Request = json.RawMessage(`{"body":"same","ticket":14791}`)
+	second := ok(t, st, ctx, "host", "c2", reordered)
+	if first.Events[0].Occurrence != 1 || second.Events[0].Occurrence != 2 || first.Events[0].RequestSHA != second.Events[0].RequestSHA {
+		t.Fatalf("occurrences: %+v / %+v", first.Events[0], second.Events[0])
+	}
+	replay := ok(t, st, ctx, "host", "c1", cmd)
+	if !replay.Replayed || replay.Events[0].Effect != first.Events[0].Effect {
+		t.Fatalf("replay of c1: %+v", replay)
+	}
+	m, _ := st.Mission(ctx, "m_1")
+	if len(m.Effects) != 2 {
+		t.Fatalf("effects = %d, want 2", len(m.Effects))
+	}
+	// Same key, reordered body: the canonical hash matches, so it is a replay, not a conflict.
+	again := ok(t, st, ctx, "host", "c1", reordered)
+	if !again.Replayed {
+		t.Fatal("reordered body under the same key should replay (canonical hash)")
+	}
 }
 
 // Keep strings imported for quoteIdent's callers in this file.

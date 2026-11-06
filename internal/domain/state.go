@@ -106,19 +106,29 @@ type Attempt struct {
 }
 
 // Evidence is a receipt bound to an exact subject (plan invariant 12).
+// Vacuous marks a test receipt with passed = failed = 0 (R33): it is kept
+// but can never back an acceptance or a ready_for_review claim.
 type Evidence struct {
 	Attempt    AttemptID `json:"attempt"`
 	Revision   int64     `json:"revision"`
 	Generation int64     `json:"generation"`
 	Head       string    `json:"head"`
 	Receipt    string    `json:"receipt"`
+	Vacuous    bool      `json:"vacuous,omitempty"`
+}
+
+// Current reports whether the evidence is bound to the mission's exact
+// current subject and carries a real result.
+func (e Evidence) Current(m Mission) bool {
+	return !e.Vacuous && e.Revision == m.Version.IntentRevision &&
+		e.Generation == m.Version.CandidateGeneration && e.Head == m.Head
 }
 
 // EvidenceKey names the exact subject a receipt is bound to. Evidence is
 // never overwritten: a later receipt for an older subject lives beside the
 // current one instead of masking it (plan invariant 12).
-func EvidenceKey(attempt AttemptID, revision, generation int64, head string) string {
-	return fmt.Sprintf("%s|r%d|g%d|%s", attempt, revision, generation, head)
+func EvidenceKey(attempt AttemptID, revision, generation int64, head, receipt string) string {
+	return fmt.Sprintf("%s|r%d|g%d|%s|%s", attempt, revision, generation, head, receipt)
 }
 
 // Acceptance records which attempt's candidate was accepted and for which
@@ -135,6 +145,9 @@ type Acceptance struct {
 // hash, readback) is a later slice.
 type Effect struct {
 	ID          EffectID    `json:"id"`
+	Kind        string      `json:"kind"`
+	Base        string      `json:"base"`       // sha256(kind, canonical request) (H1)
+	Occurrence  int         `json:"occurrence"` // 1 for the first identical request, 2 for the next
 	Attempt     AttemptID   `json:"attempt"`
 	Fence       int64       `json:"fence"`
 	State       EffectState `json:"state"`
@@ -208,6 +221,34 @@ func (m Mission) LiveAttempts() int {
 	n := 0
 	for _, a := range m.Attempts {
 		if a.State.Live() {
+			n++
+		}
+	}
+	return n
+}
+
+// CurrentEvidence returns the receipts bound to the current subject for one
+// attempt, sorted by receipt id for determinism.
+func (m Mission) CurrentEvidence(attempt AttemptID) []Evidence {
+	var out []Evidence
+	for _, e := range m.Evidence {
+		if e.Attempt == attempt && e.Current(m) {
+			out = append(out, e)
+		}
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j].Receipt < out[j-1].Receipt; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+// Occurrences counts effects already recorded with the given base.
+func (m Mission) Occurrences(base string) int {
+	n := 0
+	for _, f := range m.Effects {
+		if f.Base == base {
 			n++
 		}
 	}

@@ -50,6 +50,21 @@ type Command struct {
 	Effect     EffectID  `json:"effect,omitempty"`
 	Result     string    `json:"result,omitempty"` // RECONCILE_ATTEMPT / RESOLVE_EFFECT
 	Reason     string    `json:"reason,omitempty"`
+
+	// SUBMIT_EFFECT (H1): the effect id is derived from kind + canonical
+	// request + occurrence; the caller never names it.
+	EffectKind string          `json:"effect_kind,omitempty"`
+	Request    json.RawMessage `json:"request,omitempty"`
+	// RECORD_EVIDENCE (R33): a test receipt with passed = failed = 0.
+	Vacuous bool `json:"vacuous,omitempty"`
+	// FINISH_ATTEMPT ready_for_review (H3): the claims to arbitrate.
+	Claims []Claim `json:"claims,omitempty"`
+}
+
+// Claim is one "AC-n passes, see receipt" assertion in a checkpoint.
+type Claim struct {
+	AC      string `json:"ac"`
+	Receipt string `json:"receipt"`
 }
 
 // EventKind names a recorded fact.
@@ -76,6 +91,7 @@ const (
 	EvEffectResolved    EventKind = "EFFECT_RESOLVED"
 	EvMissionReleased   EventKind = "MISSION_RELEASED"
 	EvAcceptanceRevoked EventKind = "ACCEPTANCE_REVOKED"
+	EvClaimRefused      EventKind = "CLAIM_REFUSED" // H3: a ready_for_review claim without current evidence (an alert, R28)
 )
 
 // Event is one recorded fact about a mission. Seq is assigned by the store
@@ -100,6 +116,11 @@ type Event struct {
 	Result     string       `json:"result,omitempty"`
 	Reason     string       `json:"reason,omitempty"`
 	AttemptTo  AttemptState `json:"attempt_to,omitempty"`
+	EffectKind string       `json:"effect_kind,omitempty"`
+	RequestSHA string       `json:"request_sha,omitempty"`
+	Occurrence int          `json:"occurrence,omitempty"`
+	Vacuous    bool         `json:"vacuous,omitempty"`
+	Claims     []Claim      `json:"claims,omitempty"`
 }
 
 // RequestHash is the canonical SHA-256 of a command body. Two commands with
@@ -107,6 +128,11 @@ type Event struct {
 // IDEMPOTENCY_CONFLICT. encoding/json emits struct fields in declaration order
 // with omitempty, so the bytes are deterministic for a given Go build.
 func (c Command) RequestHash() string {
+	if len(c.Request) > 0 {
+		if canon, err := CanonicalJSON(c.Request); err == nil {
+			c.Request = canon
+		}
+	}
 	b, err := json.Marshal(c)
 	if err != nil {
 		// A Command is plain data; Marshal cannot fail. Fail closed anyway.

@@ -19,6 +19,8 @@ const (
 	InvDeliveredGen      = "delivered_current_generation"
 	InvUnresolvedNoStart = "unresolved_attempt_blocks_start"
 	InvRefusalNoEvents   = "refusal_emits_no_events"
+	InvArbitration       = "review_needs_current_receipts"   // H3
+	InvEffectKey         = "effect_key_canonical_occurrence" // H1
 )
 
 // Violation is one failed invariant with enough context to reproduce it.
@@ -68,10 +70,9 @@ func Check(before, after domain.Mission, cmd domain.Command, events []domain.Eve
 	// I5: an acceptance is bound to exact current evidence.
 	if acc := after.Accepted; acc != nil {
 		cur := after.Version
-		evd, ok := after.Evidence[domain.EvidenceKey(acc.Attempt, cur.IntentRevision, cur.CandidateGeneration, after.Head)]
-		if !ok || acc.Revision != cur.IntentRevision || acc.Generation != cur.CandidateGeneration || acc.Head != after.Head ||
-			evd.Revision != cur.IntentRevision || evd.Generation != cur.CandidateGeneration || evd.Head != after.Head {
-			return Violation{InvAcceptedEvidence, fmt.Sprintf("accepted %+v without current evidence (evidence=%+v, version=%+v, head=%q)", *acc, evd, cur, after.Head)}
+		evs := after.CurrentEvidence(acc.Attempt)
+		if len(evs) == 0 || acc.Revision != cur.IntentRevision || acc.Generation != cur.CandidateGeneration || acc.Head != after.Head {
+			return Violation{InvAcceptedEvidence, fmt.Sprintf("accepted %+v without current non-vacuous evidence (version=%+v, head=%q)", *acc, cur, after.Head)}
 		}
 	}
 
@@ -93,6 +94,32 @@ func Check(before, after domain.Mission, cmd domain.Command, events []domain.Eve
 		if f, ok := before.Effects[cmd.Effect]; ok && f.State == domain.EffectUnknown {
 			if after.Effects[cmd.Effect].Submissions != f.Submissions || !errors.Is(err, domain.ErrUnknownUnresolved) {
 				return Violation{InvUnknownRetry, fmt.Sprintf("retry during UNKNOWN changed submissions %d -> %d (err=%v)", f.Submissions, after.Effects[cmd.Effect].Submissions, err)}
+			}
+		}
+	}
+
+	// H3: review is entered only on claims backed by this attempt's current,
+	// non-vacuous receipts; the check recomputes it from the before-state.
+	if cmd.Kind == domain.CmdFinishAttempt && cmd.Outcome == "ready_for_review" && err == nil &&
+		after.Candidate == domain.CandVerifying && before.Candidate != domain.CandVerifying {
+		if len(cmd.Claims) == 0 {
+			return Violation{InvArbitration, "entered review with no claims"}
+		}
+		for _, c := range cmd.Claims {
+			evd, ok := before.Evidence[domain.EvidenceKey(cmd.Attempt, before.Version.IntentRevision, before.Version.CandidateGeneration, before.Head, c.Receipt)]
+			if !ok || evd.Vacuous {
+				return Violation{InvArbitration, fmt.Sprintf("entered review on %s citing %s (found=%v vacuous=%v)", c.AC, c.Receipt, ok, evd.Vacuous)}
+			}
+		}
+	}
+
+	// H1: the effect id is derived, canonical and occurrence-suffixed.
+	if cmd.Kind == domain.CmdSubmitEffect && err == nil {
+		base, berr := domain.EffectBase(cmd.EffectKind, cmd.Request)
+		want := domain.EffectIDFor(base, before.Occurrences(base)+1)
+		for _, e := range events {
+			if e.Kind == domain.EvEffectSubmitted && (berr != nil || e.Effect != want || e.RequestSHA != base || e.Occurrence != before.Occurrences(base)+1) {
+				return Violation{InvEffectKey, fmt.Sprintf("effect %s, want %s (occurrence %d)", e.Effect, want, e.Occurrence)}
 			}
 		}
 	}
