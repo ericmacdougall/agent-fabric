@@ -47,6 +47,14 @@ func main() {
 		err = expireMain(os.Args[2:])
 	case "host":
 		err = hostMain(os.Args[2:])
+	case "attempt":
+		err = attemptMain(os.Args[2:])
+	case "effect":
+		err = effectMain(os.Args[2:])
+	case "job":
+		err = jobMain(os.Args[2:])
+	case "daemon":
+		err = daemonMain(os.Args[2:])
 	case "migrate":
 		err = withStore(func(ctx context.Context, st *store.Store) error { return st.Migrate(ctx) })
 	default:

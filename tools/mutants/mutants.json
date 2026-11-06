@@ -370,5 +370,18 @@
     "CREATE INDEX effects_live_subject_idx ON effects (subject);"
    ]
   ]
+ },
+ {
+  "id": "M29_dispatch_ignores_open_wait",
+  "invariant": "no_run_while_waiting_ac2 (WAITING state and waits row both ignored)",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestAC2WaitWithoutPolling",
+  "edits": [
+   [
+    "\t\tWHERE m.execution = 'ADMITTED' AND m.terminal = 'NONE'\n\t\t  AND NOT EXISTS (SELECT 1 FROM waits w WHERE w.mission_id = m.id)\n",
+    "\t\tWHERE m.execution IN ('ADMITTED', 'WAITING') AND m.terminal = 'NONE'\n"
+   ]
+  ]
  }
 ]
