@@ -1,0 +1,196 @@
+[
+ {
+  "id": "M1_stale_fence_overwrite",
+  "invariant": "stale_fence_monotonic",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestStaleFenceRefused",
+  "edits": [
+   [
+    "if fence != a.Fence || m.Version.FenceIsStale(fence) {",
+    "if false {"
+   ]
+  ]
+ },
+ {
+  "id": "M2_duplicate_wake_appends",
+  "invariant": "duplicate_wakeup_idempotent",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestDuplicateWakeIdempotent",
+  "edits": [
+   [
+    "if m.Wakes[cmd.Token] {\n\t\t\treturn nil, nil",
+    "if false {\n\t\t\treturn nil, nil"
+   ]
+  ]
+ },
+ {
+  "id": "M3_capacity_ignored",
+  "invariant": "running_capacity",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestCapacityIsRefused",
+  "edits": [
+   [
+    "if env.SlotsUsed >= env.Cap {",
+    "if false {"
+   ]
+  ]
+ },
+ {
+  "id": "M4_unknown_retry_submits",
+  "invariant": "unknown_retry_blocked",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestUnknownRetryBlocked",
+  "edits": [
+   [
+    "if f.State == domain.EffectUnknown {\n\t\t\treturn nil, domain.ErrUnknownUnresolved",
+    "if false {\n\t\t\treturn nil, domain.ErrUnknownUnresolved"
+   ]
+  ]
+ },
+ {
+  "id": "M5_accept_ignores_evidence",
+  "invariant": "accepted_current_live_evidence",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestAcceptNeedsCurrentEvidence",
+  "edits": [
+   [
+    "if !ok {\n\t\t\treturn nil, domain.ErrEvidenceStale",
+    "if !ok && false {\n\t\t\treturn nil, domain.ErrEvidenceStale"
+   ]
+  ]
+ },
+ {
+  "id": "M6_deliver_ignores_generation",
+  "invariant": "delivered_current_generation",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestDeliverNeedsCurrentGeneration",
+  "edits": [
+   [
+    "if cmd.Generation != m.Version.CandidateGeneration {\n\t\t\treturn nil, domain.ErrGenerationStale",
+    "if false {\n\t\t\treturn nil, domain.ErrGenerationStale"
+   ]
+  ]
+ },
+ {
+  "id": "M7_unresolved_relaunch",
+  "invariant": "unresolved_attempt_blocks_start",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestUnknownAttemptBlocksRelaunch",
+  "edits": [
+   [
+    "if m.UnresolvedAttempts() > 0 {",
+    "if false {"
+   ]
+  ]
+ },
+ {
+  "id": "M8_per_mission_live_cap",
+  "invariant": "running_capacity",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestPerMissionLiveAttemptsBounded",
+  "edits": [
+   [
+    "if m.LiveAttempts() >= domain.MaxLiveAttempts {",
+    "if false {"
+   ]
+  ]
+ },
+ {
+  "id": "M9_quarantine_reacquires_slot",
+  "invariant": "running_capacity",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestTraces",
+  "edits": [
+   [
+    "e.AttemptTo == domain.AttemptQuarantined && s.Execution.HoldsSlot() {",
+    "e.AttemptTo == domain.AttemptQuarantined {"
+   ]
+  ]
+ },
+ {
+  "id": "M10_evidence_keyed_by_attempt_only",
+  "invariant": "accepted_current_live_evidence",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestTraces",
+  "edits": [
+   [
+    "s.Evidence[domain.EvidenceKey(e.Attempt, e.Revision, e.Generation, e.Head)]",
+    "s.Evidence[domain.EvidenceKey(e.Attempt, 0, 0, \"\")]"
+   ],
+   [
+    "m.Evidence[domain.EvidenceKey(a.ID, m.Version.IntentRevision, m.Version.CandidateGeneration, m.Head)]",
+    "m.Evidence[domain.EvidenceKey(a.ID, 0, 0, \"\")]"
+   ]
+  ]
+ },
+ {
+  "id": "M11_replay_disabled",
+  "invariant": "stable_command_replay",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestCommandReplay",
+  "edits": [
+   [
+    "WHERE actor = $1 AND mission_id = $2 AND command_id = $3`, string(actor), string(cmd.Mission), string(commandID)).Scan(&storedHash, &storedResp)",
+    "WHERE false AND actor = $1 AND mission_id = $2 AND command_id = $3`, string(actor), string(cmd.Mission), string(commandID)).Scan(&storedHash, &storedResp)"
+   ],
+   [
+    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,\n\t\tstring(actor), string(cmd.Mission), string(commandID), string(cmd.Kind), hash, resp.Status, respJSON, firstSeq, lastSeq); err != nil {",
+    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING`,\n\t\tstring(actor), string(cmd.Mission), string(commandID), string(cmd.Kind), hash, resp.Status, respJSON, firstSeq, lastSeq); err != nil {"
+   ]
+  ]
+ },
+ {
+  "id": "M12_cap_lock_removed",
+  "invariant": "running_capacity",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestCapRace",
+  "edits": [
+   [
+    "SELECT cap FROM slots WHERE id = 1 FOR UPDATE",
+    "SELECT cap FROM slots WHERE id = 1"
+   ]
+  ]
+ },
+ {
+  "id": "M13_seq_not_from_state",
+  "invariant": "gap_free_sequence",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestEventSeqGapFreeAndRebuild",
+  "edits": [
+   [
+    "events[i].Seq = m.Seq + 1",
+    "events[i].Seq = int64(i) + 1"
+   ]
+  ]
+ },
+ {
+  "id": "M14_stale_fence_not_refused_by_store",
+  "invariant": "stale_fence_monotonic",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestStaleFence",
+  "edits": [
+   [
+    "WHERE id = $1 AND fence = $2 AND state IN ('LEASED', 'PREPARING', 'RUNNING')`,\n\t\tstring(attempt), fence, pgInterval(s.Lease))",
+    "WHERE id = $1 AND state IN ('LEASED', 'PREPARING', 'RUNNING')`,\n\t\tstring(attempt), pgInterval(s.Lease))"
+   ],
+   [
+    "now() + $3::interval\n\t\tWHERE id = $1 AND state IN",
+    "now() + $2::interval\n\t\tWHERE id = $1 AND state IN"
+   ]
+  ]
+ }
+]

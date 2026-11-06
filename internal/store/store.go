@@ -1,0 +1,581 @@
+// Package store is the fabric's single-writer authority over Postgres
+// (DESIGN.md 3.2, 5.3). Every mission mutation is a Command executed inside
+// one transaction that: serialises on the mission row, replays a stored
+// response for a repeated idempotency key, runs the pure reducer, appends the
+// events with a gap-free per-mission sequence, writes the outbox rows and the
+// state snapshot, maintains the attempts table, and only then commits.
+package store
+
+import (
+	"context"
+	"embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"fabric/internal/domain"
+	"fabric/internal/reducer"
+)
+
+//go:embed migrations/*.sql
+var migrationFS embed.FS
+
+// Store owns a pool and the lease policy.
+type Store struct {
+	pool  *pgxpool.Pool
+	Lease time.Duration // how long a freshly started attempt holds its lease without a heartbeat
+
+	// hooks are crash cutpoints for tests (export_test.go). nil in production.
+	hooks hooks
+}
+
+type hooks struct {
+	beforeCommit func(cmd domain.Command) error // returning an error aborts the transaction
+	afterCommit  func(cmd domain.Command)       // runs after COMMIT and before the response is returned
+}
+
+// Open connects; it does not migrate.
+func Open(ctx context.Context, dsn string) (*Store, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxConns = 16
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return &Store{pool: pool, Lease: 5 * time.Minute}, nil
+}
+
+// Close releases the pool.
+func (s *Store) Close() { s.pool.Close() }
+
+// Pool exposes the pool for read-only audits and tests.
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
+const migrationLock = 7_431_902_001 // arbitrary, fixed advisory lock key for migrations
+
+// Migrate applies embedded migrations in name order under an advisory lock.
+// It is idempotent and roll-forward only.
+func (s *Store) Migrate(ctx context.Context) error {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLock); err != nil {
+		return err
+	}
+	defer conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", migrationLock) //nolint:errcheck
+	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS fabric_schema (
+		name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
+		return err
+	}
+	names, err := fs.Glob(migrationFS, "migrations/*.sql")
+	if err != nil {
+		return err
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		var applied bool
+		if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM fabric_schema WHERE name = $1)", name).Scan(&applied); err != nil {
+			return err
+		}
+		if applied {
+			continue
+		}
+		sql, err := migrationFS.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, string(sql)); err != nil {
+			tx.Rollback(ctx) //nolint:errcheck
+			return fmt.Errorf("migration %s: %w", name, err)
+		}
+		if _, err := tx.Exec(ctx, "INSERT INTO fabric_schema (name) VALUES ($1)", name); err != nil {
+			tx.Rollback(ctx) //nolint:errcheck
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CreateMission registers a mission in IDLE. Idempotent on the id.
+func (s *Store) CreateMission(ctx context.Context, id domain.MissionID, ticket, repo, branch string) error {
+	if _, err := domain.ParseMissionID(string(id)); err != nil {
+		return err
+	}
+	if ticket == "" {
+		return fmt.Errorf("%w: a mission must name a ticket (R5)", domain.ErrInvalidTransition)
+	}
+	state, err := json.Marshal(domain.NewMission(id))
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO missions (id, ticket, repo, branch, state)
+		VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`, string(id), ticket, repo, branch, state)
+	return err
+}
+
+// SetCap changes the fleet cap (R1). The scheduler reads it under lock.
+func (s *Store) SetCap(ctx context.Context, cap int) error {
+	_, err := s.pool.Exec(ctx, "UPDATE slots SET cap = $1 WHERE id = 1", cap)
+	return err
+}
+
+// Response is the stored, replayable answer to a command.
+type Response struct {
+	Status   string         `json:"status"` // ok | refused
+	Reason   string         `json:"reason,omitempty"`
+	ErrKind  string         `json:"err_kind,omitempty"`
+	Events   []domain.Event `json:"events,omitempty"`
+	FirstSeq int64          `json:"first_seq,omitempty"`
+	LastSeq  int64          `json:"last_seq,omitempty"`
+	Version  domain.Version `json:"version"`
+	Replayed bool           `json:"-"` // served from the commands table; the reducer did not run
+}
+
+// errKinds maps stable refusal kinds to their sentinel so a replayed refusal
+// still satisfies errors.Is for the caller.
+var errKinds = map[string]error{
+	"stale_fence":        domain.ErrStaleFence,
+	"over_capacity":      domain.ErrOverCapacity,
+	"unknown_unresolved": domain.ErrUnknownUnresolved,
+	"evidence_stale":     domain.ErrEvidenceStale,
+	"generation_stale":   domain.ErrGenerationStale,
+	"duplicate":          domain.ErrDuplicate,
+	"not_found":          domain.ErrNotFound,
+	"attempt_live":       domain.ErrAttemptLive,
+	"invalid_transition": domain.ErrInvalidTransition,
+}
+
+func kindOf(err error) string {
+	for k, e := range errKinds {
+		if errors.Is(err, e) {
+			return k
+		}
+	}
+	return "invalid_transition"
+}
+
+// Refusal is the error returned for a refused command: it unwraps to the
+// domain sentinel and carries the stored response.
+type Refusal struct {
+	Response Response
+	Err      error
+}
+
+func (r *Refusal) Error() string { return "refused: " + r.Response.Reason }
+func (r *Refusal) Unwrap() error { return r.Err }
+
+// Execute runs one command under its idempotency key (actor, mission, id).
+//
+// Same key and same request hash: the stored response is returned and the
+// reducer does not run. Same key and a different hash: ErrIdempotencyConflict,
+// nothing stored. A refusal is stored like a success and returned as *Refusal.
+func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID domain.CommandID, cmd domain.Command) (Response, error) {
+	if _, err := domain.ParseActorID(string(actor)); err != nil {
+		return Response{}, err
+	}
+	if _, err := domain.ParseCommandID(string(commandID)); err != nil {
+		return Response{}, err
+	}
+	if _, err := domain.ParseMissionID(string(cmd.Mission)); err != nil {
+		return Response{}, err
+	}
+	hash := cmd.RequestHash()
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return Response{}, err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck // no-op after commit
+
+	// Admissions serialise on the slots row so the cap is a transaction, not a
+	// warning (AC-1). Everything else serialises on the mission row only.
+	var cap int
+	if cmd.Kind == domain.CmdAdmitMission {
+		if err := tx.QueryRow(ctx, "SELECT cap FROM slots WHERE id = 1 FOR UPDATE").Scan(&cap); err != nil {
+			return Response{}, fmt.Errorf("slots: %w", err)
+		}
+	}
+
+	var stateJSON []byte
+	err = tx.QueryRow(ctx, "SELECT state FROM missions WHERE id = $1 FOR UPDATE", string(cmd.Mission)).Scan(&stateJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Response{}, fmt.Errorf("%w: mission %s", domain.ErrNotFound, cmd.Mission)
+	}
+	if err != nil {
+		return Response{}, err
+	}
+
+	// Replay check.
+	var storedHash string
+	var storedResp []byte
+	err = tx.QueryRow(ctx, `SELECT request_sha256, response FROM commands
+		WHERE actor = $1 AND mission_id = $2 AND command_id = $3`, string(actor), string(cmd.Mission), string(commandID)).Scan(&storedHash, &storedResp)
+	switch {
+	case err == nil:
+		if storedHash != hash {
+			return Response{}, fmt.Errorf("%w: command %s", domain.ErrIdempotencyConflict, commandID)
+		}
+		var resp Response
+		if err := json.Unmarshal(storedResp, &resp); err != nil {
+			return Response{}, err
+		}
+		resp.Replayed = true
+		if err := tx.Commit(ctx); err != nil {
+			return Response{}, err
+		}
+		if resp.Status == "refused" {
+			return resp, &Refusal{Response: resp, Err: errKinds[resp.ErrKind]}
+		}
+		return resp, nil
+	case errors.Is(err, pgx.ErrNoRows):
+	default:
+		return Response{}, err
+	}
+
+	var m domain.Mission
+	if err := json.Unmarshal(stateJSON, &m); err != nil {
+		return Response{}, fmt.Errorf("mission %s snapshot: %w", cmd.Mission, err)
+	}
+
+	env := reducer.Env{Cap: cap}
+	if cmd.Kind == domain.CmdAdmitMission {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM missions WHERE id <> $1
+			AND execution IN ('ADMITTED', 'RUNNING', 'WAITING', 'PAUSED')`, string(cmd.Mission)).Scan(&env.SlotsUsed); err != nil {
+			return Response{}, err
+		}
+	}
+
+	events, derr := reducer.Decide(m, cmd, env)
+	resp := Response{Status: "ok", Version: m.Version}
+	if derr != nil {
+		resp.Status = "refused"
+		resp.Reason = derr.Error()
+		resp.ErrKind = kindOf(derr)
+		if errors.Is(derr, domain.ErrStaleFence) {
+			payload, _ := json.Marshal(cmd)
+			if _, err := tx.Exec(ctx, `INSERT INTO stale_observations
+				(mission_id, attempt_id, fence, current_fence, actor, command_id, kind, payload)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+				string(cmd.Mission), string(cmd.Attempt), cmd.Fence, m.Version.AttemptFence,
+				string(actor), string(commandID), string(cmd.Kind), payload); err != nil {
+				return Response{}, err
+			}
+		}
+	} else {
+		for i := range events {
+			events[i].Seq = m.Seq + 1
+			payload, err := json.Marshal(events[i])
+			if err != nil {
+				return Response{}, err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO events (mission_id, seq, kind, fence, actor, command_id, payload)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+				string(cmd.Mission), events[i].Seq, string(events[i].Kind), events[i].Fence, string(actor), string(commandID), payload); err != nil {
+				return Response{}, fmt.Errorf("append event: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO outbox (mission_id, seq, kind, payload) VALUES ($1, $2, $3, $4)`,
+				string(cmd.Mission), events[i].Seq, string(events[i].Kind), payload); err != nil {
+				return Response{}, fmt.Errorf("outbox: %w", err)
+			}
+			if err := s.applyAttemptRow(ctx, tx, events[i]); err != nil {
+				return Response{}, err
+			}
+			m = reducer.Apply(m, events[i])
+		}
+		if len(events) > 0 {
+			resp.FirstSeq = events[0].Seq
+			resp.LastSeq = events[len(events)-1].Seq
+		}
+		resp.Events = events
+		resp.Version = m.Version
+		snapshot, err := json.Marshal(m)
+		if err != nil {
+			return Response{}, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE missions SET seq = $2, intent_revision = $3, attempt_fence = $4,
+			candidate_generation = $5, execution = $6, candidate = $7, delivery = $8, terminal = $9,
+			state = $10, updated_at = now() WHERE id = $1`,
+			string(m.ID), m.Seq, m.Version.IntentRevision, m.Version.AttemptFence, m.Version.CandidateGeneration,
+			string(m.Execution), string(m.Candidate), string(m.Delivery), string(m.Terminal), snapshot); err != nil {
+			return Response{}, err
+		}
+	}
+
+	respJSON, err := json.Marshal(resp)
+	if err != nil {
+		return Response{}, err
+	}
+	var firstSeq, lastSeq *int64
+	if resp.FirstSeq > 0 {
+		firstSeq, lastSeq = &resp.FirstSeq, &resp.LastSeq
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO commands
+		(actor, mission_id, command_id, kind, request_sha256, status, response, first_seq, last_seq)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		string(actor), string(cmd.Mission), string(commandID), string(cmd.Kind), hash, resp.Status, respJSON, firstSeq, lastSeq); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			// Cannot happen under the mission row lock; keep it a loud error.
+			return Response{}, fmt.Errorf("%w: concurrent same-key write escaped the mission lock", domain.ErrDuplicate)
+		}
+		return Response{}, err
+	}
+	if s.hooks.beforeCommit != nil {
+		if err := s.hooks.beforeCommit(cmd); err != nil {
+			return Response{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Response{}, err
+	}
+	if s.hooks.afterCommit != nil {
+		s.hooks.afterCommit(cmd)
+	}
+	if derr != nil {
+		return resp, &Refusal{Response: resp, Err: derr}
+	}
+	return resp, nil
+}
+
+// applyAttemptRow keeps the attempts table in step with ATTEMPT_* events in
+// the same transaction.
+func (s *Store) applyAttemptRow(ctx context.Context, tx pgx.Tx, e domain.Event) error {
+	switch e.Kind {
+	case domain.EvAttemptStarted:
+		_, err := tx.Exec(ctx, `INSERT INTO attempts (id, mission_id, fence, revision, generation, host, role, state, lease_until)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + $9::interval)`,
+			string(e.Attempt), string(e.Mission), e.Fence, e.Revision, e.Generation, string(e.Host), e.Role,
+			string(domain.AttemptLeased), pgInterval(s.Lease))
+		return err
+	case domain.EvAttemptAcked:
+		_, err := tx.Exec(ctx, `UPDATE attempts SET state = $3, lease_until = now() + $4::interval
+			WHERE id = $1 AND fence = $2`, string(e.Attempt), e.Fence, string(e.AttemptTo), pgInterval(s.Lease))
+		return err
+	case domain.EvAttemptFinished, domain.EvAttemptUnknown, domain.EvAttemptReconciled:
+		_, err := tx.Exec(ctx, `UPDATE attempts SET state = $3, lease_until = NULL, ended_at = now()
+			WHERE id = $1 AND fence = $2`, string(e.Attempt), e.Fence, string(e.AttemptTo))
+		return err
+	}
+	return nil
+}
+
+func pgInterval(d time.Duration) string {
+	return fmt.Sprintf("%d milliseconds", d.Milliseconds())
+}
+
+// Heartbeat extends a live attempt's lease. A wrong fence is ErrStaleFence; an
+// attempt that is no longer live is ErrInvalidTransition.
+func (s *Store) Heartbeat(ctx context.Context, attempt domain.AttemptID, fence int64) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE attempts SET lease_until = now() + $3::interval
+		WHERE id = $1 AND fence = $2 AND state IN ('LEASED', 'PREPARING', 'RUNNING')`,
+		string(attempt), fence, pgInterval(s.Lease))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+	var curFence int64
+	var state string
+	err = s.pool.QueryRow(ctx, "SELECT fence, state FROM attempts WHERE id = $1", string(attempt)).Scan(&curFence, &state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: attempt %s", domain.ErrNotFound, attempt)
+	}
+	if err != nil {
+		return err
+	}
+	if curFence != fence {
+		return fmt.Errorf("%w: heartbeat fence %d, attempt holds %d", domain.ErrStaleFence, fence, curFence)
+	}
+	return fmt.Errorf("%w: heartbeat while %s", domain.ErrInvalidTransition, state)
+}
+
+// ExpiredLease is one attempt whose lease ran out by database time.
+type ExpiredLease struct {
+	Attempt domain.AttemptID
+	Mission domain.MissionID
+	Fence   int64
+}
+
+// ExpireLeases moves at most limit expired live attempts to UNKNOWN through the
+// ordinary command path with a deterministic command id, so a sweep that is
+// retried or run twice is a replay, never a second transition. Bounded page:
+// a backlog can never become one unbounded transaction.
+func (s *Store) ExpireLeases(ctx context.Context, limit int) ([]ExpiredLease, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, mission_id, fence FROM attempts
+		WHERE state IN ('LEASED', 'PREPARING', 'RUNNING') AND lease_until < now()
+		ORDER BY lease_until LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	var page []ExpiredLease
+	for rows.Next() {
+		var e ExpiredLease
+		if err := rows.Scan(&e.Attempt, &e.Mission, &e.Fence); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		page = append(page, e)
+	}
+	rows.Close()
+	var expired []ExpiredLease
+	for _, e := range page {
+		cmd := domain.Command{Kind: domain.CmdExpireLease, Mission: e.Mission, Attempt: e.Attempt, Fence: e.Fence}
+		id := domain.CommandID(fmt.Sprintf("expire:%s:%d", e.Attempt, e.Fence))
+		if _, err := s.Execute(ctx, "fabd", id, cmd); err != nil {
+			var ref *Refusal
+			if errors.As(err, &ref) {
+				continue // already moved by a concurrent sweep or a finish that raced the expiry
+			}
+			return expired, err
+		}
+		expired = append(expired, e)
+	}
+	return expired, nil
+}
+
+// Mission loads the snapshot.
+func (s *Store) Mission(ctx context.Context, id domain.MissionID) (domain.Mission, error) {
+	var stateJSON []byte
+	err := s.pool.QueryRow(ctx, "SELECT state FROM missions WHERE id = $1", string(id)).Scan(&stateJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Mission{}, fmt.Errorf("%w: mission %s", domain.ErrNotFound, id)
+	}
+	if err != nil {
+		return domain.Mission{}, err
+	}
+	var m domain.Mission
+	return m, json.Unmarshal(stateJSON, &m)
+}
+
+// Events returns a mission's log in sequence order.
+func (s *Store) Events(ctx context.Context, id domain.MissionID) ([]domain.Event, error) {
+	rows, err := s.pool.Query(ctx, "SELECT payload FROM events WHERE mission_id = $1 ORDER BY seq", string(id))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Event
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var e domain.Event
+		if err := json.Unmarshal(payload, &e); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// Rebuild replays the log and compares it with the snapshot. The snapshot is
+// derived state; the log is the authority. A mismatch is a bug, returned as an
+// error with both digests.
+func (s *Store) Rebuild(ctx context.Context, id domain.MissionID) (domain.Mission, error) {
+	events, err := s.Events(ctx, id)
+	if err != nil {
+		return domain.Mission{}, err
+	}
+	snap, err := s.Mission(ctx, id)
+	if err != nil {
+		return domain.Mission{}, err
+	}
+	rebuilt := reducer.Replay(id, events)
+	if a, b := reducer.Digest(rebuilt), reducer.Digest(snap); a != b {
+		return rebuilt, fmt.Errorf("mission %s: replay digest %s != snapshot %s", id, a[:12], b[:12])
+	}
+	return rebuilt, nil
+}
+
+// OutboxRow is one event for a consumer.
+type OutboxRow struct {
+	ID      int64
+	Mission domain.MissionID
+	Seq     int64
+	Event   domain.Event
+}
+
+// OutboxPage returns up to limit rows after the consumer's cursor.
+func (s *Store) OutboxPage(ctx context.Context, consumer string, limit int) ([]OutboxRow, error) {
+	rows, err := s.pool.Query(ctx, `SELECT o.id, o.mission_id, o.seq, o.payload FROM outbox o
+		WHERE o.id > COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer = $1), 0)
+		ORDER BY o.id LIMIT $2`, consumer, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OutboxRow
+	for rows.Next() {
+		var r OutboxRow
+		var payload []byte
+		if err := rows.Scan(&r.ID, &r.Mission, &r.Seq, &payload); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(payload, &r.Event); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// AckOutbox advances the consumer's cursor; it never moves backwards, so a
+// repeated or out-of-order ack is harmless.
+func (s *Store) AckOutbox(ctx context.Context, consumer string, upto int64) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO outbox_cursors (consumer, last_id) VALUES ($1, $2)
+		ON CONFLICT (consumer) DO UPDATE SET last_id = GREATEST(outbox_cursors.last_id, EXCLUDED.last_id), updated_at = now()`,
+		consumer, upto)
+	return err
+}
+
+// SlotsHeld counts missions holding a slot, for tests and status.
+func (s *Store) SlotsHeld(ctx context.Context) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM missions WHERE execution IN ('ADMITTED', 'RUNNING', 'WAITING', 'PAUSED')`).Scan(&n)
+	return n, err
+}
+
+// Truncate empties every fabric table except the schema ledger. Tests only.
+func (s *Store) Truncate(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `TRUNCATE commands, events, outbox, outbox_cursors, attempts, stale_observations, missions RESTART IDENTITY CASCADE`)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, "UPDATE slots SET cap = 4 WHERE id = 1")
+	return err
+}
+
+// IsUniqueViolation reports a Postgres unique-constraint error.
+func IsUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// quoteIdent is used by tests to build database names safely.
+func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
