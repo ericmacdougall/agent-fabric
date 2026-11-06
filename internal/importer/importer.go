@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"fabric/internal/domain"
@@ -58,23 +59,37 @@ type Options struct {
 	SlotsPath string
 	QueuePath string
 	MainWAL   string
+	// ApplyCap sets the global admission cap from the file. Off by default:
+	// the file is untrusted input and the cap bounds every mission (F5).
+	ApplyCap bool
 }
 
 // Result counts what one run did. A second run over the same files reports
 // zero Admitted and the same total under Replayed.
 type Result struct {
-	Cap      int
-	Admitted int // admitted by this run
-	Replayed int // admission already recorded under its key (served from the store)
-	Refused  int // admission refused, e.g. over the cap
-	Queued   int // queued missions registered (idempotent)
-	Asks     int // asks registered (idempotent)
-	Skipped  int // queue items with no need text
+	Cap       int      // the admission cap in effect
+	FileCap   int      // the cap the slots file proposes (applied only with ApplyCap)
+	Admitted  int      // admitted by this run
+	Replayed  int      // admission already decided under its key, admitted or refused (served from the store)
+	Refused   int      // admission refused by this run, e.g. over the cap
+	Queued    int      // queued missions registered by this run
+	Asks      int      // asks registered by this run
+	Unchanged int      // missions and asks already registered with the same text
+	Changed   []string // missions and asks whose stored text differs from the files; kept, not overwritten
+	Skipped   int      // queue items with no need text
 }
 
 func (r Result) String() string {
-	return fmt.Sprintf("cap=%d, slots admitted=%d replayed=%d refused=%d, queued=%d, asks=%d, skipped=%d (shadow: no effects posted)",
-		r.Cap, r.Admitted, r.Replayed, r.Refused, r.Queued, r.Asks, r.Skipped)
+	capNote := ""
+	if r.FileCap > 0 && r.FileCap != r.Cap {
+		capNote = fmt.Sprintf(" (file cap %d not applied; --apply-cap applies it)", r.FileCap)
+	}
+	changed := ""
+	if len(r.Changed) > 0 {
+		changed = " " + strings.Join(r.Changed, ",")
+	}
+	return fmt.Sprintf("cap=%d%s, slots admitted=%d replayed=%d refused=%d, queued=%d, asks=%d, unchanged=%d, changed=%d%s, skipped=%d (shadow: no effects posted)",
+		r.Cap, capNote, r.Admitted, r.Replayed, r.Refused, r.Queued, r.Asks, r.Unchanged, len(r.Changed), changed, r.Skipped)
 }
 
 // Load reads and decodes both files, refusing anything over MaxFileBytes.
@@ -124,11 +139,26 @@ func Run(ctx context.Context, st *store.Store, exec Executor, o Options, sf Slot
 			return st.Execute(ctx, domain.ActorID(actor), domain.CommandID(key), cmd)
 		}
 	}
-	res := Result{Cap: sf.Rules.MaxActiveOwners}
-	if sf.Rules.MaxActiveOwners > 0 {
+	res := Result{FileCap: sf.Rules.MaxActiveOwners}
+	if o.ApplyCap && sf.Rules.MaxActiveOwners > 0 {
 		if err := st.SetCap(ctx, sf.Rules.MaxActiveOwners); err != nil {
 			return res, err
 		}
+	}
+	c, err := st.SlotCap(ctx)
+	if err != nil {
+		return res, err
+	}
+	res.Cap = c
+	// note counts one idempotent registration; it reports whether it was new.
+	note := func(id string, e store.Ensured) bool {
+		switch e {
+		case store.Unchanged:
+			res.Unchanged++
+		case store.Differs:
+			res.Changed = append(res.Changed, id)
+		}
+		return e == store.Created
 	}
 	fallback := sf.QueueTicket
 	if fallback == "" {
@@ -142,12 +172,16 @@ func Run(ctx context.Context, st *store.Store, exec Executor, o Options, sf Slot
 		}
 		seen[s.Slot] = true
 		id := domain.MissionID(fmt.Sprintf("m_slot%d", s.Slot))
-		if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: id, Name: s.Name, Ticket: TicketRef(s.Ticket, fallback), Priority: s.Slot, Source: src}); err != nil {
+		e, err := st.EnsureMissionSpec(ctx, store.MissionSpec{ID: id, Name: s.Name, Ticket: TicketRef(s.Ticket, fallback), Priority: s.Slot, Source: src})
+		if err != nil {
 			return res, err
 		}
+		note(string(id), e)
 		resp, err := exec(ctx, "import", "import:admit:"+string(id), domain.Command{Kind: domain.CmdAdmitMission, Mission: id})
 		var ref *store.Refusal
 		switch {
+		case errors.As(err, &ref) && ref.Response.Replayed:
+			res.Replayed++
 		case errors.As(err, &ref):
 			res.Refused++
 		case err != nil:
@@ -161,10 +195,13 @@ func Run(ctx context.Context, st *store.Store, exec Executor, o Options, sf Slot
 	for i, raw := range sf.QueuedInOrder {
 		name, ticket := QueuedItem(raw)
 		id := domain.MissionID(fmt.Sprintf("m_q%02d", i+1))
-		if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: id, Name: name, Ticket: TicketRef(ticket, fallback), Priority: 10 + i, Source: src}); err != nil {
+		e, err := st.EnsureMissionSpec(ctx, store.MissionSpec{ID: id, Name: name, Ticket: TicketRef(ticket, fallback), Priority: 10 + i, Source: src})
+		if err != nil {
 			return res, err
 		}
-		res.Queued++
+		if note(string(id), e) {
+			res.Queued++
+		}
 	}
 	for i, it := range qf.Items {
 		if strings.TrimSpace(it.Need) == "" {
@@ -178,11 +215,15 @@ func Run(ctx context.Context, st *store.Store, exec Executor, o Options, sf Slot
 			a.ID = it.Ask
 			a.Source = "wal:" + o.MainWAL + "#" + it.Ask
 		}
-		if err := st.CreateAsk(ctx, a); err != nil {
+		e, err := st.EnsureAsk(ctx, a)
+		if err != nil {
 			return res, err
 		}
-		res.Asks++
+		if note(a.ID, e) {
+			res.Asks++
+		}
 	}
+	sort.Strings(res.Changed)
 	return res, nil
 }
 

@@ -282,6 +282,7 @@ func importMain(args []string) error {
 	fs.StringVar(&o.SlotsPath, "slots", "", "active-slots.json")
 	fs.StringVar(&o.QueuePath, "queue", "", "user-decisions-queue.json")
 	fs.StringVar(&o.MainWAL, "wal", "", "absolute path of the main WAL the ask ids come from (for wal: sources)")
+	fs.BoolVar(&o.ApplyCap, "apply-cap", false, "set the global admission cap from the slots file (off: the file only proposes it)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

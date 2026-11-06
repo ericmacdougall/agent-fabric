@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -38,8 +39,8 @@ func TestImportIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Result{Cap: 4, Admitted: 4, Refused: 1, Queued: 3, Asks: 2, Skipped: 1}
-	if first != want {
+	want := Result{Cap: 4, FileCap: 4, Admitted: 4, Refused: 1, Queued: 3, Asks: 2, Skipped: 1}
+	if !reflect.DeepEqual(first, want) {
 		t.Fatalf("first run: %+v, want %+v", first, want)
 	}
 	counts := func() [3]int {
@@ -56,8 +57,10 @@ func TestImportIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want2 := Result{Cap: 4, Replayed: 4, Refused: 1, Queued: 3, Asks: 2, Skipped: 1}
-	if second != want2 {
+	// Review F5: the replayed refusal is a replay, not a second refusal, and
+	// the 5 slot specs, 3 queued specs and 2 asks are unchanged, not new.
+	want2 := Result{Cap: 4, FileCap: 4, Replayed: 5, Unchanged: 10, Skipped: 1}
+	if !reflect.DeepEqual(second, want2) {
 		t.Fatalf("second run: %+v, want %+v", second, want2)
 	}
 	if after := counts(); after != before {
@@ -145,5 +148,73 @@ func TestTicketRefAndQueuedItem(t *testing.T) {
 		if n != want[0] || tk != want[1] {
 			t.Errorf("QueuedItem(%s) = %q,%q want %q", raw, n, tk, want)
 		}
+	}
+}
+
+// Review F5: a rerun over edited files reports each row whose stored text
+// differs and leaves the stored text alone; nothing is silently ignored.
+func TestImportReportsChangedText(t *testing.T) {
+	st := storetest.Open(t)
+	ctx := context.Background()
+	o := fixture(t)
+	sf, qf, err := Load(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(ctx, st, nil, o, sf, qf); err != nil {
+		t.Fatal(err)
+	}
+	sf.Slots[0].Name = "renamed slot"
+	sf.QueuedInOrder[0] = []byte(`"a different queued item for #101"`)
+	qf.Items[0].Need = "a different question"
+	res, err := Run(ctx, st, nil, o, sf, qf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"m_q01", "m_slot1", "w0123456789a"}; !reflect.DeepEqual(res.Changed, want) {
+		t.Fatalf("changed rows: %v, want %v (result %+v)", res.Changed, want, res)
+	}
+	if res.Unchanged != 7 || res.Queued != 0 || res.Asks != 0 {
+		t.Fatalf("counts after an edited rerun: %+v", res)
+	}
+	if !strings.Contains(res.String(), "changed=3") {
+		t.Fatalf("summary hides the changed rows: %s", res)
+	}
+	a, err := st.GetAsk(ctx, "w0123456789a")
+	if err != nil || a.Question == "a different question" {
+		t.Fatalf("the edited question was applied: %+v %v", a, err)
+	}
+}
+
+// Review F5: the admission cap is global; an untrusted file proposes it and
+// only an explicit ApplyCap (fab import --apply-cap) applies it.
+func TestImportCapIsAdvisory(t *testing.T) {
+	st := storetest.Open(t)
+	ctx := context.Background()
+	o := fixture(t)
+	sf, qf, err := Load(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sf.Rules.MaxActiveOwners = 9
+	res, err := Run(ctx, st, nil, o, sf, qf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := st.SlotCap(ctx); c != 4 || res.Cap != 4 || res.FileCap != 9 || res.Admitted != 4 || res.Refused != 1 {
+		t.Fatalf("file cap applied without ApplyCap: store cap %d, result %+v", c, res)
+	}
+	if !strings.Contains(res.String(), "not applied") {
+		t.Fatalf("summary does not say the file cap was not applied: %s", res)
+	}
+	// A stored refusal replays under its key, so ApplyCap is shown on a fresh store.
+	st = storetest.Open(t)
+	o.ApplyCap = true
+	res, err = Run(ctx, st, nil, o, sf, qf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := st.SlotCap(ctx); c != 9 || res.Cap != 9 || res.Admitted != 5 || res.Refused != 0 {
+		t.Fatalf("ApplyCap: store cap %d, result %+v", c, res)
 	}
 }

@@ -143,6 +143,13 @@ func (s *Store) CreateMission(ctx context.Context, id domain.MissionID, ticket, 
 }
 
 // SetCap changes the fleet cap (R1). The scheduler reads it under lock.
+// SlotCap returns the global admission cap.
+func (s *Store) SlotCap(ctx context.Context) (int, error) {
+	var c int
+	err := s.pool.QueryRow(ctx, "SELECT cap FROM slots WHERE id = 1").Scan(&c)
+	return c, err
+}
+
 func (s *Store) SetCap(ctx context.Context, cap int) error {
 	_, err := s.pool.Exec(ctx, "UPDATE slots SET cap = $1 WHERE id = 1", cap)
 	return err

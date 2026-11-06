@@ -1088,5 +1088,70 @@
     "    IF true THEN"
    ]
   ]
+ },
+ {
+  "id": "M84_replayed_refusal_counted_refused",
+  "invariant": "import_counts_honest",
+  "pkg": "./internal/importer",
+  "file": "internal/importer/importer.go",
+  "expect": "TestImportIdempotent",
+  "edits": [
+   [
+    "\t\tcase errors.As(err, &ref) && ref.Response.Replayed:",
+    "\t\tcase false && errors.As(err, &ref) && ref.Response.Replayed:"
+   ]
+  ]
+ },
+ {
+  "id": "M85_changed_text_ignored",
+  "invariant": "import_counts_honest",
+  "pkg": "./internal/importer",
+  "file": "internal/importer/importer.go",
+  "expect": "TestImportReportsChangedText",
+  "edits": [
+   [
+    "\t\t\tres.Changed = append(res.Changed, id)",
+    "\t\t\tres.Unchanged++"
+   ]
+  ]
+ },
+ {
+  "id": "M86_file_cap_applied",
+  "invariant": "import_counts_honest",
+  "pkg": "./internal/importer",
+  "file": "internal/importer/importer.go",
+  "expect": "TestImportCapIsAdvisory",
+  "edits": [
+   [
+    "\tif o.ApplyCap && sf.Rules.MaxActiveOwners > 0 {",
+    "\tif sf.Rules.MaxActiveOwners > 0 {"
+   ]
+  ]
+ },
+ {
+  "id": "M87_ask_question_not_compared",
+  "invariant": "import_counts_honest",
+  "pkg": "./internal/importer",
+  "file": "internal/store/catalog.go",
+  "expect": "TestImportReportsChangedText",
+  "edits": [
+   [
+    "AND kind = $3 AND question = $4",
+    "AND kind = $3 AND $4::text IS NOT NULL"
+   ]
+  ]
+ },
+ {
+  "id": "M88_mission_name_not_compared",
+  "invariant": "import_counts_honest",
+  "pkg": "./internal/importer",
+  "file": "internal/store/catalog.go",
+  "expect": "TestImportReportsChangedText",
+  "edits": [
+   [
+    "AND name IS NOT DISTINCT FROM $5",
+    "AND $5::text IS NOT NULL"
+   ]
+  ]
  }
 ]
