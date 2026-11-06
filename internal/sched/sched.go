@@ -33,6 +33,9 @@ const WakeChannel = "fabric_wake"
 type Launcher interface {
 	Start(g host.Grant, argv []string, env []string, stdout, stderr *os.File) (host.Handle, error)
 	Wait(h host.Handle) (int, error)
+	// StartJob runs a host job in its own unit or detached process under the
+	// worker identity; it returns once the job is proven started.
+	StartJob(unit string, argv []string, env []string) error
 }
 
 // Config is the policy the scheduler applies. Model and effort come from the
@@ -48,6 +51,7 @@ type Config struct {
 	MaxBudgetUSD float64
 	Wall         time.Duration
 	WorkRoot     string // worktrees and run dirs live under here
+	FabBin       string // the fab binary the daemon uses to watch jobs
 	Launch       claude.Launch
 	Backoff      time.Duration // backstop timer; doubles up to MaxBackoff
 	MaxBackoff   time.Duration
@@ -82,9 +86,14 @@ func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 	}
 	exp, err := s.st.ExpireLeases(ctx, 50)
 	if err != nil {
-		return false, err
+		fmt.Fprintln(os.Stderr, "fabd: lease sweep:", err) // per-row failures never stop the loop (review H10)
 	}
 	s.Expired += len(exp)
+	if n, err := s.startRequestedJobs(ctx); err != nil {
+		return false, err
+	} else if n > 0 {
+		worked = true
+	}
 	if n, err := s.wakeExitedJobs(ctx); err != nil {
 		return false, err
 	} else if n > 0 {
@@ -263,10 +272,11 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 
 	worktree := filepath.Join(s.cfg.WorkRoot, "wt", string(mission))
 	runDir := filepath.Join(s.cfg.WorkRoot, "run", string(attempt))
-	for _, d := range []string{worktree, runDir, filepath.Join(runDir, "jobs")} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+	for _, d := range []string{worktree, runDir, filepath.Join(runDir, "jobs"), filepath.Join(runDir, "claude-config"), filepath.Join(runDir, "cache"), filepath.Join(runDir, "config")} {
+		if err := os.MkdirAll(d, 0o775); err != nil {
 			return err
 		}
+		os.Chmod(d, 0o775|os.ModeSetgid) //nolint:errcheck // group-shared with the worker account
 	}
 	events, err := s.st.Events(ctx, mission)
 	if err != nil {
@@ -286,7 +296,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	if err != nil {
 		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "launch refused: "+err.Error())
 	}
-	env = append(env, "FAB_RUN_DIR="+runDir, "FAB_WORKTREE="+worktree, "FABRIC_DSN="+os.Getenv("FABRIC_DSN"), "FABRIC_HOME="+os.Getenv("FABRIC_HOME"))
+	env = append(env, "FAB_RUN_DIR="+runDir, "FAB_WORKTREE="+worktree, "FABRIC_DSN="+os.Getenv("FABRIC_DSN"), "FABRIC_HOME="+filepath.Join(runDir, "fabric-home"))
 	out, err := os.Create(filepath.Join(runDir, "stream.jsonl"))
 	if err != nil {
 		return err
@@ -300,11 +310,24 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	if _, err := s.st.Execute(ctx, "fabd", domain.CommandID("ack:"+string(attempt)), domain.Command{Kind: domain.CmdAckStart, Mission: mission, Attempt: attempt, Fence: fence}); err != nil {
 		return err
 	}
-	code, _ := s.ln.Wait(h)
-	out.Close()
-	if errf != nil {
-		errf.Close()
-	}
+	// The worker runs while the loop keeps serving its job requests and
+	// wakes; its end is settled from the stream when it exits.
+	go func() {
+		code, _ := s.ln.Wait(h)
+		out.Close()
+		if errf != nil {
+			errf.Close()
+		}
+		if err := s.settle(context.Background(), mission, attempt, fence, runDir, code); err != nil {
+			fmt.Fprintln(os.Stderr, "fabd: settle:", err)
+		}
+		Notify(context.Background(), s.st)
+	}()
+	return nil
+}
+
+// settle reads the finished worker's stream and ends the attempt.
+func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, runDir string, code int) error {
 	f, err := os.Open(filepath.Join(runDir, "stream.jsonl"))
 	if err != nil {
 		return err
@@ -387,8 +410,9 @@ type JobRow struct {
 	Woken    bool
 }
 
-// RegisterJob inserts a STARTED job after checking the fence is live.
-func RegisterJob(ctx context.Context, st *store.Store, id string, mission domain.MissionID, attempt domain.AttemptID, fence int64, argv []string, unit string) error {
+// RequestJob inserts a REQUESTED job after checking the fence is live; the
+// daemon starts it (review C1: the worker never reaches the user manager).
+func RequestJob(ctx context.Context, st *store.Store, id string, mission domain.MissionID, attempt domain.AttemptID, fence int64, argv []string, rundir string) error {
 	var cur int64
 	var state string
 	err := st.Pool().QueryRow(ctx, "SELECT fence, state FROM attempts WHERE id = $1", string(attempt)).Scan(&cur, &state)
@@ -402,9 +426,50 @@ func RegisterJob(ctx context.Context, st *store.Store, id string, mission domain
 		return fmt.Errorf("%w: job for attempt %s at fence %d (holds %d, %s)", domain.ErrStaleFence, attempt, fence, cur, state)
 	}
 	a, _ := json.Marshal(argv)
-	_, err = st.Pool().Exec(ctx, `INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, unit) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`,
-		id, string(mission), string(attempt), fence, a, unit)
+	_, err = st.Pool().Exec(ctx, `INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state) VALUES ($1, $2, $3, $4, $5, $6, 'REQUESTED') ON CONFLICT (id) DO NOTHING`,
+		id, string(mission), string(attempt), fence, a, rundir)
 	return err
+}
+
+// startRequestedJobs launches each REQUESTED job in its own unit (Linux) or
+// as a detached process (macOS) from outside the sandbox, then marks it
+// STARTED with the unit name, or FAILED_TO_START with the launcher output.
+func (s *Scheduler) startRequestedJobs(ctx context.Context) (int, error) {
+	rows, err := s.st.Pool().Query(ctx, `SELECT id, argv, rundir FROM jobs WHERE state = 'REQUESTED' ORDER BY started_at LIMIT 20`)
+	if err != nil {
+		return 0, err
+	}
+	type req struct {
+		id, rundir string
+		argv       []string
+	}
+	var reqs []req
+	for rows.Next() {
+		var r req
+		var a []byte
+		if err := rows.Scan(&r.id, &a, &r.rundir); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		json.Unmarshal(a, &r.argv) //nolint:errcheck
+		reqs = append(reqs, r)
+	}
+	rows.Close()
+	for _, r := range reqs {
+		if s.cfg.FabBin == "" || len(r.argv) == 0 {
+			s.st.Pool().Exec(ctx, "UPDATE jobs SET state = 'FAILED_TO_START', log_tail = 'no fab binary or empty argv' WHERE id = $1", r.id) //nolint:errcheck
+			continue
+		}
+		unit := "fab-job-" + r.id
+		watch := append([]string{s.cfg.FabBin, "job", "watch", "--id", r.id, "--rundir", r.rundir, "--"}, r.argv...)
+		launchErr := s.ln.StartJob(unit, watch, []string{"FABRIC_DSN=" + os.Getenv("FABRIC_DSN"), "FABRIC_HOME=" + filepath.Join(r.rundir, "fabric-home")})
+		if launchErr != nil {
+			s.st.Pool().Exec(ctx, "UPDATE jobs SET state = 'FAILED_TO_START', log_tail = $2 WHERE id = $1 AND state = 'REQUESTED'", r.id, launchErr.Error()) //nolint:errcheck
+			continue
+		}
+		s.st.Pool().Exec(ctx, "UPDATE jobs SET state = 'STARTED', unit = $2 WHERE id = $1 AND state = 'REQUESTED'", r.id, unit) //nolint:errcheck
+	}
+	return len(reqs), nil
 }
 
 // FinishJob records the exit and pings the wake channel.

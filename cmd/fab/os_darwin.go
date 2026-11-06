@@ -4,16 +4,17 @@ package main
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 
 	"fabric/internal/host"
 )
 
 func newLinuxProfile(string) host.Profile { return nil }
 
+// newDarwinProfile grants no writable root in $HOME (review C2); each run
+// gets private configuration and caches under its run dir from the launch
+// line.
 func newDarwinProfile(sandboxExec string) host.Profile {
-	return &host.Darwin{SandboxExec: sandboxExec, ExtraRW: []string{filepath.Join(os.Getenv("HOME"), ".claude"), filepath.Join(os.Getenv("HOME"), "Library", "Caches")}}
+	return &host.Darwin{SandboxExec: sandboxExec}
 }
 
 func sandboxMain([]string) error {

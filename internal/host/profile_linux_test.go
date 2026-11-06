@@ -14,7 +14,7 @@ func testProfile(t *testing.T) Profile {
 	if self == "" {
 		t.Fatal("FABRIC_FAB_BIN must point at a built fab binary (for __sandbox)")
 	}
-	return &Linux{Self: self, ExtraRW: []string{filepath.Join(os.Getenv("HOME"), ".cache")}}
+	return &Linux{Self: self, ReadOnly: []string{filepath.Dir(self)}, User: os.Getenv("FABRIC_WORKER_USER")}
 }
 
 func darwinProfile(t *testing.T) interface {

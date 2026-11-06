@@ -98,6 +98,7 @@ type Process struct {
 	PGID    int
 	Start   string // as the OS reports it; compared verbatim
 	Command string
+	Escaped bool // attributed to the run but found outside its unit or session
 }
 
 // StopReceipt is the evidence a stop leaves behind (R19).
@@ -106,6 +107,7 @@ type StopReceipt struct {
 	Reason     string
 	Signalled  []int
 	Survivors  []Process // non-empty is an alert (R28), never silence
+	Escaped    []Process // processes found outside the unit or session: an alert even when reaped
 	Verified   bool
 	StartedAt  time.Time
 	FinishedAt time.Time
@@ -138,6 +140,9 @@ type Handle struct {
 	PID   int
 	PGID  int
 	Unit  string // Linux transient unit name
+	// CGroup is the unit's cgroup path in sysfs, resolved once at Start so
+	// inventory and stop never depend on the user bus (review H4).
+	CGroup string
 	// RunFile is a per-run file whose inherited descriptor attributes
 	// descendants on macOS, where Apple platform binaries hide their
 	// environment from other processes.

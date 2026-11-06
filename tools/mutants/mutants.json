@@ -7,8 +7,8 @@
   "expect": "TestStaleFenceRefused",
   "edits": [
    [
-    "if fence != a.Fence || m.Version.FenceIsStale(fence) {",
-    "if false {"
+    "\tif fence != a.Fence {\n\t\treturn fmt.Errorf(\"%w: got %d, attempt %s holds %d, mission at %d\",",
+    "\tif false {\n\t\treturn fmt.Errorf(\"%w: got %d, attempt %s holds %d, mission at %d\","
    ]
   ]
  },
@@ -53,10 +53,10 @@
  },
  {
   "id": "M5_accept_ignores_evidence",
-  "invariant": "accepted_current_live_evidence",
+  "invariant": "accepted_current_live_evidence (caught by the oracle: the review path reaches ACCEPT with current evidence by construction)",
   "pkg": "./internal/reducer",
   "file": "internal/domain/state.go",
-  "expect": "TestAcceptNeedsCurrentEvidence",
+  "expect": "TestTraces",
   "edits": [
    [
     "if e.Attempt == attempt && e.Current(m) {",
@@ -85,14 +85,14 @@
   "expect": "TestUnknownAttemptBlocksRelaunch",
   "edits": [
    [
-    "if m.UnresolvedAttempts() > 0 {",
-    "if false {"
+    "\t\tif m.UnresolvedAttempts() > 0 {\n\t\t\treturn nil, fmt.Errorf(\"%w: an attempt is unresolved\", domain.ErrUnknownUnresolved)",
+    "\t\tif false {\n\t\t\treturn nil, fmt.Errorf(\"%w: an attempt is unresolved\", domain.ErrUnknownUnresolved)"
    ]
   ]
  },
  {
   "id": "M8_per_mission_live_cap",
-  "invariant": "running_capacity",
+  "invariant": "running_capacity (per-mission live cap and per-role rule both removed)",
   "pkg": "./internal/reducer",
   "file": "internal/reducer/reducer.go",
   "expect": "TestPerMissionLiveAttemptsBounded",
@@ -100,19 +100,10 @@
    [
     "if m.LiveAttempts() >= domain.MaxLiveAttempts {",
     "if false {"
-   ]
-  ]
- },
- {
-  "id": "M9_quarantine_reacquires_slot",
-  "invariant": "running_capacity",
-  "pkg": "./internal/reducer",
-  "file": "internal/reducer/reducer.go",
-  "expect": "TestTraces",
-  "edits": [
+   ],
    [
-    "e.AttemptTo == domain.AttemptQuarantined && s.Execution.HoldsSlot() {",
-    "e.AttemptTo == domain.AttemptQuarantined {"
+    "if other.State.Live() && other.Role == cmd.Role {",
+    "if false {"
    ]
   ]
  },
@@ -230,10 +221,10 @@
  },
  {
   "id": "M18_vacuous_receipt_counts",
-  "invariant": "accepted_current_live_evidence",
+  "invariant": "accepted_current_live_evidence (caught by the oracle: the review path reaches ACCEPT with current evidence by construction)",
   "pkg": "./internal/reducer",
   "file": "internal/domain/state.go",
-  "expect": "TestAcceptNeedsCurrentEvidence",
+  "expect": "TestTraces",
   "edits": [
    [
     "return !e.Vacuous && e.Revision == m.Version.IntentRevision &&",
@@ -256,7 +247,7 @@
  },
  {
   "id": "M20_f1_size_guard_removed",
-  "invariant": "bounded_inputs_r25",
+  "invariant": "bounded_inputs_r25 (both door caps removed)",
   "pkg": "./internal/store",
   "file": "internal/store/store.go",
   "expect": "TestOversizedRequestNotStored",
@@ -264,6 +255,10 @@
    [
     "if len(cmd.Request) > domain.MaxRequestBytes {\n\t\treturn Response{}, fmt.Errorf(\"%w: request larger than %d bytes\", domain.ErrInvalidTransition, domain.MaxRequestBytes)",
     "if false {\n\t\treturn Response{}, fmt.Errorf(\"%w: request larger than %d bytes\", domain.ErrInvalidTransition, domain.MaxRequestBytes)"
+   ],
+   [
+    "if whole, _ := json.Marshal(cmd); len(whole) > MaxCommandBytes {",
+    "if whole, _ := json.Marshal(cmd); len(whole) > MaxCommandBytes && false {"
    ]
   ]
  },

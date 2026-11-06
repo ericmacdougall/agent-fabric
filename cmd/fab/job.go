@@ -11,11 +11,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	"fabric/internal/domain"
+	"fabric/internal/host"
 	"fabric/internal/sched"
 	"fabric/internal/store"
 )
@@ -56,37 +56,31 @@ func jobMain(args []string) error {
 		if err != nil {
 			return err
 		}
+		_ = self
+		// The worker only requests the job; the daemon, outside the sandbox,
+		// starts it in its own unit (review C1). STARTED is printed only once
+		// the daemon has proven the unit exists (bg_job's contract).
 		return withStore(func(ctx context.Context, st *store.Store) error {
-			if err := sched.RegisterJob(ctx, st, *id, domain.MissionID(*mission), domain.AttemptID(*attempt), *fence, argv, "fab-job-"+*id); err != nil {
+			if err := sched.RequestJob(ctx, st, *id, domain.MissionID(*mission), domain.AttemptID(*attempt), *fence, argv, *rundir); err != nil {
 				return err
 			}
-			watch := append([]string{self, "job", "watch", "--id", *id, "--rundir", *rundir, "--"}, argv...)
-			var cmd *exec.Cmd
-			if runtime.GOOS == "linux" {
-				sr := []string{"--user", "--collect", "--quiet", "--unit", "fab-job-" + *id, "-p", "KillMode=control-group"}
-				for _, e := range []string{"FABRIC_DSN=" + os.Getenv("FABRIC_DSN"), "FABRIC_HOME=" + os.Getenv("FABRIC_HOME"), "HOME=" + os.Getenv("HOME"), "PATH=" + os.Getenv("PATH")} {
-					sr = append(sr, "-E", e)
-				}
-				sr = append(sr, "--")
-				sr = append(sr, watch...)
-				cmd = exec.Command("systemd-run", sr...)
-				if out, err := cmd.CombinedOutput(); err != nil {
-					st.Pool().Exec(ctx, "UPDATE jobs SET state = 'FAILED_TO_START', log_tail = $2 WHERE id = $1", *id, string(out)) //nolint:errcheck
-					return fmt.Errorf("job unit failed to start: %v %s", err, out)
-				}
-			} else {
-				cmd = exec.Command(watch[0], watch[1:]...)
-				cmd.Env = os.Environ()
-				cmd.SysProcAttr = detachAttr()
-				if err := cmd.Start(); err != nil {
-					st.Pool().Exec(ctx, "UPDATE jobs SET state = 'FAILED_TO_START', log_tail = $2 WHERE id = $1", *id, err.Error()) //nolint:errcheck
+			sched.Notify(ctx, st)
+			deadline := time.Now().Add(20 * time.Second)
+			for time.Now().Before(deadline) {
+				j, err := sched.LoadJob(ctx, st, *id)
+				if err != nil {
 					return err
 				}
-				st.Pool().Exec(ctx, "UPDATE jobs SET pid = $2 WHERE id = $1", *id, cmd.Process.Pid) //nolint:errcheck
-				go cmd.Wait()                                                                       //nolint:errcheck
+				switch j.State {
+				case "STARTED", "EXITED":
+					fmt.Printf("job %s STARTED (wait token job:%s)\n", *id, *id)
+					return nil
+				case "FAILED_TO_START":
+					return fmt.Errorf("job %s failed to start: %s", *id, j.LogTail)
+				}
+				time.Sleep(200 * time.Millisecond)
 			}
-			fmt.Printf("job %s STARTED (wait token job:%s)\n", *id, *id)
-			return nil
+			return fmt.Errorf("job %s: the daemon did not start it within 20s (is fab daemon running?)", *id)
 		})
 	case "watch":
 		fs := flag.NewFlagSet("job watch", flag.ContinueOnError)
@@ -141,6 +135,14 @@ func jobMain(args []string) error {
 	return errors.New("job run|watch|show")
 }
 
+func selfPath() string {
+	p, err := os.Executable()
+	if err != nil {
+		return "fab"
+	}
+	return p
+}
+
 func envInt(s string) int64 {
 	var n int64
 	fmt.Sscanf(s, "%d", &n) //nolint:errcheck
@@ -158,6 +160,8 @@ func daemonMain(args []string) error {
 	profile := fs.String("profile", "P1", "execution profile")
 	once := fs.Bool("once", false, "run ticks until idle, then exit (tests)")
 	hostID := fs.String("host", "h_"+hostname(), "host id")
+	trustProvider := fs.Bool("trust-provider", false, "the provider is a trusted recorded fake; skip the containment gate")
+	workerUser := fs.String("worker-user", os.Getenv("FABRIC_WORKER_USER"), "dedicated worker account (Linux); empty means same-UID shadow mode")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -168,12 +172,28 @@ func daemonMain(args []string) error {
 	if err != nil {
 		return err
 	}
+	os.Setenv("FABRIC_WORKER_USER", *workerUser)
 	ln, err := launcherForThisHost()
 	if err != nil {
 		return err
 	}
+	// An untrusted provider (anything but the recorded fake) runs only on a
+	// host whose negative controls demonstrated containment (review C1).
+	if !*trustProvider {
+		p, err := profileForThisHost()
+		if err != nil {
+			return err
+		}
+		results, err := p.NegativeControls(filepath.Join(*workRoot, "controls"))
+		if err != nil {
+			return err
+		}
+		if containment, failed := host.Capabilities(results); !containment {
+			return fmt.Errorf("refusing to launch an untrusted provider: this host did not demonstrate containment (failing controls: %s); use --trust-provider only for the recorded fake", strings.Join(failed, ", "))
+		}
+	}
 	cfg := sched.Config{Host: domain.HostID(*hostID), Model: model, Effort: effort, Rung: *rung, TierTableSHA: sha, Profile: *profile,
-		MaxTurns: 40, MaxBudgetUSD: 2, Wall: 45 * time.Minute, WorkRoot: *workRoot}
+		MaxTurns: 40, MaxBudgetUSD: 2, Wall: 45 * time.Minute, WorkRoot: *workRoot, FabBin: selfPath()}
 	cfg.Launch.Binary = *provider
 	cfg.Launch.SchemaPath = filepath.Join(*workRoot, "checkpoint.schema.json")
 	cfg.Launch.SettingSources = ""

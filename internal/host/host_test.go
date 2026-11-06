@@ -56,16 +56,31 @@ func TestNegativeControls(t *testing.T) {
 	if len(results) < 3 {
 		t.Fatalf("only %d controls ran", len(results))
 	}
-	var failed []string
+	// Two Linux controls cannot pass on a same-UID host without a user
+	// namespace, a dedicated worker account or Landlock ABI 6 (review C1):
+	// they must be reported as failing, and Capabilities must say so.
+	expectedToFail := map[string]bool{"controlling_user_manager_unreachable": true, "controlling_user_process_unsignallable": true}
+	if os.Getenv("FABRIC_EXPECT_CONTAINMENT") != "" || os.Getenv("FABRIC_WORKER_USER") != "" {
+		expectedToFail = nil
+	}
+	var failed, unexpected []string
 	for _, r := range results {
 		t.Logf("%-45s %-5v %s", r.Name, r.Passed, r.Detail)
 		if !r.Passed {
 			failed = append(failed, r.Name)
+			if !expectedToFail[r.Name] {
+				unexpected = append(unexpected, r.Name)
+			}
 		}
 	}
-	if len(failed) > 0 {
-		t.Fatalf("controls failed on %s: %s", p.Name(), strings.Join(failed, ", "))
+	if len(unexpected) > 0 {
+		t.Fatalf("controls failed on %s: %s", p.Name(), strings.Join(unexpected, ", "))
 	}
+	containment, names := Capabilities(results)
+	if containment != (len(failed) == 0) {
+		t.Fatalf("Capabilities reports containment=%v with failed=%v", containment, names)
+	}
+	t.Logf("containment demonstrated on %s: %v (failing: %v)", p.Name(), containment, names)
 }
 
 // A real grant for P1 on the Mac is refused (D6) even when everything else

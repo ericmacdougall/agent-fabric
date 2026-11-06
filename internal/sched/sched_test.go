@@ -4,10 +4,12 @@ package sched
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -63,9 +65,18 @@ func TestAC2WaitWithoutPolling(t *testing.T) {
 	work := t.TempDir()
 	schema := filepath.Join(work, "schema.json")
 	os.WriteFile(schema, []byte(`{"type":"object"}`), 0o644) //nolint:errcheck
-	ln := &host.Linux{Self: fab, ExtraRW: []string{filepath.Join(os.Getenv("HOME"), ".cache")}}
+	port := 0
+	if u, err := url.Parse(testDSN); err == nil {
+		port, _ = strconv.Atoi(u.Port())
+	}
+	ln := &host.Linux{Self: fab, ReadOnly: []string{filepath.Dir(fab), filepath.Dir(fake)}, TCPPorts: []int{port}, User: os.Getenv("FABRIC_WORKER_USER")}
+	if root := os.Getenv("FABRIC_WORKER_ROOT"); root != "" {
+		work = filepath.Join(root, "ac2-"+strconv.FormatInt(time.Now().UnixNano(), 36))
+		os.MkdirAll(work, 0o775)            //nolint:errcheck
+		os.Chmod(work, 0o775|os.ModeSetgid) //nolint:errcheck
+	}
 	cfg := Config{Host: "h_t2", Model: "fake-model", Effort: "n/a", Rung: "R0", TierTableSHA: "test", Profile: "P1", MaxTurns: 5, MaxBudgetUSD: 0.01,
-		Wall: time.Minute, WorkRoot: work, Backoff: 200 * time.Millisecond, MaxBackoff: time.Second}
+		Wall: time.Minute, WorkRoot: work, Backoff: 200 * time.Millisecond, MaxBackoff: time.Second, FabBin: fab}
 	cfg.Launch.Binary = fake
 	cfg.Launch.SchemaPath = schema
 	s := New(st, cfg, ln)

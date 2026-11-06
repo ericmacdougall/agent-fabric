@@ -77,8 +77,17 @@ func Argv(g host.Grant, l Launch) (argv []string, env []string, err error) {
 	if l.DisableSlash {
 		argv = append(argv, "--disable-slash-commands")
 	}
+	// Private configuration and caches under the run dir (review C2): the
+	// user's ~/.claude (hooks, settings, agents) and ~/.cache are never
+	// writable by a worker, so nothing a worker stores runs unconfined later.
 	env = []string{
 		"CLAUDE_CODE_DISABLE_CLAUDE_MDS=1",
+		"CLAUDE_CONFIG_DIR=" + g.RunDir + "/claude-config",
+		"XDG_CACHE_HOME=" + g.RunDir + "/cache",
+		"XDG_CONFIG_HOME=" + g.RunDir + "/config",
+		"GOCACHE=" + g.RunDir + "/cache/go-build",
+		"GOMODCACHE=" + g.RunDir + "/cache/gomod",
+		"GOFLAGS=-modcacherw",
 		"FAB_RUN=" + g.Token,
 		"FAB_MISSION=" + string(g.Mission),
 		"FAB_ATTEMPT=" + string(g.Run),

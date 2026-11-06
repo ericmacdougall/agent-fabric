@@ -22,6 +22,9 @@ func TestRV3_OutboxDeliversLateCommit(t *testing.T) {
 	mk(t, st, ctx, "m_b")
 	inHook := make(chan struct{})
 	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock) // a failing assertion must not leave the hook blocked (the pool close would hang)
 	st.hooks.beforeCommit = func(cmd domain.Command) error {
 		if cmd.Mission == "m_a" {
 			close(inHook)
@@ -46,10 +49,23 @@ func TestRV3_OutboxDeliversLateCommit(t *testing.T) {
 			t.Fatal("the later-committing lower id can still be skipped: m_b was delivered before m_a committed")
 		}
 	}
-	close(release)
+	unblock()
 	wg.Wait()
 	st.hooks.beforeCommit = nil
-	page2, _ := st.OutboxPage(ctx, "poster", 10)
+	// Visibility waits for every older in-progress transaction in the
+	// cluster (pg_snapshot_xmin is cluster-wide), so a consumer sees both
+	// rows on a later page, in id order, never m_b alone.
+	var page2 []OutboxRow
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		page2, _ = st.OutboxPage(ctx, "poster", 10)
+		if len(page2) == 2 {
+			break
+		}
+		if len(page2) == 1 && page2[0].Mission == "m_b" {
+			t.Fatalf("m_b delivered without m_a: %+v", page2)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if len(page2) != 2 || page2[0].Mission != "m_a" || page2[1].Mission != "m_b" {
 		t.Fatalf("after both commits: %+v", page2)
 	}

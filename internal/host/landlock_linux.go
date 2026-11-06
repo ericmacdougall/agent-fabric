@@ -29,11 +29,31 @@ const (
 	llRefer      = 1 << 13 // ABI 2
 	llTruncate   = 1 << 14 // ABI 3
 
+	llNetBindTCP    = 1 << 0 // ABI 4
+	llNetConnectTCP = 1 << 1 // ABI 4
+
 	llCreateRulesetVersion = 1 << 0
 	llRulePathBeneath      = 1
+	llRuleNetPort          = 2
 )
 
-func landlockCreateRuleset(attr *unix.LandlockRulesetAttr, size uintptr, flags uint32) (int, error) {
+// Own copies of the uapi structs (ABI 4 layout), independent of x/sys.
+type llRulesetAttr struct {
+	HandledAccessFS  uint64
+	HandledAccessNet uint64
+}
+
+type llPathBeneathAttr struct {
+	AllowedAccess uint64
+	ParentFD      int32
+}
+
+type llNetPortAttr struct {
+	AllowedAccess uint64
+	Port          uint64
+}
+
+func landlockCreateRuleset(attr *llRulesetAttr, size uintptr, flags uint32) (int, error) {
 	r, _, e := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(attr)), size, uintptr(flags))
 	if e != 0 {
 		return -1, e
@@ -41,8 +61,8 @@ func landlockCreateRuleset(attr *unix.LandlockRulesetAttr, size uintptr, flags u
 	return int(r), nil
 }
 
-func landlockAddPathRule(fd int, attr *unix.LandlockPathBeneathAttr) error {
-	_, _, e := unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE, uintptr(fd), llRulePathBeneath, uintptr(unsafe.Pointer(attr)), 0, 0, 0)
+func landlockAddRule(fd int, ruleType uintptr, attr unsafe.Pointer) error {
+	_, _, e := unix.Syscall6(unix.SYS_LANDLOCK_ADD_RULE, uintptr(fd), ruleType, uintptr(attr), 0, 0, 0)
 	if e != 0 {
 		return e
 	}
@@ -63,10 +83,24 @@ func LandlockABI() (int, error) {
 	return landlockCreateRuleset(nil, 0, llCreateRulesetVersion)
 }
 
+// Sandbox is what a worker may touch (review C2, H3): read-only roots instead
+// of "/", writable leaves, and the TCP ports it may connect to. Everything
+// else under the filesystem is denied, which covers $HOME secrets, the
+// user's Claude configuration and tool caches.
+type Sandbox struct {
+	ReadOnly  []string
+	ReadWrite []string
+	TCPPorts  []int
+}
+
+// DefaultReadOnly is the system part of the read allow-list; callers add the
+// toolchains and module caches a worker needs.
+var DefaultReadOnly = []string{"/usr", "/lib", "/lib64", "/lib32", "/bin", "/sbin", "/etc", "/opt", "/proc", "/sys", "/dev", "/tmp", "/var/lib", "/var/tmp", "/snap", "/run/systemd/resolve"}
+
 // ApplyLandlock restricts the calling process (and everything it execs) to
-// read-only access everywhere except the rw paths (ABI 4 on t2-dev, E5). It
-// fails closed: if Landlock is unavailable the caller must not launch.
-func ApplyLandlock(rw []string) error {
+// the sandbox. It fails closed: if Landlock is unavailable or a rule cannot
+// be added, the caller must not launch.
+func ApplyLandlock(sb Sandbox) error {
 	abi, err := LandlockABI()
 	if err != nil || abi < 1 {
 		return fmt.Errorf("landlock unavailable (abi=%d): %v", abi, err)
@@ -79,41 +113,59 @@ func ApplyLandlock(rw []string) error {
 	if abi >= 3 {
 		write |= llTruncate
 	}
-	attr := unix.LandlockRulesetAttr{Access_fs: read | write}
+	attr := llRulesetAttr{HandledAccessFS: read | write}
+	if abi >= 4 {
+		attr.HandledAccessNet = llNetBindTCP | llNetConnectTCP
+	}
 	fd, err := landlockCreateRuleset(&attr, unsafe.Sizeof(attr), 0)
 	if err != nil {
 		return fmt.Errorf("landlock ruleset: %w", err)
 	}
 	defer unix.Close(fd)
-	addRule := func(path string, access uint64) error {
+	addPath := func(path string, access uint64) error {
 		pfd, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC, 0)
 		if err != nil {
 			return fmt.Errorf("open %s: %w", path, err)
 		}
 		defer unix.Close(pfd)
-		beneath := unix.LandlockPathBeneathAttr{Allowed_access: access, Parent_fd: int32(pfd)}
-		return landlockAddPathRule(fd, &beneath)
+		beneath := llPathBeneathAttr{AllowedAccess: access, ParentFD: int32(pfd)}
+		return landlockAddRule(fd, llRulePathBeneath, unsafe.Pointer(&beneath))
 	}
-	if err := addRule("/", read); err != nil {
-		return err
-	}
-	for _, p := range rw {
+	for _, p := range append(append([]string{}, DefaultReadOnly...), sb.ReadOnly...) {
 		if st, err := os.Stat(p); err != nil || !st.IsDir() {
-			continue // a missing writable path is simply not granted
+			continue // a missing read root is simply not granted
 		}
-		if err := addRule(p, read|write); err != nil {
+		if err := addPath(p, read); err != nil {
+			return err
+		}
+	}
+	for _, p := range sb.ReadWrite {
+		if st, err := os.Stat(p); err != nil || !st.IsDir() {
+			continue
+		}
+		if err := addPath(p, read|write); err != nil {
 			return err
 		}
 	}
 	// Device nodes workers need for stdio redirection. Only file-applicable
-	// rights may be granted on a non-directory (anything else is EINVAL), and
-	// a failed rule is an error, never silence (R28).
+	// rights may be granted on a non-directory; a failed rule is an error.
 	for _, dev := range []string{"/dev/null", "/dev/zero", "/dev/urandom", "/dev/tty"} {
 		if _, err := os.Stat(dev); err != nil {
 			continue
 		}
-		if err := addRule(dev, llReadFile|llWriteFile); err != nil {
+		if err := addPath(dev, llReadFile|llWriteFile); err != nil {
 			return fmt.Errorf("landlock rule for %s: %w", dev, err)
+		}
+	}
+	if abi >= 4 {
+		for _, port := range sb.TCPPorts {
+			if port <= 0 || port > 65535 {
+				return fmt.Errorf("landlock: tcp port %d out of range", port)
+			}
+			np := llNetPortAttr{AllowedAccess: llNetConnectTCP, Port: uint64(port)}
+			if err := landlockAddRule(fd, llRuleNetPort, unsafe.Pointer(&np)); err != nil {
+				return fmt.Errorf("landlock net rule for port %d: %w", port, err)
+			}
 		}
 	}
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
