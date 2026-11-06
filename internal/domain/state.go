@@ -1,0 +1,226 @@
+package domain
+
+import "fmt"
+
+// The four orthogonal state dimensions of a mission (DESIGN.md 3.4). One enum
+// cannot say "waiting on an ask while the candidate is unverified and delivery
+// is not ready", so each dimension is its own column.
+type (
+	ExecutionState string
+	CandidateState string
+	DeliveryState  string
+	TerminalState  string
+	AttemptState   string
+	EffectState    string
+)
+
+const (
+	ExecIdle              ExecutionState = "IDLE"
+	ExecAdmitted          ExecutionState = "ADMITTED"
+	ExecRunning           ExecutionState = "RUNNING"
+	ExecWaiting           ExecutionState = "WAITING"
+	ExecResourceExhausted ExecutionState = "RESOURCE_EXHAUSTED"
+	ExecPaused            ExecutionState = "PAUSED"
+	ExecBlocked           ExecutionState = "BLOCKED"
+
+	CandNone       CandidateState = "NONE"
+	CandBuilding   CandidateState = "BUILDING"
+	CandUnverified CandidateState = "UNVERIFIED"
+	CandVerifying  CandidateState = "VERIFYING"
+	CandAccepted   CandidateState = "ACCEPTED"
+	CandRejected   CandidateState = "REJECTED"
+
+	DelivNotReady     DeliveryState = "NOT_READY"
+	DelivPRReady      DeliveryState = "PR_READY"
+	DelivIntegrated   DeliveryState = "INTEGRATED"
+	DelivDelivered    DeliveryState = "DELIVERED"
+	DelivLiveVerified DeliveryState = "LIVE_VERIFIED"
+
+	TermNone           TerminalState = "NONE"
+	TermSucceeded      TerminalState = "SUCCEEDED"
+	TermFailedDefinite TerminalState = "FAILED_DEFINITE"
+	TermCancelled      TerminalState = "CANCELLED"
+	TermQuarantined    TerminalState = "QUARANTINED"
+
+	// Attempt lifecycle (DESIGN.md 3.4). SUCCEEDED_UNVERIFIED is never shown as
+	// done; UNKNOWN never goes straight to a relaunch.
+	AttemptPending             AttemptState = "PENDING"
+	AttemptAdmitted            AttemptState = "ADMITTED"
+	AttemptLeased              AttemptState = "LEASED"
+	AttemptPreparing           AttemptState = "PREPARING"
+	AttemptRunning             AttemptState = "RUNNING"
+	AttemptSucceededUnverified AttemptState = "SUCCEEDED_UNVERIFIED"
+	AttemptFailedDefinite      AttemptState = "FAILED_DEFINITE"
+	AttemptUnknown             AttemptState = "UNKNOWN"
+	AttemptReconciling         AttemptState = "RECONCILING"
+	AttemptVerified            AttemptState = "VERIFIED"
+	AttemptQuarantined         AttemptState = "QUARANTINED"
+
+	EffectDispatched     EffectState = "DISPATCHED"
+	EffectConfirmed      EffectState = "CONFIRMED"
+	EffectFailedDefinite EffectState = "FAILED_DEFINITE"
+	EffectUnknown        EffectState = "UNKNOWN"
+	EffectNotApplied     EffectState = "NOT_APPLIED"
+	EffectQuarantined    EffectState = "QUARANTINED"
+)
+
+// HoldsSlot reports whether a mission in this execution state occupies one of
+// the fleet's slots (R1). Waiting and paused missions keep their slot: a slot
+// is the user's "active owner", and a waiting owner is still an owner.
+func (e ExecutionState) HoldsSlot() bool {
+	switch e {
+	case ExecAdmitted, ExecRunning, ExecWaiting, ExecPaused:
+		return true
+	}
+	return false
+}
+
+// Live reports whether an attempt in this state may still produce authoritative
+// results (it holds the mission's current fence).
+func (a AttemptState) Live() bool {
+	switch a {
+	case AttemptAdmitted, AttemptLeased, AttemptPreparing, AttemptRunning:
+		return true
+	}
+	return false
+}
+
+// Unresolved reports whether the attempt's outcome is not yet known. A mission
+// with an unresolved attempt may not start another one (plan invariant 7).
+func (a AttemptState) Unresolved() bool {
+	return a == AttemptUnknown || a == AttemptReconciling || a == AttemptSucceededUnverified
+}
+
+// MaxLiveAttempts bounds attempts per mission: one writer and one reviewer (R4).
+const MaxLiveAttempts = 2
+
+// Attempt is one authorised run of a mission under one fence.
+type Attempt struct {
+	ID         AttemptID    `json:"id"`
+	Fence      int64        `json:"fence"`
+	Revision   int64        `json:"revision"`
+	Generation int64        `json:"generation"`
+	Host       HostID       `json:"host,omitempty"`
+	Role       string       `json:"role,omitempty"`
+	State      AttemptState `json:"state"`
+}
+
+// Evidence is a receipt bound to an exact subject (plan invariant 12).
+type Evidence struct {
+	Attempt    AttemptID `json:"attempt"`
+	Revision   int64     `json:"revision"`
+	Generation int64     `json:"generation"`
+	Head       string    `json:"head"`
+	Receipt    string    `json:"receipt"`
+}
+
+// EvidenceKey names the exact subject a receipt is bound to. Evidence is
+// never overwritten: a later receipt for an older subject lives beside the
+// current one instead of masking it (plan invariant 12).
+func EvidenceKey(attempt AttemptID, revision, generation int64, head string) string {
+	return fmt.Sprintf("%s|r%d|g%d|%s", attempt, revision, generation, head)
+}
+
+// Acceptance records which attempt's candidate was accepted and for which
+// exact (revision, generation, head).
+type Acceptance struct {
+	Attempt    AttemptID `json:"attempt"`
+	Revision   int64     `json:"revision"`
+	Generation int64     `json:"generation"`
+	Head       string    `json:"head"`
+}
+
+// Effect is the reducer's view of an external effect: enough to refuse a retry
+// while it is UNKNOWN. The broker's full state machine (approval, request
+// hash, readback) is a later slice.
+type Effect struct {
+	ID          EffectID    `json:"id"`
+	Attempt     AttemptID   `json:"attempt"`
+	Fence       int64       `json:"fence"`
+	State       EffectState `json:"state"`
+	Submissions int         `json:"submissions"`
+}
+
+// Mission is the reducer's state for one mission. It is the fold of the
+// mission's events; the store keeps a snapshot of it in the same transaction as
+// the events, and a rebuild from events must reproduce it exactly.
+type Mission struct {
+	ID        MissionID      `json:"id"`
+	Seq       int64          `json:"seq"`
+	Version   Version        `json:"version"`
+	Execution ExecutionState `json:"execution"`
+	Candidate CandidateState `json:"candidate"`
+	Delivery  DeliveryState  `json:"delivery"`
+	Terminal  TerminalState  `json:"terminal"`
+	Head      string         `json:"head,omitempty"`
+	WaitKey   string         `json:"wait_key,omitempty"`
+
+	Attempts            map[AttemptID]Attempt `json:"attempts,omitempty"`
+	Evidence            map[string]Evidence   `json:"evidence,omitempty"` // keyed by EvidenceKey: append-only per exact subject
+	Wakes               map[string]bool       `json:"wakes,omitempty"`
+	Effects             map[EffectID]Effect   `json:"effects,omitempty"`
+	Accepted            *Acceptance           `json:"accepted,omitempty"`
+	DeliveredGeneration *int64                `json:"delivered_generation,omitempty"`
+}
+
+// NewMission is the zero state before any event.
+func NewMission(id MissionID) Mission {
+	return Mission{
+		ID:        id,
+		Execution: ExecIdle,
+		Candidate: CandNone,
+		Delivery:  DelivNotReady,
+		Terminal:  TermNone,
+	}
+}
+
+// Clone returns a deep copy so reducers never alias their input.
+func (m Mission) Clone() Mission {
+	c := m
+	c.Attempts = cloneMap(m.Attempts)
+	c.Evidence = cloneMap(m.Evidence)
+	c.Wakes = cloneMap(m.Wakes)
+	c.Effects = cloneMap(m.Effects)
+	if m.Accepted != nil {
+		a := *m.Accepted
+		c.Accepted = &a
+	}
+	if m.DeliveredGeneration != nil {
+		g := *m.DeliveredGeneration
+		c.DeliveredGeneration = &g
+	}
+	return c
+}
+
+func cloneMap[K comparable, V any](in map[K]V) map[K]V {
+	if in == nil {
+		return nil
+	}
+	out := make(map[K]V, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// LiveAttempts counts attempts that still hold authority.
+func (m Mission) LiveAttempts() int {
+	n := 0
+	for _, a := range m.Attempts {
+		if a.State.Live() {
+			n++
+		}
+	}
+	return n
+}
+
+// UnresolvedAttempts counts attempts whose outcome is not yet known.
+func (m Mission) UnresolvedAttempts() int {
+	n := 0
+	for _, a := range m.Attempts {
+		if a.State.Unresolved() {
+			n++
+		}
+	}
+	return n
+}
