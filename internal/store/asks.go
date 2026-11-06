@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -23,7 +24,30 @@ const AskActor = "asks"
 func AskWakeKey(id string) string { return "ask:" + id }
 
 // AskToken is the wait token a mission names to wait on an ask.
-func AskToken(id string) string { return "ask:" + id }
+func AskToken(id string) string { return askTokenPrefix + id }
+
+const askTokenPrefix = "ask:"
+
+func isAskToken(token string) bool { return strings.HasPrefix(token, askTokenPrefix) }
+
+// checkAskReserved keeps the ask: wait tokens to the asks actor (review F1).
+// AskActor records only ask wakes, each under its fixed key, and may
+// acknowledge them; no other actor may WAKE or ACK_WAKE an ask: token.
+// FABRIC_ACTOR can name any actor, so Execute also requires the ask to be
+// answered for the mission before an ask wake is decided.
+func checkAskReserved(actor domain.ActorID, commandID domain.CommandID, cmd domain.Command) error {
+	wakeKind := cmd.Kind == domain.CmdWake || cmd.Kind == domain.CmdAckWake
+	askTok := wakeKind && isAskToken(cmd.Token)
+	switch {
+	case actor == AskActor && !askTok:
+		return fmt.Errorf("%w: actor %s records only ask wakes", domain.ErrInvalidTransition, AskActor)
+	case askTok && actor != AskActor:
+		return fmt.Errorf("%w: %s %s is reserved to actor %s", domain.ErrInvalidTransition, cmd.Kind, cmd.Token, AskActor)
+	case askTok && cmd.Kind == domain.CmdWake && string(commandID) != AskWakeKey(strings.TrimPrefix(cmd.Token, askTokenPrefix)):
+		return fmt.Errorf("%w: an ask wake uses key %s", domain.ErrInvalidTransition, AskWakeKey(strings.TrimPrefix(cmd.Token, askTokenPrefix)))
+	}
+	return nil
+}
 
 // AnswerResult says what an answer did.
 type AnswerResult struct {

@@ -242,6 +242,9 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	if len(cmd.Request) > 0 && !json.Valid(cmd.Request) {
 		return Response{}, fmt.Errorf("%w: request is not valid JSON", domain.ErrInvalidTransition)
 	}
+	if err := checkAskReserved(actor, commandID, cmd); err != nil {
+		return Response{}, err
+	}
 	hash := cmd.RequestHash()
 
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -298,6 +301,21 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	case errors.Is(err, pgx.ErrNoRows):
 	default:
 		return Response{}, err
+	}
+
+	// Review F1: an ask wake needs an answered ask of this mission. Checked
+	// after the replay lookup (a stored wake already passed it) and never
+	// stored, so a wake forged before the answer cannot poison the fixed key.
+	if cmd.Kind == domain.CmdWake && isAskToken(cmd.Token) {
+		var state, owner string
+		err := tx.QueryRow(ctx, "SELECT state, COALESCE(mission_id, '') FROM asks WHERE id = $1 FOR SHARE",
+			strings.TrimPrefix(cmd.Token, askTokenPrefix)).Scan(&state, &owner)
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && (state != "answered" || owner != string(cmd.Mission))) {
+			return Response{}, fmt.Errorf("%w: %s is not an answered ask of mission %s", domain.ErrInvalidTransition, cmd.Token, cmd.Mission)
+		}
+		if err != nil {
+			return Response{}, err
+		}
 	}
 
 	var m domain.Mission

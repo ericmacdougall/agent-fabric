@@ -863,5 +863,44 @@
     "\tif n := tag.RowsAffected(); false && n != 1 {"
    ]
   ]
+ },
+ {
+  "id": "M67_ask_wake_without_answer",
+  "invariant": "ask_wake_needs_answered_ask",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestAskWakeReservedForAnsweredAsk",
+  "edits": [
+   [
+    "\tif cmd.Kind == domain.CmdWake && isAskToken(cmd.Token) {",
+    "\tif false && cmd.Kind == domain.CmdWake && isAskToken(cmd.Token) {"
+   ]
+  ]
+ },
+ {
+  "id": "M68_ask_token_any_actor",
+  "invariant": "ask_token_reserved_to_asks_actor",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestAskWakeReservedForAnsweredAsk",
+  "edits": [
+   [
+    "\tcase askTok && actor != AskActor:",
+    "\tcase false && askTok && actor != AskActor:"
+   ]
+  ]
+ },
+ {
+  "id": "M69_ask_wake_any_key",
+  "invariant": "ask_wake_fixed_key",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestAskWakeReservedForAnsweredAsk",
+  "edits": [
+   [
+    "\tcase askTok && cmd.Kind == domain.CmdWake && string(commandID)",
+    "\tcase false && askTok && cmd.Kind == domain.CmdWake && string(commandID)"
+   ]
+  ]
  }
 ]
