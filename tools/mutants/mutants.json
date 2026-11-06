@@ -811,5 +811,18 @@
     ""
    ]
   ]
+ },
+ {
+  "id": "M63_count_before_start",
+  "invariant": "launch_counted_after_start",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestLaunchCountersOnlyAfterPhysicalStart",
+  "edits": [
+   [
+    "\tfence := resp.Events[0].Fence\n",
+    "\tfence := resp.Events[0].Fence\n\ts.Launched++\n"
+   ]
+  ]
  }
 ]

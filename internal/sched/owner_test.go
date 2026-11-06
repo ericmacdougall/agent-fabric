@@ -2,6 +2,7 @@ package sched
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -54,6 +55,9 @@ func ownerSetup(t *testing.T, id domain.MissionID) (*store.Store, *fakeLauncher,
 		t.Fatal(err)
 	}
 	if _, err := st.Execute(ctx, "chat", domain.CommandID("admit-"+string(id)), domain.Command{Kind: domain.CmdAdmitMission, Mission: id}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Pool().Exec(ctx, `DELETE FROM sched_counters`); err != nil { // not covered by Truncate
 		t.Fatal(err)
 	}
 	ln := &fakeLauncher{st: st, block: make(chan struct{})}
@@ -113,5 +117,36 @@ func TestAckStartPersistedBeforeLaunch(t *testing.T) {
 	defer ln.mu.Unlock()
 	if len(ln.stateAt) != 1 || ln.stateAt[0] != string(domain.AttemptRunning) {
 		t.Fatalf("attempt state seen by Start: %v, want [%s] (ACK must commit before the launch)", ln.stateAt, domain.AttemptRunning)
+	}
+}
+
+func launchedCounter(t *testing.T, st *store.Store) int {
+	t.Helper()
+	var n int
+	if err := st.Pool().QueryRow(context.Background(), `SELECT COALESCE((SELECT value FROM sched_counters WHERE name = 'runs_launched_total'), 0)`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// S3: launch counters count physical starts, not selected candidates.
+func TestLaunchCountersOnlyAfterPhysicalStart(t *testing.T) {
+	st, ln, cfg := ownerSetup(t, "m_own3")
+	ln.startErr = errors.New("unit could not be created")
+	s := New(st, cfg, ln)
+	if err := s.runOnce(context.Background(), "m_own3"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Launched != 0 || launchedCounter(t, st) != 0 {
+		t.Fatalf("a failed start counted as a launch: Launched=%d runs_launched_total=%d", s.Launched, launchedCounter(t, st))
+	}
+	// A start that succeeds counts once.
+	st2, ln2, cfg2 := ownerSetup(t, "m_own3b")
+	s2 := New(st2, cfg2, ln2)
+	if err := s2.runOnce(context.Background(), "m_own3b"); err != nil {
+		t.Fatal(err)
+	}
+	if s2.Launched != 1 || launchedCounter(t, st2) != 1 {
+		t.Fatalf("a successful start: Launched=%d runs_launched_total=%d, want 1/1", s2.Launched, launchedCounter(t, st2))
 	}
 }

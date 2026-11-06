@@ -278,8 +278,6 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		return nil
 	}
 	fence := resp.Events[0].Fence
-	s.Launched++
-	s.bump(ctx, "runs_launched_total")
 
 	worktree := filepath.Join(s.cfg.WorkRoot, "wt", string(mission))
 	runDir := filepath.Join(s.cfg.WorkRoot, "run", string(attempt))
@@ -323,6 +321,9 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		out.Close()
 		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "start failed: "+err.Error())
 	}
+	// S3: count physical starts, not selected candidates.
+	s.Launched++
+	s.bump(ctx, "runs_launched_total")
 	// The worker runs while the loop keeps serving its job requests and
 	// wakes; its end is settled from the stream when it exits.
 	go func() {
