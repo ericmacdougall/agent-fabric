@@ -94,6 +94,20 @@ const (
 	EvClaimRefused      EventKind = "CLAIM_REFUSED" // H3: a ready_for_review claim without current evidence (an alert, R28)
 )
 
+// knownEventKinds is every kind this build's reducer interprets. A new kind
+// is added here together with its Apply case (TestKnownEventKindRegistryIsComplete).
+var knownEventKinds = map[EventKind]bool{
+	EvMissionAdmitted: true, EvIntentRevised: true, EvAttemptStarted: true, EvAttemptAcked: true,
+	EvEvidenceRecorded: true, EvAttemptFinished: true, EvAttemptUnknown: true, EvAttemptReconciled: true,
+	EvCandidateSelected: true, EvCandidateAccepted: true, EvDelivered: true, EvWakeRecorded: true,
+	EvWakeAcked: true, EvMissionResumed: true, EvEffectSubmitted: true, EvEffectUnknown: true,
+	EvEffectResubmitted: true, EvEffectResolved: true, EvMissionReleased: true, EvAcceptanceRevoked: true,
+	EvClaimRefused: true,
+}
+
+// KnownEventKind reports whether this build can interpret kind k.
+func KnownEventKind(k EventKind) bool { return knownEventKinds[k] }
+
 // Event is one recorded fact about a mission. Seq is assigned by the store
 // (per-mission, gap-free); Fence is the fence the fact was produced under.
 type Event struct {

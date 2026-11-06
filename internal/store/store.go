@@ -645,7 +645,11 @@ func (s *Store) VerifiedSnapshot(ctx context.Context, id domain.MissionID) (doma
 	if err := json.Unmarshal(stateJSON, &snap); err != nil {
 		return domain.Mission{}, nil, fmt.Errorf("mission %s snapshot: %w", id, err)
 	}
-	rebuilt := reducer.Replay(id, events)
+	rebuilt, err := reducer.Replay(id, events)
+	if err != nil {
+		// Never serve the known prefix as current state (Kimi compatibility analysis).
+		return domain.Mission{}, nil, fmt.Errorf("mission %s: %w", id, err)
+	}
 	if a, b := reducer.Digest(rebuilt), reducer.Digest(snap); a != b {
 		return rebuilt, events, fmt.Errorf("mission %s: replay digest %s != snapshot %s", id, a[:12], b[:12])
 	}

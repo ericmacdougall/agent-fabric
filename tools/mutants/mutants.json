@@ -1361,5 +1361,44 @@
     "pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadOnly}"
    ]
   ]
+ },
+ {
+  "id": "M113_replay_skips_unknown_event",
+  "invariant": "replay_fails_closed",
+  "pkg": "./internal/store",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestVerifiedSnapshotRejectsUnknownEvent",
+  "edits": [
+   [
+    "\t\tif !domain.KnownEventKind(e.Kind) {",
+    "\t\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M114_snapshot_serves_known_prefix",
+  "invariant": "replay_fails_closed",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestVerifiedSnapshotRejectsUnknownEvent",
+  "edits": [
+   [
+    "\t\treturn domain.Mission{}, nil, fmt.Errorf(\"mission %s: %w\", id, err)",
+    "\t\treturn rebuilt, events, fmt.Errorf(\"mission %s: %w\", id, err)"
+   ]
+  ]
+ },
+ {
+  "id": "M115_every_kind_known",
+  "invariant": "replay_fails_closed",
+  "pkg": "./internal/reducer",
+  "file": "internal/domain/events.go",
+  "expect": "TestKnownEventKindRegistryIsComplete",
+  "edits": [
+   [
+    "func KnownEventKind(k EventKind) bool { return knownEventKinds[k] }",
+    "func KnownEventKind(k EventKind) bool { return k != \"\" }"
+   ]
+  ]
  }
 ]

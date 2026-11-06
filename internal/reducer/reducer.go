@@ -576,11 +576,19 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 	return s
 }
 
-// Replay folds a mission's event log from the zero state.
-func Replay(id domain.MissionID, events []domain.Event) domain.Mission {
+// Replay folds a mission's event log from the zero state. It is the
+// authority's compatibility boundary (Kimi compatibility analysis): it stops
+// at the first event kind this build cannot interpret and returns
+// ErrUnsupportedEvent with the known prefix, for diagnostics only. Apply
+// stays permissive for the Decide -> Apply path, which only sees kinds this
+// build emits.
+func Replay(id domain.MissionID, events []domain.Event) (domain.Mission, error) {
 	m := domain.NewMission(id)
-	for _, e := range events {
+	for i, e := range events {
+		if !domain.KnownEventKind(e.Kind) {
+			return m, fmt.Errorf("%w: mission %s event %d (seq %d) is %q", domain.ErrUnsupportedEvent, id, i, e.Seq, e.Kind)
+		}
 		m = Apply(m, e)
 	}
-	return m
+	return m, nil
 }

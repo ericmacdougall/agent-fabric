@@ -17,4 +17,6 @@ var (
 	ErrGenerationStale     = errors.New("generation is not the current candidate generation")
 	ErrAttemptLive         = errors.New("attempt already live")
 	ErrDuplicate           = errors.New("duplicate")
+	// ErrUnsupportedEvent: the log holds an event kind this build cannot interpret.
+	ErrUnsupportedEvent = errors.New("unsupported event kind")
 )
