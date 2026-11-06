@@ -287,11 +287,15 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		}
 		os.Chmod(d, 0o775|os.ModeSetgid) //nolint:errcheck // group-shared with the worker account
 	}
-	events, err := s.st.Events(ctx, mission)
+	// The checkpoint and the event window come from one verified snapshot read
+	// after START (Kimi projection analysis): the mission read before START
+	// would say fence 0 with no live attempt while the window shows its start.
+	// Nothing is launched yet, so an unverifiable snapshot abandons cleanly.
+	cur, events, err := s.st.VerifiedSnapshot(ctx, mission)
 	if err != nil {
-		return err
+		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "snapshot not verified: "+err.Error())
 	}
-	proj, err := projection.Build(m, events, projection.DefaultCapTokens, "continue the mission; end with the checkpoint schema")
+	proj, err := projection.Build(cur, events, projection.DefaultCapTokens, "continue the mission; end with the checkpoint schema")
 	if err != nil {
 		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "projection budget fault: "+err.Error())
 	}

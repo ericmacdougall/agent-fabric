@@ -2,8 +2,11 @@ package sched
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fabric/internal/projection"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,6 +32,7 @@ type fakeLauncher struct {
 	startErr error
 	mu       sync.Mutex
 	stateAt  []string // the attempt row state at each Start call
+	argvs    [][]string
 	block    chan struct{}
 }
 
@@ -38,6 +42,7 @@ func (f *fakeLauncher) Start(g host.Grant, argv, env []string, stdout, stderr *o
 	f.st.Pool().QueryRow(context.Background(), `SELECT state FROM attempts WHERE id = $1`, string(g.Run)).Scan(&st) //nolint:errcheck
 	f.mu.Lock()
 	f.stateAt = append(f.stateAt, st)
+	f.argvs = append(f.argvs, append([]string(nil), argv...))
 	f.mu.Unlock()
 	return host.Handle{Run: g.Run}, f.startErr
 }
@@ -176,5 +181,38 @@ func TestAmbiguousStartErrorKeepsLease(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&ln.starts); got != 1 {
 		t.Fatalf("%d starts: the next pass launched beside a possibly live worker", got)
+	}
+}
+
+// Kimi projection analysis (defect 2), checked against fabric: runOnce built
+// the launch projection from the mission read before START and the events
+// read after it, so the checkpoint said fence 0 with no live attempt while
+// the window held that attempt's start. The checkpoint and the window now
+// come from one verified snapshot taken after START.
+func TestRunOnceProjectionUsesPostStartSnapshot(t *testing.T) {
+	st, ln, cfg := ownerSetup(t, "m_own6")
+	s := New(st, cfg, ln)
+	if err := s.runOnce(context.Background(), "m_own6"); err != nil {
+		t.Fatal(err)
+	}
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+	if len(ln.argvs) != 1 {
+		t.Fatalf("%d starts, want 1", len(ln.argvs))
+	}
+	var proj projection.Projection
+	for i, a := range ln.argvs[0] {
+		if a == "-p" && i+1 < len(ln.argvs[0]) {
+			if err := json.Unmarshal([]byte(ln.argvs[0][i+1]), &proj); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	cp := proj.Checkpoint
+	if cp.Version.AttemptFence != 1 || len(cp.LiveRuns) != 1 || cp.LiveRuns[0] != "r_own6_1" {
+		t.Fatalf("checkpoint is not the post-start state: fence %d, live %v", cp.Version.AttemptFence, cp.LiveRuns)
+	}
+	if n := len(proj.Window); n < 2 || !strings.Contains(proj.Window[n-1], string(domain.EvAttemptStarted)) {
+		t.Fatalf("window does not end with the attempt start: %v", proj.Window)
 	}
 }
