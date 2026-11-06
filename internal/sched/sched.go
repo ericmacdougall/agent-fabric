@@ -318,8 +318,16 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	errf, _ := os.Create(filepath.Join(runDir, "stderr.log"))
 	h, err := s.ln.Start(g, argv, env, out, errf)
 	if err != nil {
+		// S4: a start error is ambiguous (the unit may exist). Never a
+		// definite abandonment: the acked attempt keeps its lease, which
+		// expires into UNKNOWN for reconciliation, so the next pass cannot
+		// launch a second worker beside a possibly live one.
 		out.Close()
-		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "start failed: "+err.Error())
+		if errf != nil {
+			errf.Close()
+		}
+		fmt.Fprintf(os.Stderr, "fabd: start of %s is ambiguous, left to lease expiry: %v\n", attempt, err)
+		return nil
 	}
 	// S3: count physical starts, not selected candidates.
 	s.Launched++

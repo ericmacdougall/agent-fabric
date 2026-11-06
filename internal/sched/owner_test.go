@@ -150,3 +150,31 @@ func TestLaunchCountersOnlyAfterPhysicalStart(t *testing.T) {
 		t.Fatalf("a successful start: Launched=%d runs_launched_total=%d, want 1/1", s2.Launched, launchedCounter(t, st2))
 	}
 }
+
+// S4: a Start error is ambiguous (systemd-run can fail after the unit
+// exists). The attempt keeps its lease, which expires into UNKNOWN for
+// reconciliation; it is never a definite abandonment that lets the next
+// pass launch a second worker beside a possibly live one.
+func TestAmbiguousStartErrorKeepsLease(t *testing.T) {
+	st, ln, cfg := ownerSetup(t, "m_own4")
+	ln.startErr = errors.New("systemd-run: connection reset after unit creation")
+	s := New(st, cfg, ln)
+	ctx := context.Background()
+	if err := s.runOnce(ctx, "m_own4"); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	var leased bool
+	if err := st.Pool().QueryRow(ctx, `SELECT state, COALESCE(lease_until > now(), false) FROM attempts WHERE mission_id = 'm_own4'`).Scan(&state, &leased); err != nil {
+		t.Fatal(err)
+	}
+	if state != string(domain.AttemptRunning) || !leased {
+		t.Fatalf("after an ambiguous start: attempt %s leased=%v, want RUNNING with its lease", state, leased)
+	}
+	if _, err := s.dispatch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&ln.starts); got != 1 {
+		t.Fatalf("%d starts: the next pass launched beside a possibly live worker", got)
+	}
+}

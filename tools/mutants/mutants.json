@@ -824,5 +824,18 @@
     "\tfence := resp.Events[0].Fence\n\ts.Launched++\n"
    ]
   ]
+ },
+ {
+  "id": "M64_start_error_abandons",
+  "invariant": "ambiguous_start_keeps_lease",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestAmbiguousStartErrorKeepsLease",
+  "edits": [
+   [
+    "\t\treturn nil\n\t}\n\t// S3: count physical starts",
+    "\t\treturn s.finish(ctx, mission, attempt, fence, \"abandoned\", \"\", \"start failed: \"+err.Error())\n\t}\n\t// S3: count physical starts"
+   ]
+  ]
  }
 ]
