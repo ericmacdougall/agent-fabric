@@ -187,3 +187,28 @@ func TestRenewedLeaseRefusalReplays(t *testing.T) {
 		t.Fatal("a replayed key expired the attempt")
 	}
 }
+
+// S5 (Kimi P3 reconciliation): the attempts table is a projection of the
+// ATTEMPT_* events in the same transaction. An update that touches no row
+// means the two have diverged; the command must roll back, not append an
+// event the table does not reflect.
+func TestAckStartMissingAttemptRowRollsBack(t *testing.T) {
+	st, ctx := openTest(t)
+	mk(t, st, ctx, "m_1")
+	ok(t, st, ctx, "chat", "admit", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_1"})
+	fence := startAttempt(t, st, ctx, "m_1", "r_1")
+	if _, err := st.pool.Exec(ctx, "DELETE FROM attempts WHERE id = 'r_1'"); err != nil {
+		t.Fatal(err)
+	}
+	before := count(t, st, ctx, "SELECT count(*) FROM events WHERE mission_id = 'm_1'")
+	_, err := st.Execute(ctx, "fabd", "ack-r1", domain.Command{Kind: domain.CmdAckStart, Mission: "m_1", Attempt: "r_1", Fence: fence})
+	if err == nil {
+		t.Fatal("ACK_START succeeded with no attempts row to update")
+	}
+	if after := count(t, st, ctx, "SELECT count(*) FROM events WHERE mission_id = 'm_1'"); after != before {
+		t.Fatalf("events grew from %d to %d on a diverged attempt row", before, after)
+	}
+	if n := count(t, st, ctx, "SELECT count(*) FROM commands WHERE command_id = 'ack-r1'"); n != 0 {
+		t.Fatal("a rolled-back command left its response row")
+	}
+}

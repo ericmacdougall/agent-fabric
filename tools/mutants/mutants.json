@@ -850,5 +850,18 @@
     "\t\t\tresp := Response{Status: \"refused\", Reason: \"lease renewed\", ErrKind: \"invalid_transition\", Version: m.Version}\n\t\t\treturn resp, &Refusal{Response: resp, Err: fmt.Errorf(\"%w: lease renewed\", domain.ErrInvalidTransition)}\n"
    ]
   ]
+ },
+ {
+  "id": "M66_attempt_update_rowcount_ignored",
+  "invariant": "attempt_row_matches_events",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestAckStartMissingAttemptRowRollsBack",
+  "edits": [
+   [
+    "\tif n := tag.RowsAffected(); n != 1 {",
+    "\tif n := tag.RowsAffected(); false && n != 1 {"
+   ]
+  ]
  }
 ]

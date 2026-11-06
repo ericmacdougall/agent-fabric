@@ -436,13 +436,26 @@ func (s *Store) applyAttemptRow(ctx context.Context, tx pgx.Tx, e domain.Event) 
 			string(domain.AttemptLeased), pgInterval(s.Lease))
 		return err
 	case domain.EvAttemptAcked:
-		_, err := tx.Exec(ctx, `UPDATE attempts SET state = $3, lease_until = now() + $4::interval
+		tag, err := tx.Exec(ctx, `UPDATE attempts SET state = $3, lease_until = now() + $4::interval
 			WHERE id = $1 AND fence = $2`, string(e.Attempt), e.Fence, string(e.AttemptTo), pgInterval(s.Lease))
-		return err
+		return oneAttemptRow(tag, err, e)
 	case domain.EvAttemptFinished, domain.EvAttemptUnknown, domain.EvAttemptReconciled:
-		_, err := tx.Exec(ctx, `UPDATE attempts SET state = $3, lease_until = NULL, ended_at = now()
+		tag, err := tx.Exec(ctx, `UPDATE attempts SET state = $3, lease_until = NULL, ended_at = now()
 			WHERE id = $1 AND fence = $2`, string(e.Attempt), e.Fence, string(e.AttemptTo))
+		return oneAttemptRow(tag, err, e)
+	}
+	return nil
+}
+
+// oneAttemptRow fails the command when an attempt update touched anything
+// but exactly one row (S5): the table and the events have diverged, and the
+// transaction must roll back rather than append an unreflected event.
+func oneAttemptRow(tag pgconn.CommandTag, err error, e domain.Event) error {
+	if err != nil {
 		return err
+	}
+	if n := tag.RowsAffected(); n != 1 {
+		return fmt.Errorf("attempt %s at fence %d: %s updated %d rows, want 1", e.Attempt, e.Fence, e.Kind, n)
 	}
 	return nil
 }
