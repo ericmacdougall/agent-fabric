@@ -52,6 +52,14 @@ def main():
         k, _, v = kv.partition("=")
         env[k] = v
 
+    # Clean baseline first: the unmutated suites must pass, or no verdict means anything.
+    pkgs = sorted({m["pkg"] for m in mutants if not only or m["id"] in only or m["id"].split("_")[0] in only})
+    base = subprocess.run(["go", "test", *pkgs, "-count=1", "-timeout", f"{args.timeout}s"], cwd=repo, env=env, capture_output=True, text=True)
+    if base.returncode != 0:
+        print("BASELINE FAIL: the unmutated suites do not pass; no mutant can be judged", flush=True)
+        print((base.stdout + base.stderr)[-2000:])
+        sys.exit(2)
+    print(f"BASELINE PASS: {' '.join(pkgs)}", flush=True)
     os.makedirs(args.scratch, exist_ok=True)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     rows = []

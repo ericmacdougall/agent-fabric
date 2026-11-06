@@ -143,6 +143,10 @@ func (s *Store) SetCap(ctx context.Context, cap int) error {
 	return err
 }
 
+// MaxCommandBytes bounds a whole command at the door (review RV-8): every
+// free-text field, not only Request, is capped before anything is stored.
+const MaxCommandBytes = 64 * 1024
+
 // Response is the stored, replayable answer to a command.
 type Response struct {
 	Status   string         `json:"status"` // ok | refused
@@ -202,6 +206,24 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	}
 	if _, err := domain.ParseMissionID(string(cmd.Mission)); err != nil {
 		return Response{}, err
+	}
+	if cmd.Attempt != "" {
+		if _, err := domain.ParseAttemptID(string(cmd.Attempt)); err != nil {
+			return Response{}, err
+		}
+	}
+	if cmd.Effect != "" {
+		if _, err := domain.ParseEffectID(string(cmd.Effect)); err != nil {
+			return Response{}, err
+		}
+	}
+	if cmd.Host != "" {
+		if _, err := domain.ParseHostID(string(cmd.Host)); err != nil {
+			return Response{}, err
+		}
+	}
+	if whole, _ := json.Marshal(cmd); len(whole) > MaxCommandBytes {
+		return Response{}, fmt.Errorf("%w: command larger than %d bytes", domain.ErrInvalidTransition, MaxCommandBytes)
 	}
 	// F1 (R25): bound the request body before anything is stored, so an
 	// oversized request under a stale fence cannot land in stale_observations.
@@ -267,6 +289,19 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	var m domain.Mission
 	if err := json.Unmarshal(stateJSON, &m); err != nil {
 		return Response{}, fmt.Errorf("mission %s snapshot: %w", cmd.Mission, err)
+	}
+	if cmd.Kind == domain.CmdExpireLease {
+		// Authority rechecked before the mutation (review H10 / RV-22): a
+		// lease renewed after the sweep read its page is not expired.
+		var fresh *bool
+		err := tx.QueryRow(ctx, "SELECT lease_until >= now() FROM attempts WHERE id = $1 FOR UPDATE", string(cmd.Attempt)).Scan(&fresh)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return Response{}, err
+		}
+		if fresh != nil && *fresh {
+			resp := Response{Status: "refused", Reason: "lease renewed after the sweep read it", ErrKind: "invalid_transition", Version: m.Version}
+			return resp, &Refusal{Response: resp, Err: fmt.Errorf("%w: lease renewed", domain.ErrInvalidTransition)}
+		}
 	}
 
 	env := reducer.Env{Cap: cap}
@@ -434,16 +469,20 @@ type ExpiredLease struct {
 // retried or run twice is a replay, never a second transition. Bounded page:
 // a backlog can never become one unbounded transaction.
 func (s *Store) ExpireLeases(ctx context.Context, limit int) ([]ExpiredLease, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, mission_id, fence FROM attempts
+	rows, err := s.pool.Query(ctx, `SELECT id, mission_id, fence, (extract(epoch FROM lease_until) * 1000)::bigint FROM attempts
 		WHERE state IN ('LEASED', 'PREPARING', 'RUNNING') AND lease_until < now()
 		ORDER BY lease_until LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
-	var page []ExpiredLease
+	type row struct {
+		ExpiredLease
+		leaseMillis int64
+	}
+	var page []row
 	for rows.Next() {
-		var e ExpiredLease
-		if err := rows.Scan(&e.Attempt, &e.Mission, &e.Fence); err != nil {
+		var e row
+		if err := rows.Scan(&e.Attempt, &e.Mission, &e.Fence, &e.leaseMillis); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -451,19 +490,24 @@ func (s *Store) ExpireLeases(ctx context.Context, limit int) ([]ExpiredLease, er
 	}
 	rows.Close()
 	var expired []ExpiredLease
+	var failures []error
 	for _, e := range page {
 		cmd := domain.Command{Kind: domain.CmdExpireLease, Mission: e.Mission, Attempt: e.Attempt, Fence: e.Fence}
-		id := domain.CommandID(fmt.Sprintf("expire:%s:%d", e.Attempt, e.Fence))
+		// Fixed-size key (review H10 / RV-21): the commands key already
+		// scopes it to the mission; the observed lease makes a renewed lease
+		// a new sweep attempt instead of a replayed refusal.
+		id := domain.CommandID(fmt.Sprintf("expire:f%d:%d", e.Fence, e.leaseMillis))
 		if _, err := s.Execute(ctx, "fabd", id, cmd); err != nil {
 			var ref *Refusal
 			if errors.As(err, &ref) {
-				continue // already moved by a concurrent sweep or a finish that raced the expiry
+				continue // moved by a concurrent sweep, renewed, or finished meanwhile
 			}
-			return expired, err
+			failures = append(failures, fmt.Errorf("expire %s: %w", e.Attempt, err))
+			continue // one bad row never stalls the page (review RV-21)
 		}
-		expired = append(expired, e)
+		expired = append(expired, e.ExpiredLease)
 	}
-	return expired, nil
+	return expired, errors.Join(failures...)
 }
 
 // Mission loads the snapshot.
@@ -531,8 +575,12 @@ type OutboxRow struct {
 
 // OutboxPage returns up to limit rows after the consumer's cursor.
 func (s *Store) OutboxPage(ctx context.Context, consumer string, limit int) ([]OutboxRow, error) {
+	// Rows whose transaction is still in progress (or newer than one that is)
+	// are not visible yet, so an id that commits late can never be skipped
+	// (review H5 / RV-3).
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.mission_id, o.seq, o.payload FROM outbox o
 		WHERE o.id > COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer = $1), 0)
+		  AND o.xid < pg_snapshot_xmin(pg_current_snapshot())
 		ORDER BY o.id LIMIT $2`, consumer, limit)
 	if err != nil {
 		return nil, err

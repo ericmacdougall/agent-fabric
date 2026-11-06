@@ -180,7 +180,14 @@ func randomCommand(r *rand.Rand, f *fleet, id domain.MissionID, step int) domain
 			}
 			sort.Strings(keys)
 			if len(keys) > 0 && r.Intn(4) != 0 {
-				c.Claims = []domain.Claim{{AC: "AC-1", Receipt: m.Evidence[keys[r.Intn(len(keys))]].Receipt}}
+				pick := m.Evidence[keys[r.Intn(len(keys))]]
+				for _, k := range keys { // prefer a current receipt so review is entered often enough
+					if e := m.Evidence[k]; e.Current(m) {
+						pick = e
+						break
+					}
+				}
+				c.Claims = []domain.Claim{{AC: "AC-1", Receipt: pick.Receipt}}
 			} else {
 				c.Claims = []domain.Claim{{AC: "AC-1", Receipt: "rcpt_bogus"}}
 			}
@@ -201,6 +208,14 @@ func randomCommand(r *rand.Rand, f *fleet, id domain.MissionID, step int) domain
 	case 8:
 		c.Kind = domain.CmdAccept
 		c.Attempt = pickAttempt()
+		if m.Candidate == domain.CandVerifying {
+			for _, aid := range attemptIDs {
+				if m.Attempts[aid].State == domain.AttemptVerified {
+					c.Attempt = aid
+					break
+				}
+			}
+		}
 	case 9:
 		c.Kind = domain.CmdDeliver
 		c.Attempt = pickAttempt()
@@ -238,12 +253,56 @@ func randomCommand(r *rand.Rand, f *fleet, id domain.MissionID, step int) domain
 	case 17:
 		c.Kind = domain.CmdReviseIntent
 		c.Reason = "user input"
+	case 18:
+		// The review chain, one legal step at a time, so acceptance and
+		// delivery are reached often enough to be checked: evidence ->
+		// ready_for_review -> VERIFIED -> ACCEPT -> DELIVER.
+		for _, aid := range attemptIDs {
+			a := m.Attempts[aid]
+			switch {
+			case a.State.Live() && m.Head != "" && !hasCurrent(m, aid):
+				c.Kind, c.Attempt, c.Fence = domain.CmdRecordEvidence, aid, a.Fence
+				c.Revision, c.Generation, c.Head, c.Receipt = m.Version.IntentRevision, m.Version.CandidateGeneration, m.Head, fmt.Sprintf("rcpt_chain_%d", step)
+				return c
+			case a.State.Live() && m.Candidate == domain.CandUnverified && hasCurrent(m, aid):
+				c.Kind, c.Attempt, c.Fence, c.Outcome = domain.CmdFinishAttempt, aid, a.Fence, "ready_for_review"
+				c.Claims = []domain.Claim{{AC: "AC-1", Receipt: currentReceipt(m, aid)}}
+				return c
+			case a.State == domain.AttemptSucceededUnverified:
+				c.Kind, c.Attempt, c.Fence, c.Result = domain.CmdReconcileAttempt, aid, a.Fence, "VERIFIED"
+				return c
+			case a.State == domain.AttemptVerified && m.Candidate == domain.CandVerifying:
+				c.Kind, c.Attempt = domain.CmdAccept, aid
+				return c
+			case m.Accepted != nil && m.Accepted.Attempt == aid:
+				c.Kind, c.Attempt, c.Generation = domain.CmdDeliver, aid, m.Version.CandidateGeneration-int64(r.Intn(3)/2)
+				return c
+			}
+		}
+		c.Kind = domain.CmdSelectCandidate
+		c.Head = fmt.Sprintf("sha_%d", r.Intn(4))
 	}
 	return c
 }
 
 // cmdWeights is indexed by the case numbers below and sums to 100.
-var cmdWeights = []int{8, 10, 8, 9, 10, 4, 8, 3, 8, 8, 5, 2, 4, 3, 3, 3, 2, 2}
+var cmdWeights = []int{7, 9, 7, 8, 9, 4, 7, 2, 6, 6, 4, 2, 4, 3, 3, 3, 2, 2, 12}
+
+func hasCurrent(m domain.Mission, aid domain.AttemptID) bool { return currentReceipt(m, aid) != "" }
+
+func currentReceipt(m domain.Mission, aid domain.AttemptID) string {
+	var keys []string
+	for k, e := range m.Evidence {
+		if e.Attempt == aid && e.Current(m) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return ""
+	}
+	return m.Evidence[keys[0]].Receipt
+}
 
 func sortAttempts(a []domain.AttemptID) {
 	for i := 1; i < len(a); i++ {
@@ -427,7 +486,10 @@ func TestPerMissionLiveAttemptsBounded(t *testing.T) {
 	mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "reviewer"})
 	_, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_3", Host: "h_t2", Role: "writer"})
 	if !errors.Is(err, domain.ErrAttemptLive) {
-		t.Fatalf("third live attempt: want ErrAttemptLive, got %v", err)
+		t.Fatalf("second writer: want ErrAttemptLive, got %v", err)
+	}
+	if _, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_4", Host: "h_t2", Role: "reviewer"}); !errors.Is(err, domain.ErrAttemptLive) {
+		t.Fatalf("second reviewer: want ErrAttemptLive, got %v", err)
 	}
 }
 
@@ -453,28 +515,21 @@ func TestUnknownRetryBlocked(t *testing.T) {
 func TestAcceptNeedsCurrentEvidence(t *testing.T) {
 	f, id, a, fence := startedMission(t)
 	m := f.missions[id]
-	// Evidence for an older generation: refused.
-	mustStep(t, f, domain.Command{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence,
-		Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration - 1, Head: m.Head, Receipt: "rcpt_old"})
-	_, err := f.step(t, domain.Command{Kind: domain.CmdAccept, Mission: id, Attempt: a})
-	if !errors.Is(err, domain.ErrEvidenceStale) {
-		t.Fatalf("accept with stale-generation evidence: want ErrEvidenceStale, got %v", err)
+	// Stale, other-head and vacuous evidence never reach VERIFYING (the
+	// arbitration refuses the claim), so ACCEPT is refused as not-in-review.
+	for _, c := range []domain.Command{
+		{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence, Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration - 1, Head: m.Head, Receipt: "rcpt_old"},
+		{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence, Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration, Head: "sha_other", Receipt: "rcpt_head"},
+		{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence, Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration, Head: m.Head, Receipt: "rcpt_vacuous", Vacuous: true},
+	} {
+		mustStep(t, f, c)
 	}
-	// Evidence for the right generation but another head: refused.
-	mustStep(t, f, domain.Command{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence,
-		Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration, Head: "sha_other", Receipt: "rcpt_head"})
-	if _, err = f.step(t, domain.Command{Kind: domain.CmdAccept, Mission: id, Attempt: a}); !errors.Is(err, domain.ErrEvidenceStale) {
-		t.Fatalf("accept with other-head evidence: want ErrEvidenceStale, got %v", err)
+	var err error
+	if _, err = f.step(t, domain.Command{Kind: domain.CmdAccept, Mission: id, Attempt: a}); !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Fatalf("accept outside review: want ErrInvalidTransition, got %v", err)
 	}
-	// A vacuous receipt for the current subject (passed = failed = 0): refused (R33).
-	mustStep(t, f, domain.Command{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence,
-		Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration, Head: m.Head, Receipt: "rcpt_vacuous", Vacuous: true})
-	if _, err = f.step(t, domain.Command{Kind: domain.CmdAccept, Mission: id, Attempt: a}); !errors.Is(err, domain.ErrEvidenceStale) {
-		t.Fatalf("accept on a vacuous receipt: want ErrEvidenceStale, got %v", err)
-	}
-	// Current evidence: accepted.
-	mustStep(t, f, domain.Command{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence,
-		Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration, Head: m.Head, Receipt: "rcpt_now"})
+	// Current evidence, through the review path: accepted.
+	reviewed(t, f, id, a, fence, "rcpt_now")
 	mustStep(t, f, domain.Command{Kind: domain.CmdAccept, Mission: id, Attempt: a})
 	if f.missions[id].Candidate != domain.CandAccepted {
 		t.Fatal("not accepted")
@@ -489,8 +544,7 @@ func TestAcceptNeedsCurrentEvidence(t *testing.T) {
 func TestDeliverNeedsCurrentGeneration(t *testing.T) {
 	f, id, a, fence := startedMission(t)
 	m := f.missions[id]
-	mustStep(t, f, domain.Command{Kind: domain.CmdRecordEvidence, Mission: id, Attempt: a, Fence: fence,
-		Revision: m.Version.IntentRevision, Generation: m.Version.CandidateGeneration, Head: m.Head, Receipt: "rcpt"})
+	reviewed(t, f, id, a, fence, "rcpt")
 	mustStep(t, f, domain.Command{Kind: domain.CmdAccept, Mission: id, Attempt: a})
 	gen := m.Version.CandidateGeneration
 	_, err := f.step(t, domain.Command{Kind: domain.CmdDeliver, Mission: id, Attempt: a, Generation: gen - 1})
@@ -563,6 +617,8 @@ func TestEffectOccurrences(t *testing.T) {
 		return ev[0]
 	}
 	e1 := sub(`{"ticket": 14791, "body": "same"}`)
+	// An identical request is a new occurrence only once the first is resolved (H7).
+	mustStep(t, f, domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: e1.Effect, Result: "CONFIRMED"})
 	e2 := sub(`{"body":"same","ticket":14791}`) // reordered keys, no spaces
 	e3 := sub(`{"ticket": 14791, "body": "other"}`)
 	if e1.RequestSHA != e2.RequestSHA || e1.Occurrence != 1 || e2.Occurrence != 2 || e1.Effect == e2.Effect {

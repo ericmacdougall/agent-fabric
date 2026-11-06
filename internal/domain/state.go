@@ -128,7 +128,9 @@ func (e Evidence) Current(m Mission) bool {
 // never overwritten: a later receipt for an older subject lives beside the
 // current one instead of masking it (plan invariant 12).
 func EvidenceKey(attempt AttemptID, revision, generation int64, head, receipt string) string {
-	return fmt.Sprintf("%s|r%d|g%d|%s|%s", attempt, revision, generation, head, receipt)
+	// Length-prefixed fields: a '|' inside head or receipt cannot make two
+	// subjects share a key (review RV-17).
+	return fmt.Sprintf("%d:%s|r%d|g%d|%d:%s|%d:%s", len(attempt), attempt, revision, generation, len(head), head, len(receipt), receipt)
 }
 
 // Acceptance records which attempt's candidate was accepted and for which

@@ -74,6 +74,13 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if m.LiveAttempts() >= domain.MaxLiveAttempts {
 			return nil, fmt.Errorf("%w: %d live attempts", domain.ErrAttemptLive, m.LiveAttempts())
 		}
+		for _, other := range m.Attempts {
+			if other.State.Live() && other.Role == cmd.Role {
+				// One live attempt per role (writer, reviewer): a second START
+				// never supersedes a live run silently (review H6).
+				return nil, fmt.Errorf("%w: %s %s is live", domain.ErrAttemptLive, cmd.Role, other.ID)
+			}
+		}
 		e := ev(domain.EvAttemptStarted)
 		e.Attempt = cmd.Attempt
 		e.Fence = m.Version.AttemptFence + 1
@@ -105,6 +112,9 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		}
 		if cmd.Receipt == "" {
 			return nil, fmt.Errorf("%w: evidence needs a receipt", domain.ErrInvalidTransition)
+		}
+		if cmd.Revision > m.Version.IntentRevision || cmd.Generation > m.Version.CandidateGeneration {
+			return nil, fmt.Errorf("%w: evidence for a subject that does not exist yet", domain.ErrEvidenceStale)
 		}
 		e := ev(domain.EvEvidenceRecorded)
 		e.Attempt = a.ID
@@ -218,15 +228,19 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		return []domain.Event{e}, nil
 
 	case domain.CmdAccept:
-		if m.Candidate != domain.CandUnverified && m.Candidate != domain.CandVerifying {
-			return nil, fmt.Errorf("%w: accept while candidate %s", domain.ErrInvalidTransition, m.Candidate)
+		// Acceptance is the end of the review path: the candidate must have
+		// entered VERIFYING through an arbitrated ready_for_review claim and
+		// the attempt must be finished and VERIFIED (review H9; DESIGN 3.4
+		// "only VERIFIED runs advance the mission").
+		if m.Candidate != domain.CandVerifying {
+			return nil, fmt.Errorf("%w: accept while candidate %s (needs VERIFYING)", domain.ErrInvalidTransition, m.Candidate)
 		}
 		a, ok := m.Attempts[cmd.Attempt]
 		if !ok {
 			return nil, fmt.Errorf("%w: attempt %s", domain.ErrNotFound, cmd.Attempt)
 		}
-		if a.State.Unresolved() || a.State == domain.AttemptFailedDefinite || a.State == domain.AttemptQuarantined {
-			return nil, fmt.Errorf("%w: accept from attempt in %s", domain.ErrInvalidTransition, a.State)
+		if a.State != domain.AttemptVerified {
+			return nil, fmt.Errorf("%w: accept from attempt in %s (needs VERIFIED)", domain.ErrInvalidTransition, a.State)
 		}
 		cur := m.CurrentEvidence(a.ID)
 		if len(cur) == 0 {
@@ -296,6 +310,17 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if err != nil {
 			return nil, err
 		}
+		for _, f := range m.Effects {
+			if f.Base != base {
+				continue
+			}
+			switch f.State {
+			case domain.EffectUnknown:
+				return nil, fmt.Errorf("%w: %s is UNKNOWN; reconcile before submitting the same request again", domain.ErrUnknownUnresolved, f.ID)
+			case domain.EffectDispatched:
+				return nil, fmt.Errorf("%w: %s is DISPATCHED", domain.ErrDuplicate, f.ID)
+			}
+		}
 		occurrence := m.Occurrences(base) + 1
 		id := domain.EffectIDFor(base, occurrence)
 		if _, dup := m.Effects[id]; dup {
@@ -363,6 +388,9 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if m.LiveAttempts() > 0 {
 			return nil, fmt.Errorf("%w: live attempts", domain.ErrAttemptLive)
 		}
+		if m.UnresolvedAttempts() > 0 {
+			return nil, fmt.Errorf("%w: an attempt is unresolved; the slot is held until it is reconciled", domain.ErrUnknownUnresolved)
+		}
 		return []domain.Event{ev(domain.EvMissionReleased)}, nil
 	}
 	return nil, fmt.Errorf("%w: unknown command %q", domain.ErrInvalidTransition, cmd.Kind)
@@ -414,8 +442,12 @@ func arbitrate(m domain.Mission, a domain.Attempt, claims []domain.Claim) string
 // fenceCheck refuses any message whose fence is not the attempt's own fence.
 // A smaller fence is stale (a late message from a superseded run); a larger one
 // is forged or from the future and is refused the same way.
+// A fence names one attempt: every live attempt keeps its own fence until it
+// ends, so a writer and a reviewer running side by side both stay
+// addressable (review H6); superseding a run is a new attempt id, never a
+// silent fence bump.
 func fenceCheck(m domain.Mission, a domain.Attempt, fence int64) error {
-	if fence != a.Fence || m.Version.FenceIsStale(fence) {
+	if fence != a.Fence {
 		return fmt.Errorf("%w: got %d, attempt %s holds %d, mission at %d",
 			domain.ErrStaleFence, fence, a.ID, a.Fence, m.Version.AttemptFence)
 	}
@@ -471,8 +503,10 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 				s.WaitKey = e.WaitKey
 			}
 		case "blocked":
-			s.Execution = domain.ExecBlocked // frees the slot; re-entry is an admission
-			s.WaitKey = ""
+			if s.LiveAttempts() == 0 && s.UnresolvedAttempts() == 0 {
+				s.Execution = domain.ExecBlocked // frees the slot; re-entry is an admission
+				s.WaitKey = ""
+			}
 		default:
 			if e.Outcome == "ready_for_review" && s.Candidate == domain.CandUnverified {
 				s.Candidate = domain.CandVerifying

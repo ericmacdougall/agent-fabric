@@ -405,8 +405,13 @@ func TestEventSeqGapFreeAndRebuild(t *testing.T) {
 	ok(t, st, ctx, "host", "fin", domain.Command{Kind: domain.CmdFinishAttempt, Mission: "m_1", Attempt: "r_1", Fence: fence, Outcome: "wait", WaitKey: "job_1"})
 	ok(t, st, ctx, "host", "wake", domain.Command{Kind: domain.CmdWake, Mission: "m_1", Token: "job_1"})
 	ok(t, st, ctx, "fabd", "rec", domain.Command{Kind: domain.CmdReconcileAttempt, Mission: "m_1", Attempt: "r_1", Fence: fence, Result: "VERIFIED"})
-	ok(t, st, ctx, "chat", "acc", domain.Command{Kind: domain.CmdAccept, Mission: "m_1", Attempt: "r_1"})
-	ok(t, st, ctx, "fabd", "del", domain.Command{Kind: domain.CmdDeliver, Mission: "m_1", Attempt: "r_1", Generation: 1})
+	// The review path: a second run records current evidence, claims it, is verified, then ACCEPT.
+	f2 := startAttempt(t, st, ctx, "m_1", "r_2")
+	ok(t, st, ctx, "host", "ev2", domain.Command{Kind: domain.CmdRecordEvidence, Mission: "m_1", Attempt: "r_2", Fence: f2, Revision: 0, Generation: 1, Head: "sha_1", Receipt: "rcpt_2"})
+	ok(t, st, ctx, "host", "fin2", domain.Command{Kind: domain.CmdFinishAttempt, Mission: "m_1", Attempt: "r_2", Fence: f2, Outcome: "ready_for_review", Claims: []domain.Claim{{AC: "AC-1", Receipt: "rcpt_2"}}})
+	ok(t, st, ctx, "fabd", "rec2", domain.Command{Kind: domain.CmdReconcileAttempt, Mission: "m_1", Attempt: "r_2", Fence: f2, Result: "VERIFIED"})
+	ok(t, st, ctx, "chat", "acc", domain.Command{Kind: domain.CmdAccept, Mission: "m_1", Attempt: "r_2"})
+	ok(t, st, ctx, "fabd", "del", domain.Command{Kind: domain.CmdDeliver, Mission: "m_1", Attempt: "r_2", Generation: 1})
 	ok(t, st, ctx, "chat", "rev", domain.Command{Kind: domain.CmdReviseIntent, Mission: "m_1", Reason: "user input"})
 
 	events, err := st.Events(ctx, "m_1")
@@ -581,8 +586,13 @@ func TestEffectOccurrencesStore(t *testing.T) {
 	fence := startAttempt(t, st, ctx, "m_1", "r_1")
 	cmd := domain.Command{Kind: domain.CmdSubmitEffect, Mission: "m_1", Attempt: "r_1", Fence: fence, EffectKind: "ticket_comment", Request: json.RawMessage(`{"ticket": 14791, "body": "same"}`)}
 	first := ok(t, st, ctx, "host", "c1", cmd)
+	// An identical request is refused while the first is DISPATCHED (H7); once resolved it is occurrence 2.
 	reordered := cmd
 	reordered.Request = json.RawMessage(`{"body":"same","ticket":14791}`)
+	if _, err := st.Execute(ctx, "host", "c2-early", reordered); !errors.Is(err, domain.ErrDuplicate) {
+		t.Fatalf("identical request while DISPATCHED: want ErrDuplicate, got %v", err)
+	}
+	ok(t, st, ctx, "fabd", "res1", domain.Command{Kind: domain.CmdResolveEffect, Mission: "m_1", Effect: first.Events[0].Effect, Result: "CONFIRMED"})
 	second := ok(t, st, ctx, "host", "c2", reordered)
 	if first.Events[0].Occurrence != 1 || second.Events[0].Occurrence != 2 || first.Events[0].RequestSHA != second.Events[0].RequestSHA {
 		t.Fatalf("occurrences: %+v / %+v", first.Events[0], second.Events[0])

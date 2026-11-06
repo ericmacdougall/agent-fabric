@@ -9,7 +9,8 @@ import (
 	"fabric/internal/domain"
 )
 
-// Invariant names, as in the N1 probe the design adopted (EXPERIMENTS.md K).
+// Invariant names, as in the N1 probe the design adopted (EXPERIMENTS.md K)
+// plus the ones the 8f83662f review added (H6-H9).
 const (
 	InvStaleFence        = "stale_fence_monotonic"
 	InvDuplicateWake     = "duplicate_wakeup_idempotent"
@@ -21,6 +22,9 @@ const (
 	InvRefusalNoEvents   = "refusal_emits_no_events"
 	InvArbitration       = "review_needs_current_receipts"   // H3
 	InvEffectKey         = "effect_key_canonical_occurrence" // H1
+	InvAddressable       = "live_attempt_addressable"        // review H6
+	InvSlotHeld          = "live_or_unresolved_holds_slot"   // review H8
+	InvAcceptReviewed    = "accept_only_after_review"        // review H9
 )
 
 // Violation is one failed invariant with enough context to reproduce it.
@@ -30,6 +34,38 @@ type Violation struct {
 }
 
 func (v Violation) Error() string { return v.Invariant + ": " + v.Message }
+
+// The oracle computes everything it checks with its own loops: it never calls
+// the domain helpers the reducer uses (CurrentEvidence, Occurrences,
+// LiveAttempts, ...), so a mutant in a shared helper cannot blind it.
+
+func liveCount(m domain.Mission) (live, unresolved int, roles map[string]int) {
+	roles = map[string]int{}
+	for _, a := range m.Attempts {
+		switch a.State {
+		case domain.AttemptAdmitted, domain.AttemptLeased, domain.AttemptPreparing, domain.AttemptRunning:
+			live++
+			roles[a.Role]++
+		case domain.AttemptUnknown, domain.AttemptReconciling, domain.AttemptSucceededUnverified:
+			unresolved++
+		}
+	}
+	return
+}
+
+func holdsSlot(e domain.ExecutionState) bool {
+	return e == domain.ExecAdmitted || e == domain.ExecRunning || e == domain.ExecWaiting || e == domain.ExecPaused
+}
+
+func hasCurrentEvidence(m domain.Mission, attempt domain.AttemptID) bool {
+	for _, e := range m.Evidence {
+		if e.Attempt == attempt && !e.Vacuous && e.Revision == m.Version.IntentRevision &&
+			e.Generation == m.Version.CandidateGeneration && e.Head == m.Head {
+			return true
+		}
+	}
+	return false
+}
 
 // Check is the oracle the property tests and the store tests run after every
 // transition. It lives in its own file so that a mutant of reducer.go can never
@@ -44,7 +80,7 @@ func Check(before, after domain.Mission, cmd domain.Command, events []domain.Eve
 		return Violation{InvRefusalNoEvents, "refused but state changed"}
 	}
 
-	// I1: no counter regresses; a stale fence changes nothing.
+	// I1: no counter regresses; a wrong fence changes nothing.
 	if after.Version.Regressed(before.Version) {
 		return Violation{InvStaleFence, fmt.Sprintf("version regressed %+v -> %+v", before.Version, after.Version)}
 	}
@@ -56,23 +92,59 @@ func Check(before, after domain.Mission, cmd domain.Command, events []domain.Eve
 		}
 	}
 
-	// I3: capacity, per mission (R4) and fleet (R1).
-	if after.LiveAttempts() > domain.MaxLiveAttempts {
-		return Violation{InvCapacity, fmt.Sprintf("%d live attempts", after.LiveAttempts())}
+	live, unresolved, roles := liveCount(after)
+
+	// I3: capacity, per mission (R4: one live attempt per role) and fleet (R1).
+	if live > domain.MaxLiveAttempts {
+		return Violation{InvCapacity, fmt.Sprintf("%d live attempts", live)}
 	}
-	if cmd.Kind == domain.CmdAdmitMission && env.SlotsUsed >= env.Cap && after.Execution.HoldsSlot() && !before.Execution.HoldsSlot() {
+	for role, n := range roles {
+		if n > 1 {
+			return Violation{InvCapacity, fmt.Sprintf("%d live attempts with role %q", n, role)}
+		}
+	}
+	if cmd.Kind == domain.CmdAdmitMission && env.SlotsUsed >= env.Cap && holdsSlot(after.Execution) && !holdsSlot(before.Execution) {
 		return Violation{InvCapacity, fmt.Sprintf("admitted with %d of %d slots held", env.SlotsUsed, env.Cap)}
 	}
-	if !before.Execution.HoldsSlot() && after.Execution.HoldsSlot() && cmd.Kind != domain.CmdAdmitMission {
+	if !holdsSlot(before.Execution) && holdsSlot(after.Execution) && cmd.Kind != domain.CmdAdmitMission {
 		return Violation{InvCapacity, fmt.Sprintf("%s moved %s -> %s and took a slot without admission", cmd.Kind, before.Execution, after.Execution)}
 	}
 
-	// I5: an acceptance is bound to exact current evidence.
+	// H8: a live or unresolved attempt means the mission still owns its slot.
+	if (live > 0 || unresolved > 0) && !holdsSlot(after.Execution) {
+		return Violation{InvSlotHeld, fmt.Sprintf("execution %s with %d live and %d unresolved attempts", after.Execution, live, unresolved)}
+	}
+
+	// H6: every live attempt is addressable: its fence is unique among live
+	// attempts and not above the mission counter.
+	seen := map[int64]domain.AttemptID{}
+	for _, a := range after.Attempts {
+		switch a.State {
+		case domain.AttemptAdmitted, domain.AttemptLeased, domain.AttemptPreparing, domain.AttemptRunning:
+			if a.Fence > after.Version.AttemptFence || a.Fence <= 0 {
+				return Violation{InvAddressable, fmt.Sprintf("%s holds fence %d, mission at %d", a.ID, a.Fence, after.Version.AttemptFence)}
+			}
+			if other, dup := seen[a.Fence]; dup {
+				return Violation{InvAddressable, fmt.Sprintf("%s and %s share fence %d", a.ID, other, a.Fence)}
+			}
+			seen[a.Fence] = a.ID
+		}
+	}
+
+	// I5 / H9: an acceptance is bound to exact current, non-vacuous evidence,
+	// and a new acceptance only follows the review path.
 	if acc := after.Accepted; acc != nil {
 		cur := after.Version
-		evs := after.CurrentEvidence(acc.Attempt)
-		if len(evs) == 0 || acc.Revision != cur.IntentRevision || acc.Generation != cur.CandidateGeneration || acc.Head != after.Head {
+		if !hasCurrentEvidence(after, acc.Attempt) || acc.Revision != cur.IntentRevision || acc.Generation != cur.CandidateGeneration || acc.Head != after.Head {
 			return Violation{InvAcceptedEvidence, fmt.Sprintf("accepted %+v without current non-vacuous evidence (version=%+v, head=%q)", *acc, cur, after.Head)}
+		}
+		if before.Accepted == nil {
+			if before.Candidate != domain.CandVerifying {
+				return Violation{InvAcceptReviewed, fmt.Sprintf("accepted while the candidate was %s, not VERIFYING", before.Candidate)}
+			}
+			if a, ok := before.Attempts[acc.Attempt]; !ok || a.State != domain.AttemptVerified {
+				return Violation{InvAcceptReviewed, fmt.Sprintf("accepted from attempt %s in state %v, not VERIFIED", acc.Attempt, a.State)}
+			}
 		}
 	}
 
@@ -89,11 +161,24 @@ func Check(before, after domain.Mission, cmd domain.Command, events []domain.Eve
 		}
 	}
 
-	// I4: no resubmission while UNKNOWN.
+	// I4: no resubmission while UNKNOWN, by RETRY (submissions unchanged) or by
+	// a fresh SUBMIT of the same request (review H7).
 	if cmd.Kind == domain.CmdRetryEffect {
 		if f, ok := before.Effects[cmd.Effect]; ok && f.State == domain.EffectUnknown {
 			if after.Effects[cmd.Effect].Submissions != f.Submissions || !errors.Is(err, domain.ErrUnknownUnresolved) {
 				return Violation{InvUnknownRetry, fmt.Sprintf("retry during UNKNOWN changed submissions %d -> %d (err=%v)", f.Submissions, after.Effects[cmd.Effect].Submissions, err)}
+			}
+		}
+	}
+	if cmd.Kind == domain.CmdSubmitEffect {
+		for _, e := range events {
+			if e.Kind != domain.EvEffectSubmitted {
+				continue
+			}
+			for _, f := range before.Effects {
+				if f.Base == e.RequestSHA && (f.State == domain.EffectUnknown || f.State == domain.EffectDispatched) {
+					return Violation{InvUnknownRetry, fmt.Sprintf("submitted %s while twin %s is %s", e.Effect, f.ID, f.State)}
+				}
 			}
 		}
 	}
@@ -106,9 +191,15 @@ func Check(before, after domain.Mission, cmd domain.Command, events []domain.Eve
 			return Violation{InvArbitration, "entered review with no claims"}
 		}
 		for _, c := range cmd.Claims {
-			evd, ok := before.Evidence[domain.EvidenceKey(cmd.Attempt, before.Version.IntentRevision, before.Version.CandidateGeneration, before.Head, c.Receipt)]
-			if !ok || evd.Vacuous {
-				return Violation{InvArbitration, fmt.Sprintf("entered review on %s citing %s (found=%v vacuous=%v)", c.AC, c.Receipt, ok, evd.Vacuous)}
+			found := false
+			for _, e := range before.Evidence {
+				if e.Attempt == cmd.Attempt && e.Receipt == c.Receipt && !e.Vacuous && e.Revision == before.Version.IntentRevision &&
+					e.Generation == before.Version.CandidateGeneration && e.Head == before.Head {
+					found = true
+				}
+			}
+			if !found {
+				return Violation{InvArbitration, fmt.Sprintf("entered review on %s citing %s without a current non-vacuous receipt", c.AC, c.Receipt)}
 			}
 		}
 	}
@@ -116,19 +207,28 @@ func Check(before, after domain.Mission, cmd domain.Command, events []domain.Eve
 	// H1: the effect id is derived, canonical and occurrence-suffixed.
 	if cmd.Kind == domain.CmdSubmitEffect && err == nil {
 		base, berr := domain.EffectBase(cmd.EffectKind, cmd.Request)
-		want := domain.EffectIDFor(base, before.Occurrences(base)+1)
+		n := 0
+		for _, f := range before.Effects {
+			if f.Base == base {
+				n++
+			}
+		}
+		want := domain.EffectIDFor(base, n+1)
 		for _, e := range events {
-			if e.Kind == domain.EvEffectSubmitted && (berr != nil || e.Effect != want || e.RequestSHA != base || e.Occurrence != before.Occurrences(base)+1) {
+			if e.Kind == domain.EvEffectSubmitted && (berr != nil || e.Effect != want || e.RequestSHA != base || e.Occurrence != n+1) {
 				return Violation{InvEffectKey, fmt.Sprintf("effect %s, want %s (occurrence %d)", e.Effect, want, e.Occurrence)}
 			}
 		}
 	}
 
 	// I7': an unresolved attempt blocks a new start (UNKNOWN never relaunches).
-	if cmd.Kind == domain.CmdStartAttempt && before.UnresolvedAttempts() > 0 {
-		for _, e := range events {
-			if e.Kind == domain.EvAttemptStarted {
-				return Violation{InvUnresolvedNoStart, "attempt started while another is unresolved"}
+	if cmd.Kind == domain.CmdStartAttempt {
+		_, unresolvedBefore, _ := liveCount(before)
+		if unresolvedBefore > 0 {
+			for _, e := range events {
+				if e.Kind == domain.EvAttemptStarted {
+					return Violation{InvUnresolvedNoStart, "attempt started while another is unresolved"}
+				}
 			}
 		}
 	}

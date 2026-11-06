@@ -383,5 +383,87 @@
     "\t\tWHERE m.execution IN ('ADMITTED', 'WAITING') AND m.terminal = 'NONE'\n"
    ]
   ]
+ },
+ {
+  "id": "M30_second_start_same_role",
+  "invariant": "live_attempt_addressable (one live per role)",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestRV1_LiveAttemptsStayAddressable",
+  "edits": [
+   [
+    "if other.State.Live() && other.Role == cmd.Role {",
+    "if false {"
+   ]
+  ]
+ },
+ {
+  "id": "M31_submit_while_twin_unknown",
+  "invariant": "unknown_retry_blocked (SUBMIT)",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestRV4_NoResubmitWhileTwinUnresolved",
+  "edits": [
+   [
+    "\t\t\tcase domain.EffectUnknown:\n\t\t\t\treturn nil, fmt.Errorf(\"%w: %s is UNKNOWN; reconcile before submitting the same request again\", domain.ErrUnknownUnresolved, f.ID)\n\t\t\tcase domain.EffectDispatched:\n\t\t\t\treturn nil, fmt.Errorf(\"%w: %s is DISPATCHED\", domain.ErrDuplicate, f.ID)\n",
+    "\t\t\tcase domain.EffectQuarantined:\n\t\t\t\treturn nil, fmt.Errorf(\"%w: %s is QUARANTINED\", domain.ErrDuplicate, f.ID)\n"
+   ]
+  ]
+ },
+ {
+  "id": "M32_release_while_unknown",
+  "invariant": "live_or_unresolved_holds_slot",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestRV5_ReleaseRefusedWhileUnknown",
+  "edits": [
+   [
+    "\t\tif m.UnresolvedAttempts() > 0 {\n\t\t\treturn nil, fmt.Errorf(\"%w: an attempt is unresolved; the slot is held until it is reconciled\", domain.ErrUnknownUnresolved)\n\t\t}\n\t\treturn []domain.Event{ev(domain.EvMissionReleased)}, nil",
+    "\t\treturn []domain.Event{ev(domain.EvMissionReleased)}, nil"
+   ]
+  ]
+ },
+ {
+  "id": "M33_accept_without_review",
+  "invariant": "accept_only_after_review",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestRV6_AcceptOnlyAfterReview",
+  "edits": [
+   [
+    "if m.Candidate != domain.CandVerifying {\n\t\t\treturn nil, fmt.Errorf(\"%w: accept while candidate %s (needs VERIFYING)\"",
+    "if m.Candidate != domain.CandVerifying && m.Candidate != domain.CandUnverified {\n\t\t\treturn nil, fmt.Errorf(\"%w: accept while candidate %s (needs VERIFYING)\""
+   ],
+   [
+    "if a.State != domain.AttemptVerified {\n\t\t\treturn nil, fmt.Errorf(\"%w: accept from attempt in %s (needs VERIFIED)\"",
+    "if a.State == domain.AttemptQuarantined {\n\t\t\treturn nil, fmt.Errorf(\"%w: accept from attempt in %s (needs VERIFIED)\""
+   ]
+  ]
+ },
+ {
+  "id": "M34_outbox_xid_filter_removed",
+  "invariant": "outbox_delivers_late_commits",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestRV3_OutboxDeliversLateCommit",
+  "edits": [
+   [
+    "\t\t  AND o.xid < pg_snapshot_xmin(pg_current_snapshot())\n",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M35_lease_recheck_removed",
+  "invariant": "authority_rechecked_before_expiry",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestRV22_RenewedLeaseNotExpired",
+  "edits": [
+   [
+    "\t\tif fresh != nil && *fresh {",
+    "\t\tif false {"
+   ]
+  ]
  }
 ]
