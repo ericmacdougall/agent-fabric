@@ -902,5 +902,35 @@
     "\tcase false && askTok && cmd.Kind == domain.CmdWake && string(commandID)"
    ]
   ]
+ },
+ {
+  "id": "M70_withdraw_unlocked",
+  "invariant": "withdraw_decides_under_row_lock",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestWithdrawRacingAnswerIsRefused",
+  "edits": [
+   [
+    "\"SELECT state FROM asks WHERE id = $1 FOR UPDATE\", id).Scan(&state)",
+    "\"SELECT state FROM asks WHERE id = $1\", id).Scan(&state)"
+   ],
+   [
+    "\t\tif tag.RowsAffected() != 1 {\n\t\t\treturn fmt.Errorf(\"ask %s: withdrawal",
+    "\t\tif false && tag.RowsAffected() != 1 {\n\t\t\treturn fmt.Errorf(\"ask %s: withdrawal"
+   ]
+  ]
+ },
+ {
+  "id": "M71_withdraw_answered_succeeds",
+  "invariant": "answered_ask_not_withdrawn",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestAskAnswerResumesMissionOnce",
+  "edits": [
+   [
+    "\t\treturn fmt.Errorf(\"%w: ask %s is already %s\", domain.ErrInvalidTransition, id, state)",
+    "\t\treturn nil"
+   ]
+  ]
  }
 ]

@@ -1,7 +1,9 @@
 package store
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"fabric/internal/domain"
 )
@@ -101,4 +103,64 @@ func TestAskWakeReservedForAnsweredAsk(t *testing.T) {
 	mk(t, st, ctx, "m_aw3")
 	ok(t, st, ctx, "chat", "w-plain", domain.Command{Kind: domain.CmdWake, Mission: "m_aw3", Token: "plain"})
 	ok(t, st, ctx, "chat", "ack-plain", domain.Command{Kind: domain.CmdAckWake, Mission: "m_aw3", Token: "plain"})
+}
+
+// Review F2: a withdrawal that waits on the row lock of an answer in flight
+// must not report success once the answer commits. The answer is held open
+// in a second transaction; WithdrawAsk blocks on its row lock, the answer
+// commits, and the withdrawal must then be refused with the ask answered.
+func TestWithdrawRacingAnswerIsRefused(t *testing.T) {
+	st, ctx := openTest(t)
+	if err := st.CreateAsk(ctx, Ask{ID: "a_wr1", Kind: "decision", Question: "q", Source: "inferred: test"}); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := st.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx, `UPDATE asks SET state = 'answered', answer = 'yes', answered_by = 'chat',
+		answered_at = now(), answer_source = $2 WHERE id = $1 AND state = 'open'`, "a_wr1", userSrc); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- st.WithdrawAsk(ctx, "a_wr1", "no longer needed") }()
+	waitForLockWaiter(t, st, ctx, "asks")
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err == nil {
+		t.Fatal("withdrawal racing an answer reported success")
+	}
+	if a, _ := st.GetAsk(ctx, "a_wr1"); a.State != "answered" || a.Answer != "yes" {
+		t.Fatalf("ask after the race: %+v", a)
+	}
+	// A repeat withdrawal of a withdrawn ask stays a success (idempotent).
+	if err := st.CreateAsk(ctx, Ask{ID: "a_wr2", Kind: "decision", Question: "q", Source: "inferred: test"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := st.WithdrawAsk(ctx, "a_wr2", "no longer needed"); err != nil {
+			t.Fatalf("withdrawal %d: %v", i, err)
+		}
+	}
+}
+
+// waitForLockWaiter waits until some backend waits on a lock while running a
+// statement that mentions table, so a race test interleaves deterministically.
+func waitForLockWaiter(t *testing.T, st *Store, ctx context.Context, table string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+			AND datname = current_database() AND query ILIKE '%' || $1 || '%'`, table).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no backend blocked on a lock touching %s within 10s", table)
 }

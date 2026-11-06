@@ -173,20 +173,38 @@ func (s *Store) WithdrawAsk(ctx context.Context, id, reason string) error {
 	if reason == "" || len(reason) > 1024 {
 		return fmt.Errorf("%w: a withdrawal needs a reason of 1..1024 bytes", domain.ErrInvalidTransition)
 	}
+	// Review F2: lock the row and decide on what the lock shows, as AnswerAsk
+	// does. A single UPDATE ... RETURNING with a fallback SELECT reads the
+	// fallback from the statement snapshot, so a withdrawal that waited on an
+	// answer in flight saw "open" and reported success.
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck // no-op after commit
 	var state string
-	err := s.pool.QueryRow(ctx, `WITH u AS (
-			UPDATE asks SET state = 'withdrawn', withdrawn_reason = $2 WHERE id = $1 AND state = 'open' RETURNING state)
-		SELECT COALESCE((SELECT state FROM u), (SELECT state FROM asks WHERE id = $1), '')`, id, reason).Scan(&state)
+	err = tx.QueryRow(ctx, "SELECT state FROM asks WHERE id = $1 FOR UPDATE", id).Scan(&state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: ask %s", domain.ErrNotFound, id)
+	}
 	if err != nil {
 		return err
 	}
 	switch state {
-	case "":
-		return fmt.Errorf("%w: ask %s", domain.ErrNotFound, id)
-	case "answered":
-		return fmt.Errorf("%w: ask %s is already answered", domain.ErrInvalidTransition, id)
+	case "withdrawn":
+		return nil // already withdrawn: idempotent
+	case "open":
+		tag, err := tx.Exec(ctx, "UPDATE asks SET state = 'withdrawn', withdrawn_reason = $2 WHERE id = $1 AND state = 'open'", id, reason)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("ask %s: withdrawal updated %d rows", id, tag.RowsAffected())
+		}
+		return tx.Commit(ctx)
+	default:
+		return fmt.Errorf("%w: ask %s is already %s", domain.ErrInvalidTransition, id, state)
 	}
-	return nil
 }
 
 // GetAsk returns one ask.
