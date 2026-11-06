@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -225,6 +226,30 @@ func TestConcurrentSameKey(t *testing.T) {
 	}
 	if n := count(t, st, ctx, "SELECT count(*) FROM attempts"); n != 1 {
 		t.Fatalf("attempts = %d, want 1", n)
+	}
+	// Kimi P3.0: one receipt, one event, one outbox row for the key.
+	if c, e, o := count(t, st, ctx, "SELECT count(*) FROM commands WHERE command_id = 'start-r1'"),
+		count(t, st, ctx, "SELECT count(*) FROM events WHERE command_id = 'start-r1'"),
+		count(t, st, ctx, "SELECT count(*) FROM outbox o JOIN events e ON e.mission_id = o.mission_id AND e.seq = o.seq WHERE e.command_id = 'start-r1'"); c != 1 || e != 1 || o != 1 {
+		t.Fatalf("for one key: %d command rows, %d events, %d outbox rows; want 1/1/1", c, e, o)
+	}
+	// Racers with a changed body under the stored key all conflict and add nothing.
+	changed := cmd
+	changed.Host = "h_other"
+	var conflicts int32
+	var cwg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		cwg.Add(1)
+		go func() {
+			defer cwg.Done()
+			if _, err := st.Execute(ctx, "fabd", "start-r1", changed); errors.Is(err, domain.ErrIdempotencyConflict) {
+				atomic.AddInt32(&conflicts, 1)
+			}
+		}()
+	}
+	cwg.Wait()
+	if conflicts != n || count(t, st, ctx, "SELECT count(*) FROM events WHERE mission_id = 'm_1'") != 2 {
+		t.Fatalf("changed-body racers: %d of %d conflicted; events %d", conflicts, n, count(t, st, ctx, "SELECT count(*) FROM events WHERE mission_id = 'm_1'"))
 	}
 }
 

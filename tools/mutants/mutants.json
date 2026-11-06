@@ -1413,5 +1413,109 @@
     "\t_ = cur\n\tproj, err := projection.Build(m, events,"
    ]
   ]
+ },
+ {
+  "id": "M104_canonical_without_request_bytes",
+  "invariant": "command_bytes_0011",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0011_command_bytes.sql",
+  "expect": "TestCommandRowChecks",
+  "edits": [
+   [
+    "WHEN 'CANONICAL_V1' THEN canonical_request IS NOT NULL AND response_bytes IS NOT NULL",
+    "WHEN 'CANONICAL_V1' THEN response_bytes IS NOT NULL"
+   ]
+  ]
+ },
+ {
+  "id": "M105_request_hash_unchecked",
+  "invariant": "command_bytes_0011",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0011_command_bytes.sql",
+  "expect": "TestCommandRowChecks",
+  "edits": [
+   [
+    "\n                                 AND request_sha256 = encode(sha256(canonical_request), 'hex')",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M106_new_row_claims_legacy",
+  "invariant": "command_bytes_0011",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0011_command_bytes.sql",
+  "expect": "TestCommandRowChecks",
+  "edits": [
+   [
+    "    IF NEW.request_format <> 'CANONICAL_V1' THEN",
+    "    IF false THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M107_commands_mutable",
+  "invariant": "command_bytes_0011",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0011_command_bytes.sql",
+  "expect": "TestCommandRowChecks",
+  "edits": [
+   [
+    "CREATE TRIGGER commands_append_only BEFORE UPDATE OR DELETE ON commands\n    FOR EACH ROW EXECUTE FUNCTION fabric_reject_mutation();",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M108_events_mutable",
+  "invariant": "command_bytes_0011",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0011_command_bytes.sql",
+  "expect": "TestCommandRowChecks",
+  "edits": [
+   [
+    "CREATE TRIGGER events_append_only BEFORE UPDATE OR DELETE ON events\n    FOR EACH ROW EXECUTE FUNCTION fabric_reject_mutation();",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M109_format_unchecked",
+  "invariant": "command_bytes_0011",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0011_command_bytes.sql",
+  "expect": "TestCommandChecksHoldWithTriggersOff",
+  "edits": [
+   [
+    "    CHECK (request_format IN ('LEGACY_HASH_ONLY', 'CANONICAL_V1'));",
+    "    CHECK (true);"
+   ]
+  ]
+ },
+ {
+  "id": "M110_legacy_with_bytes",
+  "invariant": "command_bytes_0011",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0011_command_bytes.sql",
+  "expect": "TestCommandChecksHoldWithTriggersOff",
+  "edits": [
+   [
+    "        ELSE canonical_request IS NULL",
+    "        ELSE true"
+   ]
+  ]
+ },
+ {
+  "id": "M111_history_truncatable",
+  "invariant": "command_bytes_0011",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0011_command_bytes.sql",
+  "expect": "TestCommandRowChecks",
+  "edits": [
+   [
+    "CREATE TRIGGER commands_no_truncate BEFORE TRUNCATE ON commands\n    FOR EACH STATEMENT EXECUTE FUNCTION fabric_reject_truncate();",
+    ""
+   ]
+  ]
  }
 ]

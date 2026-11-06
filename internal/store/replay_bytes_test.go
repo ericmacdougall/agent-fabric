@@ -34,10 +34,11 @@ func TestReplayBytesExact(t *testing.T) {
 		t.Fatal("control is vacuous: the jsonb text equals the raw bytes, so this test proves nothing")
 	}
 
-	// Bytes that disagree with the jsonb are refused by the database.
+	// Stored bytes cannot be rewritten (0011: commands are immutable); bytes
+	// that disagree with the jsonb on insert are TestCommandRowChecks' case.
 	if _, err := st.pool.Exec(ctx, `UPDATE commands SET response_bytes = convert_to('{"status":"ok","forged":1}', 'UTF8')
 		WHERE actor = 'chat' AND command_id = 'rb-admit'`); err == nil {
-		t.Fatal("divergent response_bytes accepted")
+		t.Fatal("stored response_bytes rewritten")
 	}
 
 	// A stored refusal replays byte for byte too, and still unwraps to its sentinel.
@@ -52,14 +53,26 @@ func TestReplayBytesExact(t *testing.T) {
 	}
 }
 
-// A row written before migration 0008 (no bytes) replays from jsonb with the
-// same meaning.
+// A row written before migration 0008 (no bytes, legacy format) replays from
+// jsonb with the same meaning. Commands are immutable and new rows cannot
+// claim the legacy format (0011), so the test writes the old row the way a
+// restore would: as a copy of a real row with triggers off.
 func TestReplayLegacyRowWithoutBytes(t *testing.T) {
 	st, ctx := openTest(t)
 	mk(t, st, ctx, "m_rb2")
 	first := ok(t, st, ctx, "chat", "rb-legacy", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_rb2"})
-	if _, err := st.pool.Exec(ctx, `UPDATE commands SET response_bytes = NULL WHERE actor = 'chat' AND command_id = 'rb-legacy'`); err != nil {
+	if err := inTx(st,
+		"SET LOCAL session_replication_role = replica",
+		`CREATE TEMP TABLE legacy_row ON COMMIT DROP AS SELECT * FROM commands WHERE actor = 'chat' AND command_id = 'rb-legacy'`,
+		`DELETE FROM commands WHERE actor = 'chat' AND command_id = 'rb-legacy'`,
+		`UPDATE legacy_row SET response_bytes = NULL, canonical_request = NULL, request_format = 'LEGACY_HASH_ONLY'`,
+		`INSERT INTO commands SELECT * FROM legacy_row`,
+	); err != nil {
 		t.Fatal(err)
+	}
+	var format string
+	if err := st.pool.QueryRow(ctx, `SELECT request_format FROM commands WHERE actor = 'chat' AND command_id = 'rb-legacy'`).Scan(&format); err != nil || format != "LEGACY_HASH_ONLY" {
+		t.Fatalf("setup: legacy row format %q, %v", format, err)
 	}
 	again := ok(t, st, ctx, "chat", "rb-legacy", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_rb2"})
 	if !again.Replayed || len(again.Raw) == 0 {

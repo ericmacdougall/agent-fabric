@@ -141,7 +141,10 @@ type Event struct {
 // the same idempotency key must hash equal to be a replay; a different hash is
 // IDEMPOTENCY_CONFLICT. encoding/json emits struct fields in declaration order
 // with omitempty, so the bytes are deterministic for a given Go build.
-func (c Command) RequestHash() string {
+// CanonicalRequest is the exact byte form the request hash is taken over:
+// the command as JSON with its Request canonicalised (sorted keys). Stored
+// with each command row (migration 0011) so the database can verify the hash.
+func (c Command) CanonicalRequest() []byte {
 	if len(c.Request) > 0 {
 		if canon, err := CanonicalJSON(c.Request); err == nil {
 			c.Request = canon
@@ -150,8 +153,13 @@ func (c Command) RequestHash() string {
 	b, err := json.Marshal(c)
 	if err != nil {
 		// A Command is plain data; Marshal cannot fail. Fail closed anyway.
-		return "unmarshalable"
+		return []byte("unmarshalable")
 	}
-	sum := sha256.Sum256(b)
+	return b
+}
+
+// RequestHash is the hex sha256 of CanonicalRequest.
+func (c Command) RequestHash() string {
+	sum := sha256.Sum256(c.CanonicalRequest())
 	return hex.EncodeToString(sum[:])
 }

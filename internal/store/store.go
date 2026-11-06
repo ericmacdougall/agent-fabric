@@ -8,7 +8,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -256,7 +258,9 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	if err := checkAskReserved(actor, commandID, cmd); err != nil {
 		return Response{}, err
 	}
-	hash := cmd.RequestHash()
+	canon := cmd.CanonicalRequest()
+	sum := sha256.Sum256(canon)
+	hash := hex.EncodeToString(sum[:])
 
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -283,18 +287,18 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	}
 
 	// Replay check.
-	var storedHash string
+	var storedHash, storedFormat string
 	var storedResp, storedBytes []byte
-	err = tx.QueryRow(ctx, `SELECT request_sha256, response, response_bytes FROM commands
-		WHERE actor = $1 AND mission_id = $2 AND command_id = $3`, string(actor), string(cmd.Mission), string(commandID)).Scan(&storedHash, &storedResp, &storedBytes)
+	err = tx.QueryRow(ctx, `SELECT request_sha256, request_format, response, response_bytes FROM commands
+		WHERE actor = $1 AND mission_id = $2 AND command_id = $3`, string(actor), string(cmd.Mission), string(commandID)).Scan(&storedHash, &storedFormat, &storedResp, &storedBytes)
 	switch {
 	case err == nil:
 		if storedHash != hash {
 			return Response{}, fmt.Errorf("%w: command %s", domain.ErrIdempotencyConflict, commandID)
 		}
-		raw := storedBytes
-		if raw == nil {
-			raw = storedResp // written before 0008
+		raw, err := replayBytes(storedFormat, storedResp, storedBytes)
+		if err != nil {
+			return Response{}, fmt.Errorf("command %s: %w", commandID, err)
 		}
 		var resp Response
 		if err := json.Unmarshal(raw, &resp); err != nil {
@@ -426,9 +430,11 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		firstSeq, lastSeq = &resp.FirstSeq, &resp.LastSeq
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO commands
-		(actor, mission_id, command_id, kind, request_sha256, status, response, response_bytes, first_seq, last_seq)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		string(actor), string(cmd.Mission), string(commandID), string(cmd.Kind), hash, resp.Status, respJSON, respJSON, firstSeq, lastSeq); err != nil {
+		(actor, mission_id, command_id, kind, request_sha256, status, response, response_bytes, first_seq, last_seq,
+		 canonical_request, request_format)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'CANONICAL_V1')`,
+		string(actor), string(cmd.Mission), string(commandID), string(cmd.Kind), hash, resp.Status, respJSON, respJSON, firstSeq, lastSeq,
+		canon); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			// Cannot happen under the mission row lock; keep it a loud error.
@@ -712,6 +718,27 @@ func (s *Store) SlotsHeld(ctx context.Context) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM missions WHERE execution IN ('ADMITTED', 'RUNNING', 'WAITING', 'PAUSED')`).Scan(&n)
 	return n, err
+}
+
+// replayBytes picks the stored first response by the row's request format,
+// failing closed on a format this build does not know (Kimi receipt.go).
+// CANONICAL_V1 rows always carry their bytes (0011 CHECK); a legacy row has
+// them only if it was written between 0008 and 0011.
+func replayBytes(format string, jsonb, raw []byte) ([]byte, error) {
+	switch format {
+	case "CANONICAL_V1":
+		if raw == nil {
+			return nil, errors.New("canonical row without response bytes")
+		}
+		return raw, nil
+	case "LEGACY_HASH_ONLY":
+		if raw == nil {
+			return jsonb, nil // written before 0008
+		}
+		return raw, nil
+	default:
+		return nil, fmt.Errorf("unknown request format %q", format)
+	}
 }
 
 // Truncate empties every fabric table except the schema ledger. Tests only.
