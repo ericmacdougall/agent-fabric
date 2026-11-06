@@ -1153,5 +1153,31 @@
     "AND $5::text IS NOT NULL"
    ]
   ]
+ },
+ {
+  "id": "M89_import_any_file_type",
+  "invariant": "import_regular_files_only",
+  "pkg": "./internal/importer",
+  "file": "internal/importer/importer.go",
+  "expect": "TestImportRefusesNonRegularFiles",
+  "edits": [
+   [
+    "\tif !fi.Mode().IsRegular() {",
+    "\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M90_import_blocking_open",
+  "invariant": "import_regular_files_only",
+  "pkg": "./internal/importer",
+  "file": "internal/importer/importer.go",
+  "expect": "TestImportRefusesNonRegularFiles",
+  "edits": [
+   [
+    "os.O_RDONLY|syscall.O_NONBLOCK, 0)",
+    "os.O_RDONLY|0*syscall.O_NONBLOCK, 0)"
+   ]
+  ]
  }
 ]

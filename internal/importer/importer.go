@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 
 	"fabric/internal/domain"
 	"fabric/internal/store"
@@ -114,11 +115,20 @@ func Load(o Options) (SlotsFile, QueueFile, error) {
 }
 
 func readJSON(path string, v any) error {
-	f, err := os.Open(path)
+	// Review F6: O_NONBLOCK so a FIFO cannot block the open waiting for a
+	// writer, then the mode of the opened file itself (no stat-then-open race).
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s: not a regular file (%s)", path, fi.Mode().Type())
+	}
 	b, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
 	if err != nil {
 		return err

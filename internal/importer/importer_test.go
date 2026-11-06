@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"fabric/internal/storetest"
 )
@@ -216,5 +218,35 @@ func TestImportCapIsAdvisory(t *testing.T) {
 	}
 	if c, _ := st.SlotCap(ctx); c != 9 || res.Cap != 9 || res.Admitted != 5 || res.Refused != 0 {
 		t.Fatalf("ApplyCap: store cap %d, result %+v", c, res)
+	}
+}
+
+// Review F6: the importer reads only regular files. A FIFO would block the
+// open forever (no writer); a directory or a device is not a queue file.
+func TestImportRefusesNonRegularFiles(t *testing.T) {
+	o := fixture(t)
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "queue.fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(fifo, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{fifo, link, dir, "/dev/null"} {
+		done := make(chan error, 1)
+		go func() {
+			_, _, err := Load(Options{SlotsPath: o.SlotsPath, QueuePath: p, MainWAL: o.MainWAL})
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+				t.Errorf("%s: want a not-a-regular-file refusal, got %v", p, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: Load blocked (a FIFO open waits for a writer)", p)
+		}
 	}
 }
