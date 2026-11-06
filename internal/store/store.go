@@ -157,6 +157,10 @@ type Response struct {
 	LastSeq  int64          `json:"last_seq,omitempty"`
 	Version  domain.Version `json:"version"`
 	Replayed bool           `json:"-"` // served from the commands table; the reducer did not run
+	// Raw is the response exactly as first stored. A replay returns the same
+	// bytes (lost-response protocol, DESIGN.md 3.1); rows from before
+	// migration 0008 replay the jsonb form instead.
+	Raw []byte `json:"-"`
 }
 
 // errKinds maps stable refusal kinds to their sentinel so a replayed refusal
@@ -261,19 +265,24 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 
 	// Replay check.
 	var storedHash string
-	var storedResp []byte
-	err = tx.QueryRow(ctx, `SELECT request_sha256, response FROM commands
-		WHERE actor = $1 AND mission_id = $2 AND command_id = $3`, string(actor), string(cmd.Mission), string(commandID)).Scan(&storedHash, &storedResp)
+	var storedResp, storedBytes []byte
+	err = tx.QueryRow(ctx, `SELECT request_sha256, response, response_bytes FROM commands
+		WHERE actor = $1 AND mission_id = $2 AND command_id = $3`, string(actor), string(cmd.Mission), string(commandID)).Scan(&storedHash, &storedResp, &storedBytes)
 	switch {
 	case err == nil:
 		if storedHash != hash {
 			return Response{}, fmt.Errorf("%w: command %s", domain.ErrIdempotencyConflict, commandID)
 		}
+		raw := storedBytes
+		if raw == nil {
+			raw = storedResp // written before 0008
+		}
 		var resp Response
-		if err := json.Unmarshal(storedResp, &resp); err != nil {
+		if err := json.Unmarshal(raw, &resp); err != nil {
 			return Response{}, err
 		}
 		resp.Replayed = true
+		resp.Raw = raw
 		if err := tx.Commit(ctx); err != nil {
 			return Response{}, err
 		}
@@ -377,9 +386,9 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		firstSeq, lastSeq = &resp.FirstSeq, &resp.LastSeq
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO commands
-		(actor, mission_id, command_id, kind, request_sha256, status, response, first_seq, last_seq)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		string(actor), string(cmd.Mission), string(commandID), string(cmd.Kind), hash, resp.Status, respJSON, firstSeq, lastSeq); err != nil {
+		(actor, mission_id, command_id, kind, request_sha256, status, response, response_bytes, first_seq, last_seq)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		string(actor), string(cmd.Mission), string(commandID), string(cmd.Kind), hash, resp.Status, respJSON, respJSON, firstSeq, lastSeq); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			// Cannot happen under the mission row lock; keep it a loud error.
@@ -398,6 +407,7 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	if s.hooks.afterCommit != nil {
 		s.hooks.afterCommit(cmd)
 	}
+	resp.Raw = respJSON
 	if derr != nil {
 		return resp, &Refusal{Response: resp, Err: derr}
 	}

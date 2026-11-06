@@ -538,5 +538,44 @@
     "\tif false {"
    ]
   ]
+ },
+ {
+  "id": "M42_replay_from_jsonb",
+  "invariant": "replay_bytes_exact",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestReplayBytesExact",
+  "edits": [
+   [
+    "\t\traw := storedBytes\n\t\tif raw == nil {",
+    "\t\traw := storedBytes\n\t\tif true {"
+   ]
+  ]
+ },
+ {
+  "id": "M43_response_bytes_check_dropped",
+  "invariant": "replay_bytes_agree_with_jsonb",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0008_response_bytes.sql",
+  "expect": "TestReplayBytesExact",
+  "edits": [
+   [
+    "CHECK (response_bytes IS NULL OR",
+    "CHECK (true OR"
+   ]
+  ]
+ },
+ {
+  "id": "M44_first_response_raw_unset",
+  "invariant": "replay_bytes_exact",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestConcurrentSameKey",
+  "edits": [
+   [
+    "\tresp.Raw = respJSON\n",
+    "\tresp.Raw = append([]byte(nil), respJSON[:len(respJSON)-1]...)\n"
+   ]
+  ]
  }
 ]

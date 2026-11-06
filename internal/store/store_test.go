@@ -217,6 +217,12 @@ func TestConcurrentSameKey(t *testing.T) {
 	if executed != 1 {
 		t.Fatalf("reducer ran %d times for one key, want 1", executed)
 	}
+	// Every racer, winner or replay, gets the same bytes (lost-response protocol).
+	for i := 1; i < n; i++ {
+		if len(results[i].Raw) == 0 || string(results[i].Raw) != string(results[0].Raw) {
+			t.Fatalf("writer %d bytes differ from writer 0:\n%s\n%s", i, results[i].Raw, results[0].Raw)
+		}
+	}
 	if n := count(t, st, ctx, "SELECT count(*) FROM attempts"); n != 1 {
 		t.Fatalf("attempts = %d, want 1", n)
 	}
