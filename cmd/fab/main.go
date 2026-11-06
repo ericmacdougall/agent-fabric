@@ -41,6 +41,8 @@ func main() {
 		err = statusMain(os.Args[2:])
 	case "asks":
 		err = asksMain(os.Args[2:])
+	case "ask":
+		err = askMain(os.Args[2:])
 	case "import":
 		err = importMain(os.Args[2:])
 	case "expire-leases":
@@ -78,6 +80,10 @@ func usage() {
   admit|release|wake --mission M [--token T] --key K
   status                               missions, slots, open asks
   asks [--state open]                  the inbox
+  ask new --id I --question Q --source S [--mission M --kind K --option O ...]
+  ask answer I --answer A --source S   answer; wakes the mission waiting on ask:I
+  ask withdraw I --reason R | show I | repair
+  mission show M                       snapshot and event log (JSON)
   import --slots F --queue F           one-off #14882 import (shadow)
   expire-leases [--limit N]            bounded lease sweep
   host controls --scratch DIR          run this host's negative controls
@@ -137,7 +143,7 @@ func actor() string {
 
 func missionMain(args []string) error {
 	if len(args) == 0 {
-		return errors.New("mission new|list")
+		return errors.New("mission new|list|show")
 	}
 	switch args[0] {
 	case "new":
@@ -163,8 +169,10 @@ func missionMain(args []string) error {
 		})
 	case "list":
 		return withStore(func(ctx context.Context, st *store.Store) error { return printMissions(ctx, st) })
+	case "show":
+		return missionShow(args[1:])
 	}
-	return errors.New("mission new|list")
+	return errors.New("mission new|list|show")
 }
 
 func printMissions(ctx context.Context, st *store.Store) error {

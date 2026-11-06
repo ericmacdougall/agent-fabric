@@ -460,5 +460,44 @@
     "\t\tif false {"
    ]
   ]
+ },
+ {
+  "id": "M36_answer_no_wake",
+  "invariant": "answered_ask_resumes_mission",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestAskAnswerResumesMissionOnce",
+  "edits": [
+   [
+    "\tif mission != \"\" {\n\t\tw, err := s.wakeForAsk",
+    "\tif false {\n\t\tw, err := s.wakeForAsk"
+   ]
+  ]
+ },
+ {
+  "id": "M37_answer_overwrites",
+  "invariant": "ask_answered_at_most_once",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestAskAnswerResumesMissionOnce",
+  "edits": [
+   [
+    "\t\tif prevAnswer != answer || prevSource != source {",
+    "\t\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M38_answer_unsourced",
+  "invariant": "answer_needs_source",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestAskAnswerResumesMissionOnce",
+  "edits": [
+   [
+    "\tif !ValidSource(source) {\n\t\treturn AnswerResult{}",
+    "\tif false {\n\t\treturn AnswerResult{}"
+   ]
+  ]
  }
 ]

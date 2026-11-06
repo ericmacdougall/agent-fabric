@@ -98,11 +98,14 @@ type Ask struct {
 	Source      string
 	State       string
 	Answer      string
+	AnsweredBy  string
+	AnswerSrc   string // provenance of the answer (R12)
+	Withdrawn   string // withdrawal reason
 }
 
 // CreateAsk refuses an ask without a grammatical source (AC-10). Idempotent on id.
 func (s *Store) CreateAsk(ctx context.Context, a Ask) error {
-	if a.ID == "" || len(a.ID) > 64 {
+	if !askID.MatchString(a.ID) {
 		return fmt.Errorf("%w: ask id", domain.ErrInvalidID)
 	}
 	if !ValidSource(a.Source) {
@@ -131,10 +134,15 @@ func (s *Store) CreateAsk(ctx context.Context, a Ask) error {
 	return err
 }
 
-// ListAsks returns open asks oldest first (the inbox order).
+// ListAsks returns asks in one state (” for all), oldest first (the inbox order).
 func (s *Store) ListAsks(ctx context.Context, state string) ([]Ask, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(mission_id, ''), kind, question, options, recommended, source, state, COALESCE(answer, '')
-		FROM asks WHERE ($1 = '' OR state = $1) ORDER BY created_at, id`, state)
+	return s.listAsks(ctx, state, "")
+}
+
+func (s *Store) listAsks(ctx context.Context, state, id string) ([]Ask, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, COALESCE(mission_id, ''), kind, question, options, recommended, source, state,
+		COALESCE(answer, ''), COALESCE(answered_by, ''), COALESCE(answer_source, ''), COALESCE(withdrawn_reason, '')
+		FROM asks WHERE ($1 = '' OR state = $1) AND ($2 = '' OR id = $2) ORDER BY created_at, id`, state, id)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +151,8 @@ func (s *Store) ListAsks(ctx context.Context, state string) ([]Ask, error) {
 	for rows.Next() {
 		var a Ask
 		var opts []byte
-		if err := rows.Scan(&a.ID, &a.Mission, &a.Kind, &a.Question, &opts, &a.Recommended, &a.Source, &a.State, &a.Answer); err != nil {
+		if err := rows.Scan(&a.ID, &a.Mission, &a.Kind, &a.Question, &opts, &a.Recommended, &a.Source, &a.State,
+			&a.Answer, &a.AnsweredBy, &a.AnswerSrc, &a.Withdrawn); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(opts, &a.Options); err != nil {
