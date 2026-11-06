@@ -95,20 +95,39 @@ func (r *HoldRefusal) Error() string { return "hold refused: " + r.Result.Reason
 func (r *HoldRefusal) Unwrap() error { return r.Err }
 
 // SetCapacity creates a resource or changes its capacity. The unit is fixed
-// at creation; a capacity below what is held is refused by the row check.
+// at creation; a capacity below what is held is refused (ErrInvalidTransition).
 func (s *Store) SetCapacity(ctx context.Context, resource, unit string, capacity int64) error {
 	if !resourceName.MatchString(resource) || !unitName.MatchString(unit) || capacity < 0 {
 		return fmt.Errorf("%w: resource %q unit %q capacity %d", domain.ErrInvalidTransition, resource, unit, capacity)
 	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck // no-op after commit
+	// Lock an existing row (the same lock a hold takes) and refuse a capacity
+	// below what is held as a typed refusal (review F7), not a raw 23514.
+	var held int64
+	err = tx.QueryRow(ctx, "SELECT held FROM resource_capacities WHERE resource = $1 FOR UPDATE", resource).Scan(&held)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return err
+	case capacity < held:
+		return fmt.Errorf("%w: resource %s holds %d, more than capacity %d", domain.ErrInvalidTransition, resource, held, capacity)
+	}
 	var got string
-	err := s.pool.QueryRow(ctx, `INSERT INTO resource_capacities (resource, unit, capacity) VALUES ($1, $2, $3)
+	err = tx.QueryRow(ctx, `INSERT INTO resource_capacities (resource, unit, capacity) VALUES ($1, $2, $3)
 		ON CONFLICT (resource) DO UPDATE SET capacity = EXCLUDED.capacity, version = resource_capacities.version + 1
 		WHERE resource_capacities.unit = EXCLUDED.unit
 		RETURNING unit`, resource, unit, capacity).Scan(&got)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: resource %s has a different unit", domain.ErrInvalidTransition, resource)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // Capacity reports a resource's capacity and what is held.

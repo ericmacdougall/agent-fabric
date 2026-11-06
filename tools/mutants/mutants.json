@@ -1179,5 +1179,122 @@
     "os.O_RDONLY|0*syscall.O_NONBLOCK, 0)"
    ]
   ]
+ },
+ {
+  "id": "M91_answer_replay_ignores_source",
+  "invariant": "review_f7",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestAnswerReplayAndBounds",
+  "edits": [
+   [
+    "if prevAnswer != answer || prevSource != source {",
+    "if prevAnswer != answer {"
+   ]
+  ]
+ },
+ {
+  "id": "M92_answer_no_len_bound",
+  "invariant": "review_f7",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestAnswerReplayAndBounds",
+  "edits": [
+   [
+    "if answer == \"\" || len(answer) > 4096 {",
+    "if answer == \"\" {"
+   ]
+  ]
+ },
+ {
+  "id": "M93_unit_change_allowed",
+  "invariant": "review_f7",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestSetCapacityRefusals",
+  "edits": [
+   [
+    "\t\tWHERE resource_capacities.unit = EXCLUDED.unit\n",
+    "\n"
+   ]
+  ]
+ },
+ {
+  "id": "M94_hold_ttl_unbounded",
+  "invariant": "review_f7",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldBounds",
+  "edits": [
+   [
+    "if req.TTL < MinHoldTTL || req.TTL > MaxHoldTTL {",
+    "if req.TTL < MinHoldTTL {"
+   ]
+  ]
+ },
+ {
+  "id": "M95_hold_items_unbounded",
+  "invariant": "review_f7",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldBounds",
+  "edits": [
+   [
+    "if len(req.Items) == 0 || len(req.Items) > MaxHoldItems {",
+    "if len(req.Items) == 0 {"
+   ]
+  ]
+ },
+ {
+  "id": "M96_history_trigger_off",
+  "invariant": "review_f7",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0009_reservations.sql",
+  "expect": "TestReservationHistoryAndOneLive",
+  "edits": [
+   [
+    "CREATE CONSTRAINT TRIGGER reservations_history AFTER INSERT OR UPDATE ON reservations",
+    "CREATE CONSTRAINT TRIGGER reservations_history AFTER DELETE ON reservations"
+   ]
+  ]
+ },
+ {
+  "id": "M97_history_fn_noop",
+  "invariant": "review_f7",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0009_reservations.sql",
+  "expect": "TestReservationHistoryAndOneLive",
+  "edits": [
+   [
+    "CREATE FUNCTION fabric_reservation_history() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n",
+    "CREATE FUNCTION fabric_reservation_history() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n    RETURN NULL;\n"
+   ]
+  ]
+ },
+ {
+  "id": "M98_one_live_index_dropped",
+  "invariant": "review_f7",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0009_reservations.sql",
+  "expect": "TestReservationHistoryAndOneLive",
+  "edits": [
+   [
+    "CREATE UNIQUE INDEX reservations_one_live ON reservations (attempt_id, resource) WHERE state = 'HELD';",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M99_capacity_below_held_untyped",
+  "invariant": "review_f7",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestSetCapacityRefusals",
+  "edits": [
+   [
+    "\tcase capacity < held:\n",
+    "\tcase false && capacity < held:\n"
+   ]
+  ]
  }
 ]
