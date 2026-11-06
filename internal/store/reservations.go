@@ -22,7 +22,8 @@ import (
 // Lock order, never reversed, skipping classes an operation does not use:
 // hold_commands row -> attempt row -> capacity rows sorted by resource ->
 // reservation rows. A hold checks every resource after every lock is held
-// and writes nothing unless all pass. Expiry is decided by Postgres now().
+// and writes nothing unless all pass. Expiry and leases are decided by the
+// database clock, read after the locks are held.
 
 const (
 	MaxHoldItems = 16
@@ -263,9 +264,9 @@ func (s *Store) decideHold(ctx context.Context, tx pgx.Tx, req HoldRequest, item
 	// 2. The attempt, at its exact fence, live, lease unexpired by DB time.
 	var fence int64
 	var state string
-	var leaseOK bool
-	err := tx.QueryRow(ctx, `SELECT fence, state, (lease_until IS NULL OR lease_until > now()) FROM attempts WHERE id = $1 FOR UPDATE`,
-		string(req.Attempt)).Scan(&fence, &state, &leaseOK)
+	var leaseUntil *time.Time
+	err := tx.QueryRow(ctx, `SELECT fence, state, lease_until FROM attempts WHERE id = $1 FOR UPDATE`,
+		string(req.Attempt)).Scan(&fence, &state, &leaseUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fail("not_found", "", "attempt %s does not exist", req.Attempt)
 	}
@@ -280,10 +281,6 @@ func (s *Store) decideHold(ctx context.Context, tx pgx.Tx, req HoldRequest, item
 	default:
 		return fail("invalid_transition", "", "attempt %s is %s, not live", req.Attempt, state)
 	}
-	if !leaseOK {
-		return fail("invalid_transition", "", "attempt %s lease has expired", req.Attempt)
-	}
-
 	// 3. Every capacity row, in sorted order, before any check.
 	type row struct {
 		unit           string
@@ -304,6 +301,16 @@ func (s *Store) decideHold(ctx context.Context, tx pgx.Tx, req HoldRequest, item
 		if s.hooks.holdLocked != nil {
 			s.hooks.holdLocked(it.Resource)
 		}
+	}
+
+	// The decision time is read after every lock is held (review F3): now()
+	// is the transaction start, stale by however long the locks took.
+	var decidedAt time.Time
+	if err := tx.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&decidedAt); err != nil {
+		return broke(err)
+	}
+	if leaseUntil != nil && !leaseUntil.After(decidedAt) {
+		return fail("invalid_transition", "", "attempt %s lease has expired", req.Attempt)
 	}
 
 	// 4. Check all; write nothing unless every resource passes.
@@ -338,8 +345,8 @@ func (s *Store) decideHold(ctx context.Context, tx pgx.Tx, req HoldRequest, item
 			return broke(err)
 		}
 		if err := tx.QueryRow(ctx, `INSERT INTO reservations (id, hold_key, attempt_id, fence, resource, unit, amount, generation, expires_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + $9::interval) RETURNING expires_at`,
-			v.ID, req.Key, string(v.Attempt), v.Fence, v.Resource, v.Unit, v.Amount, v.Generation, pgInterval(req.TTL)).Scan(&v.ExpiresAt); err != nil {
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $10::timestamptz + $9::interval) RETURNING expires_at`,
+			v.ID, req.Key, string(v.Attempt), v.Fence, v.Resource, v.Unit, v.Amount, v.Generation, pgInterval(req.TTL), decidedAt).Scan(&v.ExpiresAt); err != nil {
 			return broke(err)
 		}
 		v.ExpiresAt = v.ExpiresAt.UTC()
@@ -444,13 +451,18 @@ func (s *Store) closeReservation(ctx context.Context, id, to string, rcpt *Usage
 		return CloseResult{}, err
 	}
 	var v Reservation
-	var due bool
-	err = tx.QueryRow(ctx, `SELECT id, attempt_id, fence, resource, unit, amount, generation, state, expires_at, expires_at <= now()
+	var decidedAt time.Time
+	err = tx.QueryRow(ctx, `SELECT id, attempt_id, fence, resource, unit, amount, generation, state, expires_at
 		FROM reservations WHERE id = $1 FOR UPDATE`, id).
-		Scan(&v.ID, &v.Attempt, &v.Fence, &v.Resource, &v.Unit, &v.Amount, &v.Generation, &v.State, &v.ExpiresAt, &due)
+		Scan(&v.ID, &v.Attempt, &v.Fence, &v.Resource, &v.Unit, &v.Amount, &v.Generation, &v.State, &v.ExpiresAt)
 	if err != nil {
 		return CloseResult{}, err
 	}
+	// Due and closed_at use the clock after every lock is held (review F3).
+	if err := tx.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&decidedAt); err != nil {
+		return CloseResult{}, err
+	}
+	due := !v.ExpiresAt.After(decidedAt)
 	v.ExpiresAt = v.ExpiresAt.UTC()
 	if s.hooks.reclaimLocked != nil {
 		s.hooks.reclaimLocked(id)
@@ -494,7 +506,7 @@ func (s *Store) closeReservation(ctx context.Context, id, to string, rcpt *Usage
 			return CloseResult{}, fmt.Errorf("%w: reservation %s expired before settlement", domain.ErrInvalidTransition, id)
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE reservations SET state = $2, closed_at = now() WHERE id = $1`, id, to); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE reservations SET state = $2, closed_at = $3 WHERE id = $1`, id, to, decidedAt); err != nil {
 		return CloseResult{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO reservation_events (reservation_id, n, state) VALUES ($1, 2, $2)`, id, to); err != nil {

@@ -932,5 +932,70 @@
     "\t\treturn nil"
    ]
   ]
+ },
+ {
+  "id": "M72_hold_clock_tx_start",
+  "invariant": "hold_decides_after_locks",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldReadsClockAfterLockWait",
+  "edits": [
+   [
+    "\"SELECT clock_timestamp()\").Scan(&decidedAt); err != nil {\n\t\treturn broke(err)",
+    "\"SELECT now()\").Scan(&decidedAt); err != nil {\n\t\treturn broke(err)"
+   ]
+  ]
+ },
+ {
+  "id": "M73_close_clock_tx_start",
+  "invariant": "close_decides_after_locks",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestCloseReadsClockAfterLockWait",
+  "edits": [
+   [
+    "\"SELECT clock_timestamp()\").Scan(&decidedAt); err != nil {\n\t\treturn CloseResult{}, err",
+    "\"SELECT now()\").Scan(&decidedAt); err != nil {\n\t\treturn CloseResult{}, err"
+   ]
+  ]
+ },
+ {
+  "id": "M74_closed_at_tx_start",
+  "invariant": "closed_at_after_locks",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestCloseReadsClockAfterLockWait",
+  "edits": [
+   [
+    "closed_at = $3 WHERE id = $1`, id, to, decidedAt)",
+    "closed_at = now() WHERE id = $1 AND $3::timestamptz IS NOT NULL`, id, to, decidedAt)"
+   ]
+  ]
+ },
+ {
+  "id": "M75_expires_at_tx_start",
+  "invariant": "ttl_from_decision",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldReadsClockAfterLockWait",
+  "edits": [
+   [
+    "$10::timestamptz + $9::interval)",
+    "now() + $9::interval + ($10::timestamptz - $10::timestamptz))"
+   ]
+  ]
+ },
+ {
+  "id": "M76_hold_lease_unchecked",
+  "invariant": "hold_needs_live_lease",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldReadsClockAfterLockWait",
+  "edits": [
+   [
+    "\tif leaseUntil != nil && !leaseUntil.After(decidedAt) {",
+    "\tif false && leaseUntil != nil && !leaseUntil.After(decidedAt) {"
+   ]
+  ]
  }
 ]
