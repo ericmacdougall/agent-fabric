@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -113,7 +114,13 @@ func (s *Store) AnswerAsk(ctx context.Context, id, answer, by, source string) (A
 	if mission != "" {
 		w, err := s.wakeForAsk(ctx, id, domain.MissionID(mission))
 		if err != nil {
-			return AnswerResult{}, err
+			// Review F8: the answer is committed; report it with the stored
+			// ask, and never as a refusal ("nothing changed").
+			res.Ask = Ask{ID: id, Mission: domain.MissionID(mission), State: "answered", Answer: answer, AnswerSrc: source}
+			if !res.Replayed {
+				res.Ask.AnsweredBy = by
+			}
+			return res, &WakePendingError{Ask: id, Mission: mission, Cause: err}
 		}
 		res.Wake = &w
 	}
@@ -122,13 +129,31 @@ func (s *Store) AnswerAsk(ctx context.Context, id, answer, by, source string) (A
 	return res, err
 }
 
+// WakePendingError says an answer is stored but its wake was not recorded
+// (review F8). It deliberately does not unwrap to the cause: a wake refused
+// or timed out after the answer committed is not a refusal of the answer.
+// Repeating the same answer or RepairAskWakes completes the wake.
+type WakePendingError struct {
+	Ask, Mission string
+	Cause        error
+}
+
+func (e *WakePendingError) Error() string {
+	return fmt.Sprintf("ask %s: answer stored, but the wake of mission %s was not recorded (fab ask repair retries it): %v",
+		e.Ask, e.Mission, e.Cause)
+}
+
+const defaultRepairWakeTimeout = 10 * time.Second
+
 func (s *Store) wakeForAsk(ctx context.Context, id string, mission domain.MissionID) (Response, error) {
 	return s.Execute(ctx, AskActor, domain.CommandID(AskWakeKey(id)),
 		domain.Command{Kind: domain.CmdWake, Mission: mission, Token: AskToken(id)})
 }
 
 // RepairAskWakes fires the wake of every answered ask whose wake was never
-// recorded (a crash between the answer and the wake). Bounded by limit.
+// recorded (a crash between the answer and the wake). Bounded by limit. Each
+// wake has its own deadline and a failure does not stop the rest (review
+// F8); it returns the wakes fired and every failure, joined.
 func (s *Store) RepairAskWakes(ctx context.Context, limit int) (int, error) {
 	rows, err := s.pool.Query(ctx, `SELECT a.id, a.mission_id FROM asks a
 		WHERE a.state = 'answered' AND a.mission_id IS NOT NULL
@@ -152,14 +177,26 @@ func (s *Store) RepairAskWakes(ctx context.Context, limit int) (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+	timeout := s.repairWakeTimeout
+	if timeout <= 0 {
+		timeout = defaultRepairWakeTimeout
+	}
 	n := 0
+	var failed []error
 	for _, p := range todo {
-		if _, err := s.wakeForAsk(ctx, p.id, domain.MissionID(p.mission)); err != nil {
-			return n, err
+		wctx, cancel := context.WithTimeout(ctx, timeout)
+		_, err := s.wakeForAsk(wctx, p.id, domain.MissionID(p.mission))
+		cancel()
+		if err != nil {
+			failed = append(failed, fmt.Errorf("ask %s: %w", p.id, err))
+			if ctx.Err() != nil {
+				break // the caller gave up; the rest would fail the same way
+			}
+			continue
 		}
 		n++
 	}
-	return n, nil
+	return n, errors.Join(failed...)
 }
 
 // WithdrawAsk closes an open ask without an answer. Withdrawing twice is a

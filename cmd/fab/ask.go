@@ -68,6 +68,11 @@ func askMain(args []string) error {
 		}
 		return withStore(func(ctx context.Context, st *store.Store) error {
 			res, err := st.AnswerAsk(ctx, id, *answer, actor(), *source)
+			var pending *store.WakePendingError
+			if errors.As(err, &pending) {
+				fmt.Printf("ask %s answered (replayed=%v); wake pending\n", id, res.Replayed)
+				return err // exit 1: the answer is stored, the wake is not (not a refusal)
+			}
 			if err != nil {
 				return refusal(err)
 			}

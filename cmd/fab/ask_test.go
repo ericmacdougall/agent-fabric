@@ -1,8 +1,12 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"testing"
+
+	"fabric/internal/domain"
+	"fabric/internal/store"
 )
 
 // The id may come first or last; flags on either side of it are parsed, and
@@ -33,5 +37,15 @@ func TestParseWithID(t *testing.T) {
 		if err != nil || id != c.id || *ans != c.ans {
 			t.Errorf("%v: id=%q answer=%q err=%v", c.args, id, *ans, err)
 		}
+	}
+}
+
+// Review F8: a stored answer whose wake failed is not mapped to a refusal
+// (exit 3, "nothing changed"), even when the wake's cause is a refusal kind.
+func TestWakePendingIsNotARefusal(t *testing.T) {
+	err := refusal(&store.WakePendingError{Ask: "a_1", Mission: "m_1", Cause: domain.ErrInvalidTransition})
+	var ref *store.Refusal
+	if errors.As(err, &ref) {
+		t.Fatalf("a pending wake was reported as a refusal: %v", err)
 	}
 }

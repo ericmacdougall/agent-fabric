@@ -1296,5 +1296,57 @@
     "\tcase false && capacity < held:\n"
    ]
   ]
+ },
+ {
+  "id": "M100_wake_failure_reads_as_refusal",
+  "invariant": "review_f8",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestAnswerStoredWakePending",
+  "edits": [
+   [
+    "\t\t\treturn res, &WakePendingError{Ask: id, Mission: mission, Cause: err}",
+    "\t\t\treturn res, err"
+   ]
+  ]
+ },
+ {
+  "id": "M101_wake_pending_unwraps",
+  "invariant": "review_f8",
+  "pkg": "./cmd/fab",
+  "file": "internal/store/asks.go",
+  "expect": "TestWakePendingIsNotARefusal",
+  "edits": [
+   [
+    "const defaultRepairWakeTimeout = 10 * time.Second",
+    "func (e *WakePendingError) Unwrap() error { return e.Cause }\n\nconst defaultRepairWakeTimeout = 10 * time.Second"
+   ]
+  ]
+ },
+ {
+  "id": "M102_repair_head_of_line",
+  "invariant": "review_f8",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestRepairAskWakesNotHeadOfLine",
+  "edits": [
+   [
+    "\t\t\tcontinue\n\t\t}\n\t\tn++",
+    "\t\t\treturn n, errors.Join(failed...)\n\t\t}\n\t\tn++"
+   ]
+  ]
+ },
+ {
+  "id": "M103_repair_shared_deadline",
+  "invariant": "review_f8",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestRepairAskWakesNotHeadOfLine",
+  "edits": [
+   [
+    "\t\twctx, cancel := context.WithTimeout(ctx, timeout)",
+    "\t\twctx, cancel := context.WithCancel(ctx)"
+   ]
+  ]
  }
 ]

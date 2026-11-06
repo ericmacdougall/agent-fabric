@@ -35,6 +35,8 @@ type Store struct {
 
 	// hooks are crash cutpoints for tests (export_test.go). nil in production.
 	hooks hooks
+
+	repairWakeTimeout time.Duration // per-wake deadline in RepairAskWakes; 0 means defaultRepairWakeTimeout
 }
 
 type hooks struct {

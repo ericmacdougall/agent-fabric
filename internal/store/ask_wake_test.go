@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,4 +165,102 @@ func waitForLockWaiter(t *testing.T, st *Store, ctx context.Context, table strin
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("no backend blocked on a lock touching %s within 10s", table)
+}
+
+// waitOnAskMission admits m, starts and finishes an attempt waiting on ask id.
+func waitOnAskMission(t *testing.T, st *Store, ctx context.Context, m domain.MissionID, a domain.AttemptID, id string) {
+	t.Helper()
+	ok(t, st, ctx, "chat", "admit-"+string(m), domain.Command{Kind: domain.CmdAdmitMission, Mission: m})
+	fence := startAttempt(t, st, ctx, m, a)
+	ok(t, st, ctx, "host", "fin-"+string(a), domain.Command{Kind: domain.CmdFinishAttempt, Mission: m, Attempt: a,
+		Fence: fence, Outcome: "wait", WaitKey: AskToken(id)})
+	if err := st.CreateAsk(ctx, Ask{ID: id, Mission: m, Kind: "decision", Question: "q", Source: "inferred: test"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// lockMission holds mission m's row lock until the returned func runs.
+func lockMission(t *testing.T, st *Store, ctx context.Context, m domain.MissionID) func() {
+	t.Helper()
+	tx, err := st.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM missions WHERE id = $1 FOR UPDATE", string(m)); err != nil {
+		t.Fatal(err)
+	}
+	return func() { _ = tx.Rollback(ctx) }
+}
+
+// Review F8: once the answer is stored, a failed wake is not a refusal. The
+// error must say the answer is recorded and the wake pending, must not
+// match the refusal kinds (the CLI maps those to exit 3, "nothing changed"),
+// and must carry the stored ask. RepairAskWakes then completes the wake.
+func TestAnswerStoredWakePending(t *testing.T) {
+	st, ctx := openTest(t)
+	mk(t, st, ctx, "m_wp1")
+	waitOnAskMission(t, st, ctx, "m_wp1", "r_wp1", "a_wp1")
+	unlock := lockMission(t, st, ctx, "m_wp1")
+	short, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	res, err := st.AnswerAsk(short, "a_wp1", "yes", "chat", userSrc)
+	cancel()
+	unlock()
+	var wp *WakePendingError
+	if !errors.As(err, &wp) || wp.Ask != "a_wp1" {
+		t.Fatalf("wake failure after a stored answer: want *WakePendingError, got %v", err)
+	}
+	for _, kind := range []error{domain.ErrInvalidTransition, domain.ErrNotFound, domain.ErrIdempotencyConflict, domain.ErrInvalidID} {
+		if errors.Is(err, kind) {
+			t.Fatalf("a stored answer reads as a refusal (%v): %v", kind, err)
+		}
+	}
+	if res.Ask.State != "answered" || res.Ask.Answer != "yes" || res.Wake != nil {
+		t.Fatalf("result with a pending wake: %+v", res)
+	}
+	if a, _ := st.GetAsk(ctx, "a_wp1"); a.State != "answered" {
+		t.Fatalf("answer not stored: %+v", a)
+	}
+	if n, err := st.RepairAskWakes(ctx, 10); err != nil || n != 1 {
+		t.Fatalf("repair: %d, %v", n, err)
+	}
+	if m, _ := st.Mission(ctx, "m_wp1"); m.Execution == domain.ExecWaiting {
+		t.Fatal("mission still waiting after the repair")
+	}
+}
+
+// Review F8: one stuck wake does not hold back the others. Each repair wake
+// has its own deadline; the repair continues and reports the failure.
+func TestRepairAskWakesNotHeadOfLine(t *testing.T) {
+	st, ctx := openTest(t)
+	st.repairWakeTimeout = 300 * time.Millisecond
+	for _, m := range []domain.MissionID{"m_hl1", "m_hl2"} {
+		mk(t, st, ctx, m)
+	}
+	waitOnAskMission(t, st, ctx, "m_hl1", "r_hl1", "a_hl1")
+	waitOnAskMission(t, st, ctx, "m_hl2", "r_hl2", "a_hl2")
+	// Both answers stored with their wakes pending; a_hl1 first in repair order.
+	for _, id := range []string{"a_hl1", "a_hl2"} {
+		m := domain.MissionID("m_hl" + id[len(id)-1:])
+		unlock := lockMission(t, st, ctx, m)
+		short, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		_, err := st.AnswerAsk(short, id, "yes", "chat", userSrc)
+		cancel()
+		unlock()
+		var wp *WakePendingError
+		if !errors.As(err, &wp) {
+			t.Fatalf("setup %s: %v", id, err)
+		}
+	}
+	unlock := lockMission(t, st, ctx, "m_hl1")
+	defer unlock()
+	// The whole repair gets 5 s; the stuck head must use only its own 300 ms.
+	whole, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	n, err := st.RepairAskWakes(whole, 10)
+	if n != 1 || err == nil || !strings.Contains(err.Error(), "a_hl1") {
+		t.Fatalf("repair with a stuck head: %d, %v (want 1 and an error naming a_hl1)", n, err)
+	}
+	if m, _ := st.Mission(ctx, "m_hl2"); m.Execution == domain.ExecWaiting {
+		t.Fatal("the second wake was held back by the first")
+	}
 }
