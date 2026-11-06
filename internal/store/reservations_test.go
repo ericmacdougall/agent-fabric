@@ -293,6 +293,19 @@ func TestHoldReplay(t *testing.T) {
 	if _, err := hold(st, ctx, "rp-1", "r_rp1", f, 2*time.Minute, item("ra", 6), item("rb", 1)); !errors.Is(err, domain.ErrIdempotencyConflict) {
 		t.Fatalf("changed ttl under the same key: %v", err)
 	}
+	// A lost response replays as the original hold even once the capacity is
+	// full (Kimi plan 7.7, TestReservationLostResponseDoesNotDoubleHold).
+	h := liveAttempt(t, st, ctx, "m_rp3", "r_rp3")
+	if _, err := hold(st, ctx, "rp-fill", "r_rp3", h, time.Minute, item("ra", 4)); err != nil {
+		t.Fatal(err)
+	}
+	full, err := hold(st, ctx, "rp-1", "r_rp1", f, time.Minute, item("ra", 6), item("rb", 1))
+	if err != nil || !full.Replayed || !bytes.Equal(full.Raw, first.Raw) {
+		t.Fatalf("replay with ra full: %v replayed=%v equal=%v", err, full.Replayed, bytes.Equal(full.Raw, first.Raw))
+	}
+	if h := held(t, st, ctx, "ra"); h != 10 {
+		t.Fatalf("ra held %d after a replay at full capacity, want 10", h)
+	}
 	// A refusal replays as the same refusal after capacity frees up.
 	_, err = hold(st, ctx, "rp-2", "r_rp2", g, time.Minute, item("ra", 5))
 	refusedAs(t, err, domain.ErrOverCapacity, "ra")
