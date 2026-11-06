@@ -40,6 +40,11 @@ type Store struct {
 type hooks struct {
 	beforeCommit func(cmd domain.Command) error // returning an error aborts the transaction
 	afterCommit  func(cmd domain.Command)       // runs after COMMIT and before the response is returned
+
+	// Reservation barriers (reservations_test.go).
+	holdLocked       func(resource string) // after each capacity row lock in Hold
+	beforeHoldCommit func() error          // returning an error aborts the hold transaction
+	reclaimLocked    func(id string)       // after the reservation row lock in release/expire/settle
 }
 
 // Open connects; it does not migrate.
@@ -629,7 +634,8 @@ func (s *Store) SlotsHeld(ctx context.Context) (int, error) {
 
 // Truncate empties every fabric table except the schema ledger. Tests only.
 func (s *Store) Truncate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `TRUNCATE commands, events, outbox, outbox_cursors, attempts, stale_observations, missions RESTART IDENTITY CASCADE`)
+	_, err := s.pool.Exec(ctx, `TRUNCATE commands, events, outbox, outbox_cursors, attempts, stale_observations, missions,
+		usage_receipts, reservation_events, reservations, hold_commands, resource_capacities RESTART IDENTITY CASCADE`)
 	if err != nil {
 		return err
 	}

@@ -577,5 +577,213 @@
     "\tresp.Raw = append([]byte(nil), respJSON[:len(respJSON)-1]...)\n"
    ]
   ]
+ },
+ {
+  "id": "M45_hold_capacity_unlocked",
+  "invariant": "capacity_never_overrun",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldCapacityRace",
+  "edits": [
+   [
+    "FROM resource_capacities WHERE resource = $1 FOR UPDATE`, it.Resource)",
+    "FROM resource_capacities WHERE resource = $1`, it.Resource)"
+   ]
+  ]
+ },
+ {
+  "id": "M46_hold_lock_order_unsorted",
+  "invariant": "no_deadlock_sorted_locks",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldOppositeOrderNoDeadlock",
+  "edits": [
+   [
+    "\tsort.Slice(items, func(i, j int) bool { return items[i].Resource < items[j].Resource })\n",
+    "\t_ = sort.Slice\n"
+   ]
+  ]
+ },
+ {
+  "id": "M47_hold_check_first_only",
+  "invariant": "hold_all_or_nothing",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldAllOrNothing",
+  "edits": [
+   [
+    "\t\tif it.Amount > r.capacity-r.held {",
+    "\t\tif i == 0 && it.Amount > r.capacity-r.held {"
+   ]
+  ]
+ },
+ {
+  "id": "M48_hold_fence_unchecked",
+  "invariant": "hold_bound_to_exact_fence",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldFenceBinding",
+  "edits": [
+   [
+    "\tif req.Fence != fence {",
+    "\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M49_hold_dead_attempt",
+  "invariant": "hold_needs_live_attempt",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldFenceBinding",
+  "edits": [
+   [
+    "\t\treturn fail(\"invalid_transition\", \"\", \"attempt %s is %s, not live\", req.Attempt, state)",
+    "\t\t_ = state"
+   ]
+  ]
+ },
+ {
+  "id": "M50_hold_lease_unchecked",
+  "invariant": "hold_needs_unexpired_lease",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldFenceBinding",
+  "edits": [
+   [
+    "\tif !leaseOK {",
+    "\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M51_hold_hash_unchecked",
+  "invariant": "same_key_different_body_conflicts",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldReplay",
+  "edits": [
+   [
+    "\t\tif storedHash != hash {",
+    "\t\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M52_close_twice",
+  "invariant": "reservation_closes_once",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestReservationCloseRace",
+  "edits": [
+   [
+    "\tif v.State != ResHeld {",
+    "\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M53_expire_early",
+  "invariant": "expiry_by_db_time",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestReservationExpiry",
+  "edits": [
+   [
+    "\t\tif !due {",
+    "\t\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M54_settle_after_expiry",
+  "invariant": "no_settle_after_expiry",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestReservationExpiry",
+  "edits": [
+   [
+    "\tcase ResSettled:\n\t\tif due {",
+    "\tcase ResSettled:\n\t\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M55_receipt_mismatch_accepted",
+  "invariant": "receipt_identity_exact",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestSettleReceipts",
+  "edits": [
+   [
+    "\t\t\tif prevRes != id || prevActual != rcpt.Actual {",
+    "\t\t\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M56_settle_fence_unchecked",
+  "invariant": "settle_bound_to_fence",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestSettleReceipts",
+  "edits": [
+   [
+    "\t\tif rcpt.Fence != v.Fence {",
+    "\t\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M57_live_predecessor_ignored",
+  "invariant": "one_live_generation",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldGenerations",
+  "edits": [
+   [
+    "\t\tif live {",
+    "\t\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M58_capacity_agree_trigger_off",
+  "invariant": "held_equals_live_sum",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0009_reservations.sql",
+  "expect": "TestReservationBackstops",
+  "edits": [
+   [
+    "    IF h IS DISTINCT FROM s THEN",
+    "    IF false THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M59_closed_reservation_mutable",
+  "invariant": "terminal_is_final",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0009_reservations.sql",
+  "expect": "TestReservationBackstops",
+  "edits": [
+   [
+    "    IF OLD.state <> 'HELD' THEN",
+    "    IF false THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M60_forged_receipt_accepted",
+  "invariant": "receipt_needs_settled",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0009_reservations.sql",
+  "expect": "TestReservationBackstops",
+  "edits": [
+   [
+    "        IF st IS DISTINCT FROM 'SETTLED' THEN",
+    "        IF false THEN"
+   ]
+  ]
  }
 ]
