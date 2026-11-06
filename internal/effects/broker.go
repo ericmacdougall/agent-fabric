@@ -42,8 +42,10 @@ var (
 	ErrSubjectBusy      = errors.New("another effect on this subject is DISPATCHED or UNKNOWN")
 	ErrApprovalRequired = errors.New("effect needs an approval bound to its request hash")
 	ErrApprovalMismatch = errors.New("approval hash does not match the request hash")
-	ErrNotDispatchable  = errors.New("effect is not in a dispatchable state")
-	ErrNotReconcilable  = errors.New("effect is not UNKNOWN or RECONCILING")
+	// ErrRequestTampered: the stored request no longer hashes to the stored request hash.
+	ErrRequestTampered = errors.New("stored request does not match its hash")
+	ErrNotDispatchable = errors.New("effect is not in a dispatchable state")
+	ErrNotReconcilable = errors.New("effect is not UNKNOWN or RECONCILING")
 )
 
 // Intent is what a caller submits.
@@ -159,18 +161,22 @@ func (b *Broker) Submit(ctx context.Context, exec Executor, spec IntentSpec) (Ef
 		return Effect{}, err
 	}
 	defer tx.Rollback(context.Background()) //nolint:errcheck
-	if err := liveFence(ctx, tx, spec.Attempt, spec.Fence); err != nil {
-		return Effect{}, err
-	}
+	// Replay first (Kimi effect-identity analysis): a settled effect replays
+	// after its attempt ended, and the key binds the whole intent, not only
+	// the request. Only a new intent needs a live fence.
 	existing, err := b.loadTx(ctx, tx, "idem_key", spec.IdemKey)
 	if err == nil {
-		if existing.RequestSHA != base {
+		if existing.RequestSHA != base || existing.Mission != spec.Mission || existing.Attempt != spec.Attempt ||
+			existing.Fence != spec.Fence || existing.Kind != spec.Kind || existing.Subject != spec.Subject {
 			return Effect{}, fmt.Errorf("%w: effect key %s", domain.ErrIdempotencyConflict, spec.IdemKey)
 		}
 		existing.Replayed = true
 		return existing, tx.Commit(ctx)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
+		return Effect{}, err
+	}
+	if err := liveFence(ctx, tx, spec.Attempt, spec.Fence); err != nil {
 		return Effect{}, err
 	}
 	state := Intent
@@ -245,6 +251,10 @@ func (b *Broker) Dispatch(ctx context.Context, exec Executor, id string) (Effect
 	if e.Kind != exec.Kind() {
 		return Effect{}, fmt.Errorf("%w: executor %s for effect kind %s", domain.ErrInvalidTransition, exec.Kind(), e.Kind)
 	}
+	// What is sent is what was hashed and approved: recompute before transport.
+	if sha, err := domain.EffectBase(e.Kind, e.Request); err != nil || sha != e.RequestSHA {
+		return Effect{}, fmt.Errorf("%w: effect %s", ErrRequestTampered, id)
+	}
 	switch e.State {
 	case Intent:
 	case Approved:
@@ -294,10 +304,12 @@ func (b *Broker) Dispatch(ctx context.Context, exec Executor, id string) (Effect
 	if b.afterTransport != nil {
 		b.afterTransport(e, rc)
 	}
-	return b.settle(ctx, id, rc)
+	return b.settle(ctx, id, e.Dispatches, rc)
 }
 
-func (b *Broker) settle(ctx context.Context, id string, rc Receipt) (Effect, error) {
+// settle records a transport receipt only on the dispatch it came from: a
+// row that moved on to a later dispatch keeps its state.
+func (b *Broker) settle(ctx context.Context, id string, dispatch int, rc Receipt) (Effect, error) {
 	var state State
 	switch rc.Outcome {
 	case OutcomeConfirmed:
@@ -308,8 +320,8 @@ func (b *Broker) settle(ctx context.Context, id string, rc Receipt) (Effect, err
 		state = Unknown
 	}
 	rcJSON, _ := json.Marshal(rc)
-	if _, err := b.pool.Exec(ctx, `UPDATE effects SET state = $2, receipt = $3, last_error = $4, updated_at = now() WHERE id = $1 AND state = $5`,
-		id, string(state), rcJSON, rc.Detail, string(Dispatched)); err != nil {
+	if _, err := b.pool.Exec(ctx, `UPDATE effects SET state = $2, receipt = $3, last_error = $4, updated_at = now() WHERE id = $1 AND state = $5 AND dispatches = $6`,
+		id, string(state), rcJSON, rc.Detail, string(Dispatched), dispatch); err != nil {
 		return Effect{}, err
 	}
 	return b.Load(ctx, id)

@@ -1517,5 +1517,82 @@
     ""
    ]
   ]
+ },
+ {
+  "id": "M117_replay_needs_live_attempt",
+  "invariant": "effect_identity",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestTerminalReplayAfterAttemptEnds",
+  "edits": [
+   [
+    "\texisting, err := b.loadTx(ctx, tx, \"idem_key\", spec.IdemKey)\n",
+    "\tif err := liveFence(ctx, tx, spec.Attempt, spec.Fence); err != nil {\n\t\treturn Effect{}, err\n\t}\n\texisting, err := b.loadTx(ctx, tx, \"idem_key\", spec.IdemKey)\n"
+   ]
+  ]
+ },
+ {
+  "id": "M118_replay_ignores_mission_subject",
+  "invariant": "effect_identity",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestReplayBindsWholeIntent",
+  "edits": [
+   [
+    "existing.Mission != spec.Mission",
+    "existing.Mission == \"\""
+   ],
+   [
+    "existing.Subject != spec.Subject",
+    "existing.Subject == \"\""
+   ]
+  ]
+ },
+ {
+  "id": "M119_replay_ignores_attempt_fence",
+  "invariant": "effect_identity",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestReplayBindsWholeIntent",
+  "edits": [
+   [
+    "existing.Attempt != spec.Attempt",
+    "existing.Attempt == \"\""
+   ],
+   [
+    "existing.Fence != spec.Fence",
+    "existing.Fence < 0"
+   ]
+  ]
+ },
+ {
+  "id": "M120_request_hash_not_recomputed",
+  "invariant": "effect_identity",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestDispatchRefusesRequestThatNoLongerMatchesItsHash",
+  "edits": [
+   [
+    "err != nil || sha != e.RequestSHA {",
+    "err != nil || sha == \"\" {"
+   ]
+  ]
+ },
+ {
+  "id": "M121_settle_ignores_dispatch",
+  "invariant": "effect_identity",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestStaleReceiptDoesNotSettleLaterDispatch",
+  "edits": [
+   [
+    " AND dispatches = $6`,",
+    "`,"
+   ],
+   [
+    "string(Dispatched), dispatch); err",
+    "string(Dispatched)); err"
+   ]
+  ]
  }
 ]
