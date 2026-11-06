@@ -997,5 +997,96 @@
     "\tif false && leaseUntil != nil && !leaseUntil.After(decidedAt) {"
    ]
   ]
+ },
+ {
+  "id": "M77_receipt_any_resource",
+  "invariant": "receipt_resource_matches",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0010_reservation_backstops.sql",
+  "expect": "TestReservationBackstopsMigration0010",
+  "edits": [
+   [
+    "ALTER TABLE usage_receipts ADD CONSTRAINT usage_receipts_reservation_resource_fkey\n    FOREIGN KEY (resource, reservation_id) REFERENCES reservations (resource, id);",
+    "SELECT 1;"
+   ]
+  ]
+ },
+ {
+  "id": "M78_reservation_any_unit",
+  "invariant": "reservation_unit_matches",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0010_reservation_backstops.sql",
+  "expect": "TestReservationBackstopsMigration0010",
+  "edits": [
+   [
+    "ALTER TABLE reservations ADD CONSTRAINT reservations_resource_unit_fkey\n    FOREIGN KEY (resource, unit) REFERENCES resource_capacities (resource, unit);",
+    "SELECT 1;"
+   ]
+  ]
+ },
+ {
+  "id": "M79_ttl_no_max",
+  "invariant": "ttl_at_most_24h",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0010_reservation_backstops.sql",
+  "expect": "TestReservationBackstopsMigration0010",
+  "edits": [
+   [
+    "expires_at <= created_at + interval '24 hours')",
+    "expires_at <= created_at + interval '1000 hours')"
+   ]
+  ]
+ },
+ {
+  "id": "M80_ttl_no_min",
+  "invariant": "ttl_at_least_1s",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0010_reservation_backstops.sql",
+  "expect": "TestReservationBackstopsMigration0010",
+  "edits": [
+   [
+    "CHECK (expires_at >= created_at + interval '1 second' AND",
+    "CHECK (expires_at >= created_at - interval '1 hour' AND"
+   ]
+  ]
+ },
+ {
+  "id": "M81_insert_closed",
+  "invariant": "born_held",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0010_reservation_backstops.sql",
+  "expect": "TestReservationBackstopsMigration0010",
+  "edits": [
+   [
+    "    IF NEW.state <> 'HELD' OR NEW.closed_at IS NOT NULL THEN",
+    "    IF false THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M82_insert_dead_attempt",
+  "invariant": "born_for_live_attempt",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0010_reservation_backstops.sql",
+  "expect": "TestReservationBackstopsMigration0010",
+  "edits": [
+   [
+    "    IF st IS NULL OR st NOT IN ('LEASED', 'PREPARING', 'RUNNING') THEN",
+    "    IF st IS NULL THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M83_truncate_allowed",
+  "invariant": "append_only_no_truncate",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0010_reservation_backstops.sql",
+  "expect": "TestReservationBackstopsMigration0010",
+  "edits": [
+   [
+    "    IF current_setting('fabric.allow_truncate', true) = 'on' THEN",
+    "    IF true THEN"
+   ]
+  ]
  }
 ]

@@ -344,8 +344,8 @@ func (s *Store) decideHold(ctx context.Context, tx pgx.Tx, req HoldRequest, item
 			string(req.Attempt), it.Resource).Scan(&v.Generation); err != nil {
 			return broke(err)
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO reservations (id, hold_key, attempt_id, fence, resource, unit, amount, generation, expires_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $10::timestamptz + $9::interval) RETURNING expires_at`,
+		if err := tx.QueryRow(ctx, `INSERT INTO reservations (id, hold_key, attempt_id, fence, resource, unit, amount, generation, created_at, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $10::timestamptz, $10::timestamptz + $9::interval) RETURNING expires_at`,
 			v.ID, req.Key, string(v.Attempt), v.Fence, v.Resource, v.Unit, v.Amount, v.Generation, pgInterval(req.TTL), decidedAt).Scan(&v.ExpiresAt); err != nil {
 			return broke(err)
 		}

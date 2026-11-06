@@ -671,13 +671,23 @@ func (s *Store) SlotsHeld(ctx context.Context) (int, error) {
 
 // Truncate empties every fabric table except the schema ledger. Tests only.
 func (s *Store) Truncate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, `TRUNCATE commands, events, outbox, outbox_cursors, attempts, stale_observations, missions,
-		usage_receipts, reservation_events, reservations, hold_commands, resource_capacities RESTART IDENTITY CASCADE`)
+	// The append-only tables refuse TRUNCATE unless this transaction opts in (0010).
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, "UPDATE slots SET cap = 4 WHERE id = 1")
-	return err
+	defer tx.Rollback(context.Background()) //nolint:errcheck // no-op after commit
+	for _, q := range []string{
+		"SET LOCAL fabric.allow_truncate = 'on'",
+		`TRUNCATE commands, events, outbox, outbox_cursors, attempts, stale_observations, missions,
+		usage_receipts, reservation_events, reservations, hold_commands, resource_capacities RESTART IDENTITY CASCADE`,
+		"UPDATE slots SET cap = 4 WHERE id = 1",
+	} {
+		if _, err := tx.Exec(ctx, q); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // IsUniqueViolation reports a Postgres unique-constraint error.
