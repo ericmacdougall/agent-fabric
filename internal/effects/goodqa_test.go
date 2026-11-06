@@ -71,7 +71,7 @@ func (f *fakeGoodQA) handler(w http.ResponseWriter, r *http.Request) {
 			reply(map[string]any{"comment": map[string]any{"id": id, "deduplicated": true}}, false)
 			return
 		}
-		id := fmt.Sprintf("c_%d", f.count()+1)
+		id := fmt.Sprintf("c_%d", len(f.comments)+1) // the handler already holds f.mu
 		f.byOp[op] = id
 		f.comments = append(f.comments, map[string]any{"id": id, "body": req.Params.Args["body"], "createdAt": "2026-11-06T18:00:00Z"})
 		if f.loseAfter {
@@ -96,7 +96,7 @@ func (f *fakeGoodQA) set(fn func()) {
 func (f *fakeGoodQA) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.count()
+	return len(f.comments)
 }
 
 var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
