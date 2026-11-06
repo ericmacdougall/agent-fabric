@@ -340,11 +340,15 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if !ok {
 			return nil, fmt.Errorf("%w: effect %s", domain.ErrNotFound, cmd.Effect)
 		}
+		if err := sameSubmission(f, cmd); err != nil {
+			return nil, err
+		}
 		if f.State != domain.EffectDispatched {
 			return nil, fmt.Errorf("%w: effect %s is %s", domain.ErrInvalidTransition, f.ID, f.State)
 		}
 		e := ev(domain.EvEffectUnknown)
 		e.Effect = f.ID
+		e.Submission = cmd.Submission
 		e.Reason = cmd.Reason
 		return []domain.Event{e}, nil
 
@@ -368,16 +372,30 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if !ok {
 			return nil, fmt.Errorf("%w: effect %s", domain.ErrNotFound, cmd.Effect)
 		}
-		if f.State != domain.EffectDispatched && f.State != domain.EffectUnknown {
+		if err := sameSubmission(f, cmd); err != nil {
+			return nil, err
+		}
+		// Transport may confirm, fail definitely or conflict; only a readback
+		// of an UNKNOWN effect may say NOT_APPLIED, and an UNKNOWN effect is
+		// never FAILED_DEFINITE, which would re-arm a retry without proof
+		// that the first submission did not land (Kimi effect-identity).
+		allowed := map[domain.EffectState][]domain.EffectState{
+			domain.EffectDispatched: {domain.EffectConfirmed, domain.EffectFailedDefinite, domain.EffectQuarantined},
+			domain.EffectUnknown:    {domain.EffectConfirmed, domain.EffectNotApplied, domain.EffectQuarantined},
+		}[f.State]
+		if allowed == nil {
 			return nil, fmt.Errorf("%w: resolve while %s", domain.ErrInvalidTransition, f.State)
 		}
-		switch domain.EffectState(cmd.Result) {
-		case domain.EffectConfirmed, domain.EffectFailedDefinite, domain.EffectNotApplied, domain.EffectQuarantined:
-		default:
-			return nil, fmt.Errorf("%w: effect result %q", domain.ErrInvalidTransition, cmd.Result)
+		ok = false
+		for _, r := range allowed {
+			ok = ok || r == domain.EffectState(cmd.Result)
+		}
+		if !ok {
+			return nil, fmt.Errorf("%w: effect %s %s -> %q", domain.ErrInvalidTransition, f.ID, f.State, cmd.Result)
 		}
 		e := ev(domain.EvEffectResolved)
 		e.Effect = f.ID
+		e.Submission = cmd.Submission
 		e.Result = cmd.Result
 		return []domain.Event{e}, nil
 
@@ -574,6 +592,15 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		s.WaitKey = ""
 	}
 	return s
+}
+
+// sameSubmission binds a transport or readback result to the submission it
+// is about: a late result for an earlier submission is a stale fence.
+func sameSubmission(f domain.Effect, cmd domain.Command) error {
+	if cmd.Submission != f.Submissions {
+		return fmt.Errorf("%w: result for submission %d of %s, which is on submission %d", domain.ErrStaleFence, cmd.Submission, f.ID, f.Submissions)
+	}
+	return nil
 }
 
 // Replay folds a mission's event log from the zero state. It is the

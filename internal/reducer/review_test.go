@@ -56,11 +56,11 @@ func TestRV4_NoResubmitWhileTwinUnresolved(t *testing.T) {
 	if _, err := f.step(t, sub); !errors.Is(err, domain.ErrDuplicate) {
 		t.Fatalf("resubmit while DISPATCHED: want ErrDuplicate, got %v", err)
 	}
-	mustStep(t, f, domain.Command{Kind: domain.CmdEffectUnknown, Mission: id, Effect: e1, Reason: "timeout"})
+	mustStep(t, f, domain.Command{Kind: domain.CmdEffectUnknown, Mission: id, Effect: e1, Submission: 1, Reason: "timeout"})
 	if _, err := f.step(t, sub); !errors.Is(err, domain.ErrUnknownUnresolved) {
 		t.Fatalf("resubmit while UNKNOWN: want ErrUnknownUnresolved, got %v", err)
 	}
-	mustStep(t, f, domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: e1, Result: "CONFIRMED"})
+	mustStep(t, f, domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: e1, Submission: 1, Result: "CONFIRMED"})
 	ev = mustStep(t, f, sub)
 	if ev[0].Occurrence != 2 {
 		t.Fatalf("after resolution: want occurrence 2, got %d", ev[0].Occurrence)

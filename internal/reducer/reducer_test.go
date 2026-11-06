@@ -236,6 +236,7 @@ func randomCommand(r *rand.Rand, f *fleet, id domain.MissionID, step int) domain
 		c.Kind = domain.CmdEffectUnknown
 		if len(effectIDs) > 0 {
 			c.Effect = effectIDs[r.Intn(len(effectIDs))]
+			c.Submission = m.Effects[c.Effect].Submissions - r.Intn(4)/3 // sometimes a late result
 		}
 	case 14:
 		c.Kind = domain.CmdRetryEffect
@@ -246,6 +247,7 @@ func randomCommand(r *rand.Rand, f *fleet, id domain.MissionID, step int) domain
 		c.Kind = domain.CmdResolveEffect
 		if len(effectIDs) > 0 {
 			c.Effect = effectIDs[r.Intn(len(effectIDs))]
+			c.Submission = m.Effects[c.Effect].Submissions - r.Intn(4)/3
 		}
 		c.Result = []string{"CONFIRMED", "FAILED_DEFINITE", "NOT_APPLIED", "QUARANTINED"}[r.Intn(4)]
 	case 16:
@@ -497,7 +499,7 @@ func TestUnknownRetryBlocked(t *testing.T) {
 	f, id, a, fence := startedMission(t)
 	ev := mustStep(t, f, domain.Command{Kind: domain.CmdSubmitEffect, Mission: id, Attempt: a, Fence: fence, EffectKind: "push", Request: json.RawMessage(`{"head":"sha_a"}`)})
 	eid := ev[0].Effect
-	mustStep(t, f, domain.Command{Kind: domain.CmdEffectUnknown, Mission: id, Effect: eid, Reason: "timeout"})
+	mustStep(t, f, domain.Command{Kind: domain.CmdEffectUnknown, Mission: id, Effect: eid, Submission: 1, Reason: "timeout"})
 	_, err := f.step(t, domain.Command{Kind: domain.CmdRetryEffect, Mission: id, Effect: eid})
 	if !errors.Is(err, domain.ErrUnknownUnresolved) {
 		t.Fatalf("retry during UNKNOWN: want ErrUnknownUnresolved, got %v", err)
@@ -505,7 +507,7 @@ func TestUnknownRetryBlocked(t *testing.T) {
 	if got := f.missions[id].Effects[eid].Submissions; got != 1 {
 		t.Fatalf("submissions changed to %d", got)
 	}
-	mustStep(t, f, domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: eid, Result: "NOT_APPLIED"})
+	mustStep(t, f, domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: eid, Submission: 1, Result: "NOT_APPLIED"})
 	mustStep(t, f, domain.Command{Kind: domain.CmdRetryEffect, Mission: id, Effect: eid})
 	if got := f.missions[id].Effects[eid].Submissions; got != 2 {
 		t.Fatalf("after NOT_APPLIED, retry should be the 2nd submission, got %d", got)
@@ -618,7 +620,7 @@ func TestEffectOccurrences(t *testing.T) {
 	}
 	e1 := sub(`{"ticket": 14791, "body": "same"}`)
 	// An identical request is a new occurrence only once the first is resolved (H7).
-	mustStep(t, f, domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: e1.Effect, Result: "CONFIRMED"})
+	mustStep(t, f, domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: e1.Effect, Submission: 1, Result: "CONFIRMED"})
 	e2 := sub(`{"body":"same","ticket":14791}`) // reordered keys, no spaces
 	e3 := sub(`{"ticket": 14791, "body": "other"}`)
 	if e1.RequestSHA != e2.RequestSHA || e1.Occurrence != 1 || e2.Occurrence != 2 || e1.Effect == e2.Effect {

@@ -42,7 +42,7 @@ func longMission(t *testing.T, turns int) (domain.Mission, []domain.Event) {
 		if i == 0 {
 			step(domain.Command{Kind: domain.CmdSubmitEffect, Mission: "m_long", Attempt: a, Fence: fence, EffectKind: "push", Request: []byte(`{"head":"sha_1"}`)})
 			for id := range m.Effects {
-				step(domain.Command{Kind: domain.CmdEffectUnknown, Mission: "m_long", Effect: id, Reason: "lost response"})
+				step(domain.Command{Kind: domain.CmdEffectUnknown, Mission: "m_long", Effect: id, Submission: 1, Reason: "lost response"})
 			}
 		}
 		step(domain.Command{Kind: domain.CmdFinishAttempt, Mission: "m_long", Attempt: a, Fence: fence, Outcome: "checkpoint", Reason: strings.Repeat("log line ", 40)})

@@ -49,7 +49,9 @@ type Command struct {
 	Token      string    `json:"token,omitempty"`
 	Effect     EffectID  `json:"effect,omitempty"`
 	Result     string    `json:"result,omitempty"` // RECONCILE_ATTEMPT / RESOLVE_EFFECT
-	Reason     string    `json:"reason,omitempty"`
+	// EFFECT_UNKNOWN / RESOLVE_EFFECT: the submission the result is about.
+	Submission int    `json:"submission,omitempty"`
+	Reason     string `json:"reason,omitempty"`
 
 	// SUBMIT_EFFECT (H1): the effect id is derived from kind + canonical
 	// request + occurrence; the caller never names it.
@@ -128,6 +130,7 @@ type Event struct {
 	Token      string       `json:"token,omitempty"`
 	Effect     EffectID     `json:"effect,omitempty"`
 	Result     string       `json:"result,omitempty"`
+	Submission int          `json:"submission,omitempty"` // EFFECT_UNKNOWN / EFFECT_RESOLVED
 	Reason     string       `json:"reason,omitempty"`
 	AttemptTo  AttemptState `json:"attempt_to,omitempty"`
 	EffectKind string       `json:"effect_kind,omitempty"`

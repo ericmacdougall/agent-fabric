@@ -431,8 +431,8 @@ func TestEventSeqGapFreeAndRebuild(t *testing.T) {
 	ok(t, st, ctx, "host", "ev", domain.Command{Kind: domain.CmdRecordEvidence, Mission: "m_1", Attempt: "r_1", Fence: fence, Revision: 0, Generation: 1, Head: "sha_1", Receipt: "rcpt_1"})
 	eff := ok(t, st, ctx, "host", "eff", domain.Command{Kind: domain.CmdSubmitEffect, Mission: "m_1", Attempt: "r_1", Fence: fence, EffectKind: "ticket_comment", Request: json.RawMessage(`{"ticket": 14791, "body": "checkpoint"}`)})
 	eid := eff.Events[0].Effect
-	ok(t, st, ctx, "fabd", "unk", domain.Command{Kind: domain.CmdEffectUnknown, Mission: "m_1", Effect: eid})
-	ok(t, st, ctx, "fabd", "res", domain.Command{Kind: domain.CmdResolveEffect, Mission: "m_1", Effect: eid, Result: "CONFIRMED"})
+	ok(t, st, ctx, "fabd", "unk", domain.Command{Kind: domain.CmdEffectUnknown, Mission: "m_1", Effect: eid, Submission: 1})
+	ok(t, st, ctx, "fabd", "res", domain.Command{Kind: domain.CmdResolveEffect, Mission: "m_1", Effect: eid, Submission: 1, Result: "CONFIRMED"})
 	ok(t, st, ctx, "host", "fin", domain.Command{Kind: domain.CmdFinishAttempt, Mission: "m_1", Attempt: "r_1", Fence: fence, Outcome: "wait", WaitKey: "job_1"})
 	ok(t, st, ctx, "host", "wake", domain.Command{Kind: domain.CmdWake, Mission: "m_1", Token: "job_1"})
 	ok(t, st, ctx, "fabd", "rec", domain.Command{Kind: domain.CmdReconcileAttempt, Mission: "m_1", Attempt: "r_1", Fence: fence, Result: "VERIFIED"})
@@ -634,7 +634,7 @@ func TestEffectOccurrencesStore(t *testing.T) {
 	if _, err := st.Execute(ctx, "host", "c2-early", reordered); !errors.Is(err, domain.ErrDuplicate) {
 		t.Fatalf("identical request while DISPATCHED: want ErrDuplicate, got %v", err)
 	}
-	ok(t, st, ctx, "fabd", "res1", domain.Command{Kind: domain.CmdResolveEffect, Mission: "m_1", Effect: first.Events[0].Effect, Result: "CONFIRMED"})
+	ok(t, st, ctx, "fabd", "res1", domain.Command{Kind: domain.CmdResolveEffect, Mission: "m_1", Effect: first.Events[0].Effect, Submission: 1, Result: "CONFIRMED"})
 	second := ok(t, st, ctx, "host", "c2", reordered)
 	if first.Events[0].Occurrence != 1 || second.Events[0].Occurrence != 2 || first.Events[0].RequestSHA != second.Events[0].RequestSHA {
 		t.Fatalf("occurrences: %+v / %+v", first.Events[0], second.Events[0])

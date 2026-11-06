@@ -1594,5 +1594,44 @@
     "string(Dispatched)); err"
    ]
   ]
+ },
+ {
+  "id": "M122_unknown_fails_definite",
+  "invariant": "effect_resolution",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestUnknownCannotFailDefiniteWithoutReadback",
+  "edits": [
+   [
+    "domain.EffectUnknown:    {domain.EffectConfirmed, domain.EffectNotApplied, domain.EffectQuarantined},",
+    "domain.EffectUnknown:    {domain.EffectConfirmed, domain.EffectNotApplied, domain.EffectQuarantined, domain.EffectFailedDefinite},"
+   ]
+  ]
+ },
+ {
+  "id": "M123_dispatched_not_applied",
+  "invariant": "effect_resolution",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestNotAppliedNeedsUnknownFirst",
+  "edits": [
+   [
+    "domain.EffectDispatched: {domain.EffectConfirmed, domain.EffectFailedDefinite, domain.EffectQuarantined},",
+    "domain.EffectDispatched: {domain.EffectConfirmed, domain.EffectFailedDefinite, domain.EffectQuarantined, domain.EffectNotApplied},"
+   ]
+  ]
+ },
+ {
+  "id": "M124_result_unbound_to_submission",
+  "invariant": "effect_resolution",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestLateResultForEarlierSubmissionIsRefused",
+  "edits": [
+   [
+    "\tif cmd.Submission != f.Submissions {\n",
+    "\tif cmd.Submission < 0 {\n"
+   ]
+  ]
  }
 ]
