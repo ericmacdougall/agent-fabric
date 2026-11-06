@@ -100,3 +100,18 @@ func TestConcurrentRunOnceHasSingleLaunchOwner(t *testing.T) {
 		t.Fatalf("%d physical starts for one attempt, want 1 (a replayed START launched)", got)
 	}
 }
+
+// S2: ACK_START is durable before the physical start, so the pre-launch
+// ownership boundary is recorded first and a start never precedes it.
+func TestAckStartPersistedBeforeLaunch(t *testing.T) {
+	st, ln, cfg := ownerSetup(t, "m_own2")
+	s := New(st, cfg, ln)
+	if err := s.runOnce(context.Background(), "m_own2"); err != nil {
+		t.Fatal(err)
+	}
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+	if len(ln.stateAt) != 1 || ln.stateAt[0] != string(domain.AttemptRunning) {
+		t.Fatalf("attempt state seen by Start: %v, want [%s] (ACK must commit before the launch)", ln.stateAt, domain.AttemptRunning)
+	}
+}

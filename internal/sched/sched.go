@@ -308,6 +308,11 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "launch refused: "+err.Error())
 	}
 	env = append(env, "FAB_RUN_DIR="+runDir, "FAB_WORKTREE="+worktree, "FABRIC_DSN="+os.Getenv("FABRIC_DSN"), "FABRIC_HOME="+filepath.Join(runDir, "fabric-home"))
+	// S2: ACK_START commits before any runner bytes, so the pre-launch
+	// ownership boundary is durable first. A failed ACK launches nothing.
+	if _, err := s.st.Execute(ctx, "fabd", domain.CommandID("ack:"+string(attempt)), domain.Command{Kind: domain.CmdAckStart, Mission: mission, Attempt: attempt, Fence: fence}); err != nil {
+		return err
+	}
 	out, err := os.Create(filepath.Join(runDir, "stream.jsonl"))
 	if err != nil {
 		return err
@@ -317,9 +322,6 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	if err != nil {
 		out.Close()
 		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "start failed: "+err.Error())
-	}
-	if _, err := s.st.Execute(ctx, "fabd", domain.CommandID("ack:"+string(attempt)), domain.Command{Kind: domain.CmdAckStart, Mission: mission, Attempt: attempt, Fence: fence}); err != nil {
-		return err
 	}
 	// The worker runs while the loop keeps serving its job requests and
 	// wakes; its end is settled from the stream when it exits.

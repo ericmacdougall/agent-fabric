@@ -798,5 +798,18 @@
     "\tif false && resp.Replayed {\n\t\treturn nil\n\t}\n\tfence := resp.Events[0].Fence"
    ]
   ]
+ },
+ {
+  "id": "M62_no_ack_before_start",
+  "invariant": "ack_before_launch",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestAckStartPersistedBeforeLaunch",
+  "edits": [
+   [
+    "\tif _, err := s.st.Execute(ctx, \"fabd\", domain.CommandID(\"ack:\"+string(attempt)), domain.Command{Kind: domain.CmdAckStart, Mission: mission, Attempt: attempt, Fence: fence}); err != nil {\n\t\treturn err\n\t}\n",
+    ""
+   ]
+  ]
  }
 ]
