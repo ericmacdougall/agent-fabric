@@ -305,5 +305,70 @@
     "func ValidSource(s string) bool { return true }"
    ]
   ]
+ },
+ {
+  "id": "M24_ladder_infra_counts",
+  "invariant": "ladder_infra_never_counts_r10",
+  "pkg": "./internal/ladder",
+  "file": "internal/ladder/ladder.go",
+  "expect": "TestInfraNeverCounts",
+  "edits": [
+   [
+    "\t\tcase Infra:\n\t\t\tcontinue\n",
+    "\t\tcase Infra:\n\t\t\ts.Failures++\n"
+   ]
+  ]
+ },
+ {
+  "id": "M25_projection_cap_removed",
+  "invariant": "projection_under_cap_ac18",
+  "pkg": "./internal/projection",
+  "file": "internal/projection/projection.go",
+  "expect": "TestLongTrajectoryStaysUnderCap",
+  "edits": [
+   [
+    "\t\tif p.Tokens+t > capTokens {\n\t\t\tp.Dropped = i + 1\n\t\t\tbreak\n\t\t}\n",
+    "\t\tif false {\n\t\t\tp.Dropped = i + 1\n\t\t\tbreak\n\t\t}\n"
+   ]
+  ]
+ },
+ {
+  "id": "M26_broker_retry_during_unknown",
+  "invariant": "unknown_retry_blocked",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestPostCommitLossReconcilesToConfirmed",
+  "edits": [
+   [
+    "\tcase Unknown, Reconciling:\n\t\treturn Effect{}, fmt.Errorf(\"%w: effect %s\", domain.ErrUnknownUnresolved, id)\n\tcase FailedDefinite, NotApplied:",
+    "\tcase FailedDefinite, NotApplied, Unknown, Reconciling:"
+   ]
+  ]
+ },
+ {
+  "id": "M27_broker_approval_hash_unchecked",
+  "invariant": "approval_binds_request_hash_ac17",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestApprovalBindsRequestHash",
+  "edits": [
+   [
+    "WHERE id = $1 AND state = $5 AND request_sha = $3`, id, string(Approved), requestSHA, by, string(ApprovalRequired))",
+    "WHERE id = $1 AND state = $5`, id, string(Approved), requestSHA, by, string(ApprovalRequired))"
+   ]
+  ]
+ },
+ {
+  "id": "M28_broker_subject_index_ignored",
+  "invariant": "one_live_effect_per_subject",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0003_effects.sql",
+  "expect": "TestStaleFenceAndSubjectBusy",
+  "edits": [
+   [
+    "CREATE UNIQUE INDEX effects_live_subject_idx ON effects (subject)\n    WHERE state IN ('DISPATCHED', 'UNKNOWN', 'RECONCILING');",
+    "CREATE INDEX effects_live_subject_idx ON effects (subject);"
+   ]
+  ]
  }
 ]
