@@ -62,6 +62,9 @@ type Scheduler struct {
 	st  *store.Store
 	cfg Config
 	ln  Launcher
+	// afterRead is a test barrier between reading the mission and starting
+	// its attempt (owner_test.go); nil in production.
+	afterRead func()
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired int
 }
@@ -258,6 +261,9 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		return err
 	}
 	attempt := domain.AttemptID(fmt.Sprintf("r_%s_%d", strings.TrimPrefix(string(mission), "m_"), m.Version.AttemptFence+1))
+	if s.afterRead != nil {
+		s.afterRead()
+	}
 	resp, err := s.st.Execute(ctx, "fabd", domain.CommandID("start:"+string(attempt)), domain.Command{Kind: domain.CmdStartAttempt, Mission: mission, Attempt: attempt, Host: s.cfg.Host, Role: "writer"})
 	if err != nil {
 		var ref *store.Refusal
@@ -265,6 +271,11 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 			return nil // someone else moved the mission; the next tick sees the new state
 		}
 		return err
+	}
+	// S1: a replayed START means another scheduler (or an earlier call of
+	// this one) executed it and owns the launch. Only the executor launches.
+	if resp.Replayed {
+		return nil
 	}
 	fence := resp.Events[0].Fence
 	s.Launched++

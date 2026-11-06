@@ -785,5 +785,18 @@
     "        IF false THEN"
    ]
   ]
+ },
+ {
+  "id": "M61_replayed_start_owns_launch",
+  "invariant": "one_launch_owner_per_attempt",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestConcurrentRunOnceHasSingleLaunchOwner",
+  "edits": [
+   [
+    "\tif resp.Replayed {\n\t\treturn nil\n\t}\n\tfence := resp.Events[0].Fence",
+    "\tif false && resp.Replayed {\n\t\treturn nil\n\t}\n\tfence := resp.Events[0].Fence"
+   ]
+  ]
  }
 ]
