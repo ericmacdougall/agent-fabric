@@ -203,6 +203,14 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	if _, err := domain.ParseMissionID(string(cmd.Mission)); err != nil {
 		return Response{}, err
 	}
+	// F1 (R25): bound the request body before anything is stored, so an
+	// oversized request under a stale fence cannot land in stale_observations.
+	if len(cmd.Request) > domain.MaxRequestBytes {
+		return Response{}, fmt.Errorf("%w: request larger than %d bytes", domain.ErrInvalidTransition, domain.MaxRequestBytes)
+	}
+	if len(cmd.Request) > 0 && !json.Valid(cmd.Request) {
+		return Response{}, fmt.Errorf("%w: request is not valid JSON", domain.ErrInvalidTransition)
+	}
 	hash := cmd.RequestHash()
 
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})

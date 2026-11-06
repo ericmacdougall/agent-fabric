@@ -253,5 +253,57 @@
     "\t\tif evd.Vacuous && false {\n\t\t\treturn fmt.Sprintf(\"%s cites %s, a vacuous receipt"
    ]
   ]
+ },
+ {
+  "id": "M20_f1_size_guard_removed",
+  "invariant": "bounded_inputs_r25",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestOversizedRequestNotStored",
+  "edits": [
+   [
+    "if len(cmd.Request) > domain.MaxRequestBytes {\n\t\treturn Response{}, fmt.Errorf(\"%w: request larger than %d bytes\", domain.ErrInvalidTransition, domain.MaxRequestBytes)",
+    "if false {\n\t\treturn Response{}, fmt.Errorf(\"%w: request larger than %d bytes\", domain.ErrInvalidTransition, domain.MaxRequestBytes)"
+   ]
+  ]
+ },
+ {
+  "id": "M21_grant_without_model_launches",
+  "invariant": "model_only_from_policy_r23",
+  "pkg": "./internal/provider/claude",
+  "file": "internal/host/grant.go",
+  "expect": "TestArgvFromGrantOnly",
+  "edits": [
+   [
+    "if strings.TrimSpace(g.Model) == \"\" {",
+    "if false {"
+   ]
+  ]
+ },
+ {
+  "id": "M22_abandoned_counted_as_checkpoint",
+  "invariant": "abandoned_run_detection_ac3",
+  "pkg": "./internal/provider/claude",
+  "file": "internal/provider/claude/stream.go",
+  "expect": "TestParseE1Fixture",
+  "edits": [
+   [
+    "case expectStructured && len(e.StructuredOutput) == 0:",
+    "case false:"
+   ]
+  ]
+ },
+ {
+  "id": "M23_unsourced_ask_accepted",
+  "invariant": "ask_needs_source_r12",
+  "pkg": "./internal/store",
+  "file": "internal/store/catalog.go",
+  "expect": "TestCatalogAndAsks",
+  "edits": [
+   [
+    "func ValidSource(s string) bool { return sourceGrammar.MatchString(s) }",
+    "func ValidSource(s string) bool { return true }"
+   ]
+  ]
  }
 ]

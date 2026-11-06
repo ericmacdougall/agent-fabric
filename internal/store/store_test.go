@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math/rand"
 	"net/url"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -122,8 +122,9 @@ func TestMigrateIdempotent(t *testing.T) {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("second migrate: %v", err)
 	}
-	if n := count(t, st, ctx, "SELECT count(*) FROM fabric_schema"); n != 1 {
-		t.Fatalf("schema rows = %d, want 1", n)
+	names, _ := fs.Glob(migrationFS, "migrations/*.sql")
+	if n := count(t, st, ctx, "SELECT count(*) FROM fabric_schema"); n != len(names) || n < 2 {
+		t.Fatalf("schema rows = %d, want %d embedded migrations", n, len(names))
 	}
 }
 
@@ -601,5 +602,83 @@ func TestEffectOccurrencesStore(t *testing.T) {
 	}
 }
 
-// Keep strings imported for quoteIdent's callers in this file.
-var _ = strings.ToLower
+// F1 (R25): an oversized request is refused at the door, even under a stale
+// fence, and nothing is stored.
+func TestOversizedRequestNotStored(t *testing.T) {
+	st, ctx := openTest(t)
+	mk(t, st, ctx, "m_1")
+	ok(t, st, ctx, "chat", "admit", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_1"})
+	fence := startAttempt(t, st, ctx, "m_1", "r_1")
+	pad := make([]byte, domain.MaxRequestBytes)
+	for i := range pad {
+		pad[i] = 'x'
+	}
+	big := append(append([]byte(`{"pad":"`), pad...), []byte(`"}`)...) // valid JSON, over the cap
+	_, err := st.Execute(ctx, "host", "big", domain.Command{Kind: domain.CmdSubmitEffect, Mission: "m_1", Attempt: "r_1", Fence: fence - 1, EffectKind: "push", Request: big})
+	if err == nil || errors.Is(err, domain.ErrStaleFence) {
+		t.Fatalf("oversized stale request: want a size refusal before the fence check, got %v", err)
+	}
+	_, err = st.Execute(ctx, "host", "junk", domain.Command{Kind: domain.CmdSubmitEffect, Mission: "m_1", Attempt: "r_1", Fence: fence - 1, EffectKind: "push", Request: json.RawMessage(`{not json`)})
+	if err == nil || errors.Is(err, domain.ErrStaleFence) {
+		t.Fatalf("invalid-JSON stale request: want a refusal before the fence check, got %v", err)
+	}
+	if n := count(t, st, ctx, "SELECT count(*) FROM stale_observations") + count(t, st, ctx, "SELECT count(*) FROM commands WHERE command_id IN ('big', 'junk')"); n != 0 {
+		t.Fatalf("refused requests left %d rows", n)
+	}
+}
+
+// Catalog: mission specs are idempotent and ordered; asks need a grammatical
+// source (AC-10) and a kind that exists (R8: no chores).
+func TestCatalogAndAsks(t *testing.T) {
+	st, ctx := openTest(t)
+	specs := []MissionSpec{
+		{ID: "m_b", Name: "second", Ticket: "GoodQA goodqa#2", Priority: 20, Source: "file:/x/active-slots.json"},
+		{ID: "m_a", Name: "first", Ticket: "GoodQA goodqa#1", Priority: 10, Source: "inferred: from the queue file -- test"},
+	}
+	for _, s := range specs {
+		if err := st.CreateMissionSpec(ctx, s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	again := specs[0]
+	again.Name = "renamed"
+	if err := st.CreateMissionSpec(ctx, again); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateMissionSpec(ctx, MissionSpec{ID: "m_c", Ticket: "GoodQA goodqa#3", Source: "agent said so"}); err == nil {
+		t.Fatal("mission with a non-grammatical source accepted (R12)")
+	}
+	if err := st.CreateMissionSpec(ctx, MissionSpec{ID: "m_d", Source: "file:/x"}); err == nil {
+		t.Fatal("mission without a ticket accepted (R5)")
+	}
+	ok(t, st, ctx, "chat", "admit-b", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_b"})
+	rows, err := st.ListMissions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].ID != "m_b" || rows[0].Name != "second" || rows[1].ID != "m_a" {
+		t.Fatalf("order/idempotency: %+v", rows)
+	}
+	bad := []Ask{
+		{ID: "a_1", Kind: "decision", Question: "q", Source: ""},
+		{ID: "a_2", Kind: "decision", Question: "q", Source: "user: the agent message said yes"},
+		{ID: "a_3", Kind: "chore", Question: "q", Source: "file:/x"},
+	}
+	for _, a := range bad {
+		if err := st.CreateAsk(ctx, a); err == nil {
+			t.Fatalf("ask %s accepted: %+v", a.ID, a)
+		}
+	}
+	good := Ask{ID: "a_ok", Mission: "m_a", Kind: "decision", Question: "which host?", Options: []string{"t2-dev", "mac"}, Recommended: "t2-dev",
+		Source: "user:baab765b-d85c-46b4-b7b9-588eb912c770/da6b7254-8b81-4ed4-841c-31f79a4a4887 \"lets make a harness\""}
+	if err := st.CreateAsk(ctx, good); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateAsk(ctx, good); err != nil {
+		t.Fatalf("second create should be a no-op: %v", err)
+	}
+	asks, err := st.ListAsks(ctx, "open")
+	if err != nil || len(asks) != 1 || asks[0].Options[1] != "mac" || asks[0].Mission != "m_a" {
+		t.Fatalf("asks: %+v %v", asks, err)
+	}
+}
