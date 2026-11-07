@@ -57,7 +57,7 @@ func goodqaExecutor() (*effects.GoodQA, error) {
 // effectMain:
 //
 //	fab effect comment --mission M --attempt R --fence F --issue-id UUID --ticket goodqa#N --body TEXT --key K [--approve]
-//	fab effect reconcile --id E
+//	fab effect reconcile --id E   (app role: readback is not a runner step, 0018)
 //	fab effect show --id E
 func effectMain(args []string) error {
 	if len(args) == 0 {

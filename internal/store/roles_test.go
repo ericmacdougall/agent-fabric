@@ -95,6 +95,27 @@ func TestRolesLeastPrivilege(t *testing.T) {
 	if sqlCode(err) != "42501" {
 		t.Fatalf("the runner role wrote a pre-launch abandonment: %v", err)
 	}
+	ok(t, app, ctx, "fabd", "ack-rl2", domain.Command{Kind: domain.CmdAckStart, Mission: "m_rl", Attempt: "r_rl_2", Fence: fence})
+	mk(t, app, ctx, "m_idle")
+	// Red-team J4 on eef7ca7: a runner raises open asks for a running
+	// mission only; answers are the app role's.
+	if _, err := runner.pool.Exec(ctx, `INSERT INTO asks (id, mission_id, kind, question, source) VALUES ('a_rl', 'm_rl', 'permission', 'q', 'GoodQA goodqa#14922')`); err != nil {
+		t.Fatalf("control: the runner cannot raise an ask: %v", err)
+	}
+	for _, q := range []string{
+		`INSERT INTO asks (id, mission_id, kind, question, source, state, answer, answered_by, answered_at, answer_source) VALUES ('a_rl2', 'm_rl', 'permission', 'q', 's', 'answered', 'yes', 'eric', now(), 'forged')`,
+		`INSERT INTO asks (id, mission_id, kind, question, source, state, withdrawn_reason) VALUES ('a_rl3', 'm_rl', 'permission', 'q', 's', 'withdrawn', 'x')`,
+		`INSERT INTO asks (id, mission_id, kind, question, source) VALUES ('a_rl4', 'm_idle', 'permission', 'q', 's')`,
+		`INSERT INTO asks (id, mission_id, kind, question, source) VALUES ('a_rl5', NULL, 'permission', 'q', 's')`,
+		`UPDATE asks SET state = 'answered', answer = 'yes', answered_by = 'eric', answered_at = now(), answer_source = 'forged' WHERE id = 'a_rl'`,
+		// Nit on eef7ca7: jobs only for the runner's own running attempt.
+		`INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state) VALUES ('j_rl9', 'm_rl', 'r_rl_1', 1, '[]', '/x', 'REQUESTED')`,
+		`INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state) VALUES ('j_rl8', 'm_idle', 'r_rl_2', 2, '[]', '/x', 'REQUESTED')`,
+	} {
+		if _, err := runner.pool.Exec(ctx, q); sqlCode(err) != "42501" {
+			t.Errorf("runner: %q gave %v, want 42501", q, err)
+		}
+	}
 	// The runner's own write paths still work: a job request and an ask.
 	if _, err := runner.pool.Exec(ctx, `INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state) VALUES ('j_rl', 'm_rl', 'r_rl_2', $1, '[]', '/x', 'REQUESTED')`, fence); err != nil {
 		t.Fatalf("control: the runner cannot request a job: %v", err)
@@ -135,6 +156,11 @@ func TestRunnerCannotApproveEffects(t *testing.T) {
 	r := testRoles(t, owner, ctx)
 	runner := openAs(t, ctx, r.Runner())
 	mk(t, owner, ctx, "m_ap")
+	ok(t, owner, ctx, "chat", "admit-ap", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_ap"})
+	if f := startAttempt(t, owner, ctx, "m_ap", "r_ap_1"); f != 1 {
+		t.Fatalf("fence %d, want 1", f)
+	}
+	ok(t, owner, ctx, "fabd", "ack-ap", domain.Command{Kind: domain.CmdAckStart, Mission: "m_ap", Attempt: "r_ap_1", Fence: 1})
 	if _, err := owner.pool.Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state)
 		VALUES ('e_ap', 'm_ap', 'r_ap_1', 1, 'comment', 's', 'k_ap', '{}', 'sha', 'APPROVAL_REQUIRED')`); err != nil {
 		t.Fatal(err)

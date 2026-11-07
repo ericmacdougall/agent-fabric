@@ -53,6 +53,11 @@ production readiness.
   database directly until the runner-role restrictions (migration 0017,
   `fab db roles`) pass independent review. Runners must connect as the
   runner role (`FABRIC_RUNNER_DSN`), never as the app or owner role.
+  Since 0018 a runner may only submit, dispatch, settle and retry effects
+  for a running attempt, request jobs for one, and raise open asks; approval,
+  effect readback and answers need the app role. The runner role is shared
+  by every runner on a host, can read every table, and settles its own
+  dispatches, so a runner that forges a transport receipt is believed.
 - Store tests need a disposable PostgreSQL 16 (`FABRIC_TEST_DSN`); the
   process-signalling controls are opt-in (`FABRIC_HOST_CONTROLS=1`).
 

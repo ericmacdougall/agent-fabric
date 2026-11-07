@@ -2482,5 +2482,113 @@
     "SELECT value INTO r FROM fabric_settings"
    ]
   ]
+ },
+ {
+  "id": "M190_effects_any_transition",
+  "invariant": "roles",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "expect": "TestRunnerRoleBrokerFlows",
+  "edits": [
+   [
+    "        IF OLD.state = 'DISPATCHED' AND NEW.state IN ('CONFIRMED', 'FAILED_DEFINITE', 'UNKNOWN') AND NEW.dispatches = OLD.dispatches THEN",
+    "        IF true THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M191_dispatch_count_free",
+  "invariant": "roles",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "expect": "TestRunnerRoleBrokerFlows",
+  "edits": [
+   [
+    "AND NEW.state = 'DISPATCHED' AND NEW.dispatches = OLD.dispatches + 1",
+    "AND NEW.state = 'DISPATCHED' AND NEW.dispatches > OLD.dispatches"
+   ]
+  ]
+ },
+ {
+  "id": "M192_retry_ignores_approval",
+  "invariant": "roles",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "expect": "TestRunnerRoleBrokerFlows",
+  "edits": [
+   [
+    "        IF OLD.state IN ('FAILED_DEFINITE', 'NOT_APPLIED')\n",
+    "        IF OLD.state IN ('FAILED_DEFINITE', 'NOT_APPLIED', 'APPROVAL_REQUIRED')\n"
+   ],
+   [
+    "AND NEW.state = (CASE WHEN OLD.approval_sha IS NULL THEN 'INTENT' ELSE 'APPROVED' END)",
+    "AND NEW.state IN ('INTENT', 'APPROVED')"
+   ]
+  ]
+ },
+ {
+  "id": "M193_precondition_from_approval_required",
+  "invariant": "roles",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "expect": "TestRunnerRoleBrokerFlows",
+  "edits": [
+   [
+    "        IF OLD.state IN ('INTENT', 'APPROVED') AND NEW.state = 'FAILED_DEFINITE'",
+    "        IF OLD.state IN ('INTENT', 'APPROVED', 'APPROVAL_REQUIRED', 'UNKNOWN') AND NEW.state IN ('FAILED_DEFINITE', 'NOT_APPLIED')"
+   ]
+  ]
+ },
+ {
+  "id": "M194_effect_insert_any_run",
+  "invariant": "roles",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "expect": "TestRunnerRoleBrokerFlows",
+  "edits": [
+   [
+    "           AND NEW.dispatches = 0 AND NEW.receipt IS NULL\n           AND public.fabric_runner_run_live(NEW.mission_id, NEW.attempt_id, NEW.fence) THEN",
+    "           AND NEW.dispatches = 0 AND NEW.receipt IS NULL THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M195_asks_any_insert",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "expect": "TestRolesLeastPrivilege",
+  "edits": [
+   [
+    "    IF NEW.state = 'open' AND NEW.answer IS NULL",
+    "    IF NEW.answer IS NULL OR true OR NEW.answer IS NULL"
+   ]
+  ]
+ },
+ {
+  "id": "M196_asks_any_mission",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "expect": "TestRolesLeastPrivilege",
+  "edits": [
+   [
+    "AND EXISTS (SELECT 1 FROM public.attempts WHERE mission_id = NEW.mission_id AND state = 'RUNNING') THEN",
+    "THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M197_jobs_any_run",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "expect": "TestRolesLeastPrivilege",
+  "edits": [
+   [
+    "NEW.unit = ''\n           AND public.fabric_runner_run_live(NEW.mission_id, NEW.attempt_id, NEW.fence) THEN",
+    "NEW.unit = '' THEN"
+   ]
+  ]
  }
 ]
