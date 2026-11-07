@@ -97,7 +97,7 @@ func serveMetricsMain(args []string) error {
 	}
 	defer st.Close()
 	o := metricsOptions(st, *timeout)
-	srv := metrics.Server(*listen, metrics.Handler(func(c context.Context) (*metrics.Snapshot, error) {
+	srv := metrics.Server(*listen, metrics.Handler(*listen, func(c context.Context) (*metrics.Snapshot, error) {
 		return metrics.Collect(c, st.Pool(), o)
 	}))
 	errc := make(chan error, 1)

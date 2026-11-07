@@ -4030,11 +4030,50 @@
   "invariant": "metrics",
   "pkg": "./internal/metrics",
   "file": "internal/metrics/metrics.go",
-  "expect": "TestCollectDoesNotBlockDispatch",
+  "expect": "TestCollectIgnoresRowLocks",
   "edits": [
    [
     "`SELECT count(*) FROM effects WHERE state = 'DISPATCHED'`",
     "`SELECT count(*) FROM (SELECT 1 FROM effects WHERE state = 'DISPATCHED' FOR UPDATE) x`"
+   ]
+  ]
+ },
+ {
+  "id": "M314_metrics_any_host",
+  "invariant": "metrics",
+  "pkg": "./internal/metrics",
+  "file": "internal/metrics/http.go",
+  "expect": "TestHandler",
+  "edits": [
+   [
+    "\treturn net.ParseIP(h) != nil\n",
+    "\treturn h != \"\" || true\n"
+   ]
+  ]
+ },
+ {
+  "id": "M315_metrics_origin_ignored",
+  "invariant": "metrics",
+  "pkg": "./internal/metrics",
+  "file": "internal/metrics/http.go",
+  "expect": "TestHandler",
+  "edits": [
+   [
+    "if !directHost(r.Host, listen) || r.Header.Get(\"Origin\") != \"\" {",
+    "if !directHost(r.Host, listen) {"
+   ]
+  ]
+ },
+ {
+  "id": "M316_metrics_timeout_unclamped",
+  "invariant": "metrics",
+  "pkg": "./internal/metrics",
+  "file": "internal/metrics/metrics.go",
+  "expect": "TestCollectLockTimeout",
+  "edits": [
+   [
+    "\tif timeout < time.Millisecond {\n\t\ttimeout = time.Millisecond\n\t}\n",
+    ""
    ]
   ]
  }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -40,9 +41,16 @@ func CheckListen(addr string, allowRemote bool) error {
 // a scrape that arrives while one is running gets 503 rather than another
 // database connection. Collection errors are logged, never returned to the
 // client.
-func Handler(collect func(context.Context) (*Snapshot, error)) http.Handler {
+func Handler(listen string, collect func(context.Context) (*Snapshot, error)) http.Handler {
 	busy := make(chan struct{}, 1)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Review N1 on 4e3f8b1: against DNS rebinding, serve only a request
+		// addressed to a literal IP (or exactly the listen address) that a
+		// browser has not marked as cross-site with Origin.
+		if !directHost(r.Host, listen) || r.Header.Get("Origin") != "" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		if r.URL.Path != "/metrics" {
 			http.NotFound(w, r)
 			return
@@ -76,6 +84,24 @@ func Handler(collect func(context.Context) (*Snapshot, error)) http.Handler {
 		}
 		w.Write(b.Bytes()) //nolint:errcheck // client went away
 	})
+}
+
+// directHost reports whether a request's Host header names a literal IP
+// (with or without a port) or is exactly the listen address. A host name,
+// which a rebinding attacker controls, is refused.
+func directHost(host, listen string) bool {
+	if host == "" {
+		return false
+	}
+	if host == listen {
+		return true
+	}
+	h := host
+	if hh, _, err := net.SplitHostPort(host); err == nil {
+		h = hh
+	}
+	h = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
+	return net.ParseIP(h) != nil
 }
 
 // Server returns an http.Server with conservative timeouts for Handler.

@@ -67,11 +67,17 @@ production readiness.
 listens on `127.0.0.1:9464` by default and refuses any address that is not
 a literal loopback IP unless `--allow-remote` is passed, because there is no
 auth. It has no write routes, and it runs one collection at a time; a
-scrape that arrives during one gets 503.
+scrape that arrives during one gets 503. Against DNS rebinding it answers
+403 to a request whose Host is a name rather than a literal IP or the listen
+address, and to any request that carries an Origin header, so a scraper
+must address it by IP.
 
 Every value comes from the database, in one read-only transaction with a
 statement and lock timeout (`--timeout`, default 2s). The collector takes no
-row locks, so it never delays a dispatch. Label values are ids and enum
+row locks, so a dispatch never waits on it directly. One indirect wait
+remains: while a migration's exclusive lock request is queued behind a
+collection, queries behind that request wait too, for at most the timeout
+plus 1s, so keep `--timeout` short. Label values are ids and enum
 values only. Anything else becomes `other`, and ticket text, questions,
 subjects, paths and requests are never read. Live per-process counters (a
 broker's executor overruns, dispatch slots in use) arrive later, with an

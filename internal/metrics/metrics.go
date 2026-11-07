@@ -74,21 +74,25 @@ func Label(v string) string {
 	return "other"
 }
 
-// afterQueries is a test cutpoint: it runs inside the collection
-// transaction after every query, before commit.
-var afterQueries func()
-
 // liveEffectStates are the effect states whose oldest age is exported.
 var liveEffectStates = []string{"QUARANTINED", "RECONCILING", "UNKNOWN"}
 
 // Collect reads one snapshot in a single read-only transaction whose
-// statement_timeout and lock_timeout are both Options.Timeout, so it can
-// neither wait long on a lock nor hold one: it takes no row locks, and a
-// dispatch never waits for it.
+// statement_timeout and lock_timeout are both Options.Timeout. It takes no
+// row locks, and under MVCC a dispatch's row updates never wait for it. Its
+// table AccessShare locks can still sit ahead of a migration's ACCESS
+// EXCLUSIVE request, and queries queued behind that request (dispatch among
+// them) then wait for the collection to end: at most Timeout plus one
+// second, the client deadline (review N3 on 4e3f8b1). Keep Timeout short.
 func Collect(ctx context.Context, pool *pgxpool.Pool, o Options) (*Snapshot, error) {
 	timeout := o.Timeout
 	if timeout <= 0 {
 		timeout = DefaultTimeout
+	}
+	// Review N2 on 4e3f8b1: below 1 ms, SET statement_timeout = 0 would mean
+	// no limit.
+	if timeout < time.Millisecond {
+		timeout = time.Millisecond
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout+time.Second)
 	defer cancel()
@@ -151,7 +155,7 @@ func Collect(ctx context.Context, pool *pgxpool.Pool, o Options) (*Snapshot, err
 	add(gauge("fabric_dispatch_inflight", "Effects in DISPATCHED (a transport may be running).", float64(inflight)))
 	add(gauge("fabric_dispatch_overdue", "DISPATCHED effects past the transport deadline stamped at dispatch.", float64(overdue)))
 	if o.DispatchLimit > 0 {
-		add(gauge("fabric_dispatch_limit", "Configured concurrent effect dispatches per store.", float64(o.DispatchLimit)))
+		add(gauge("fabric_dispatch_limit", "Effect dispatch limit for a store with this process's pool settings (the dispatcher's may differ).", float64(o.DispatchLimit)))
 	}
 
 	add(c.grouped("fabric_sched_counter_total", "Durable scheduler counters (sched_counters).", "counter",
@@ -187,9 +191,6 @@ func Collect(ctx context.Context, pool *pgxpool.Pool, o Options) (*Snapshot, err
 
 	if c.err != nil {
 		return nil, fmt.Errorf("metrics: %w", c.err)
-	}
-	if afterQueries != nil {
-		afterQueries()
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("metrics: commit: %w", err)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"regexp"
@@ -192,10 +193,13 @@ func TestLabel(t *testing.T) {
 	}
 }
 
-// NEG (timeout): a collector facing a held row lock still returns at once
-// (it takes no row locks), and while a collection is open a dispatch-style
-// row update on effects is not blocked.
-func TestCollectDoesNotBlockDispatch(t *testing.T) {
+// A collector facing a held row lock returns at once with correct counts:
+// it reads a snapshot and takes no row locks (a FOR UPDATE in it is refused
+// by the read-only transaction, mutant M313). Under MVCC a plain reader never
+// blocks a dispatch's UPDATE; the remaining interaction, a migration's
+// ACCESS EXCLUSIVE request queued behind the collector, is bounded by the
+// collector's deadline (review N3 on 4e3f8b1; see Collect).
+func TestCollectIgnoresRowLocks(t *testing.T) {
 	pool := open(t)
 	seed(t, pool)
 	ctx := context.Background()
@@ -212,30 +216,6 @@ func TestCollectDoesNotBlockDispatch(t *testing.T) {
 	if d := time.Since(start); d > 400*time.Millisecond || sample(out, "fabric_dispatch_inflight") != "2" {
 		t.Fatalf("collect under a row lock took %s: %s", d, sample(out, "fabric_dispatch_inflight"))
 	}
-	holder.Rollback(ctx) //nolint:errcheck
-
-	paused, release := make(chan struct{}), make(chan struct{})
-	afterQueries = func() { close(paused); <-release }
-	defer func() { afterQueries = nil }()
-	done := make(chan error, 1)
-	go func() { _, err := Collect(ctx, pool, Options{Timeout: 5 * time.Second}); done <- err }()
-	<-paused
-	upd, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	tx, err := pool.Begin(upd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err1 := tx.Exec(upd, "SET LOCAL session_replication_role = replica")
-	_, err2 := tx.Exec(upd, `UPDATE effects SET dispatches = dispatches + 1, updated_at = now() WHERE id = 'e_3'`)
-	err3 := tx.Commit(upd)
-	close(release)
-	if err := errors.Join(err1, err2, err3); err != nil {
-		t.Fatalf("a dispatch update waited on an open collection: %v", err)
-	}
-	if err := <-done; err != nil {
-		t.Fatalf("collect: %v", err)
-	}
 }
 
 // NEG (timeout): under a table lock that blocks every reader, the
@@ -251,10 +231,14 @@ func TestCollectLockTimeout(t *testing.T) {
 	if _, err := holder.Exec(ctx, `LOCK TABLE effects IN ACCESS EXCLUSIVE MODE`); err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
-	_, err = Collect(ctx, pool, Options{Timeout: 200 * time.Millisecond})
-	if d := time.Since(start); err == nil || d > 900*time.Millisecond {
-		t.Fatalf("collect under an exclusive lock: %v after %s", err, d)
+	// Review N2 on 4e3f8b1: a sub-millisecond timeout must not become
+	// statement_timeout = 0 (no limit); it is clamped to 1 ms.
+	for _, timeout := range []time.Duration{200 * time.Millisecond, 500 * time.Microsecond, time.Nanosecond} {
+		start := time.Now()
+		_, err = Collect(ctx, pool, Options{Timeout: timeout})
+		if d := time.Since(start); err == nil || d > 900*time.Millisecond {
+			t.Fatalf("collect (timeout %s) under an exclusive lock: %v after %s", timeout, err, d)
+		}
 	}
 }
 
@@ -283,6 +267,7 @@ func TestCheckListen(t *testing.T) {
 }
 
 func TestHandler(t *testing.T) {
+	const listen = "127.0.0.1:9464"
 	ok := func(context.Context) (*Snapshot, error) {
 		return &Snapshot{Families: []Family{gauge("fabric_dispatch_inflight", "h", 2)}}, nil
 	}
@@ -290,24 +275,38 @@ func TestHandler(t *testing.T) {
 		return nil, errors.New("dial postgres://user:pw@db: refused")
 	}
 	for _, c := range []struct {
-		method, path string
-		collect      func(context.Context) (*Snapshot, error)
-		code         int
-		body         string
+		method, path, host, origin string
+		collect                    func(context.Context) (*Snapshot, error)
+		code                       int
+		body                       string
 	}{
-		{"GET", "/metrics", ok, 200, "fabric_dispatch_inflight 2\n"},
-		{"HEAD", "/metrics", ok, 200, ""},
-		{"POST", "/metrics", ok, 405, ""},
-		{"PUT", "/metrics", ok, 405, ""},
-		{"DELETE", "/metrics", ok, 405, ""},
-		{"GET", "/", ok, 404, ""},
-		{"GET", "/metrics/x", ok, 404, ""},
-		{"GET", "/metrics", fail, 503, ""},
+		{"GET", "/metrics", listen, "", ok, 200, "fabric_dispatch_inflight 2\n"},
+		{"GET", "/metrics", "127.0.0.1", "", ok, 200, "fabric_dispatch_inflight 2\n"},
+		{"GET", "/metrics", "[::1]:9464", "", ok, 200, ""},
+		{"HEAD", "/metrics", listen, "", ok, 200, ""},
+		{"POST", "/metrics", listen, "", ok, 405, ""},
+		{"PUT", "/metrics", listen, "", ok, 405, ""},
+		{"DELETE", "/metrics", listen, "", ok, 405, ""},
+		{"GET", "/", listen, "", ok, 404, ""},
+		{"GET", "/metrics/x", listen, "", ok, 404, ""},
+		{"GET", "/metrics", listen, "", fail, 503, ""},
+		// Review N1 on 4e3f8b1 (DNS rebinding): a host name, or any request a
+		// browser marks with Origin, is refused.
+		{"GET", "/metrics", "evil.example:9464", "", ok, 403, ""},
+		{"GET", "/metrics", "localhost:9464", "", ok, 403, ""},
+		{"GET", "/metrics", "", "", ok, 403, ""},
+		{"GET", "/metrics", listen, "http://evil.example", ok, 403, ""},
+		{"GET", "/metrics", listen, "null", ok, 403, ""},
 	} {
 		rec := httptest.NewRecorder()
-		Handler(c.collect).ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
+		req := httptest.NewRequest(c.method, c.path, nil)
+		req.Host = c.host
+		if c.origin != "" {
+			req.Header.Set("Origin", c.origin)
+		}
+		Handler(listen, c.collect).ServeHTTP(rec, req)
 		if rec.Code != c.code {
-			t.Errorf("%s %s: %d, want %d", c.method, c.path, rec.Code, c.code)
+			t.Errorf("%s %s host %q origin %q: %d, want %d", c.method, c.path, c.host, c.origin, rec.Code, c.code)
 		}
 		if c.body != "" && !strings.Contains(rec.Body.String(), c.body) {
 			t.Errorf("%s %s: body %q", c.method, c.path, rec.Body.String())
@@ -322,11 +321,12 @@ func TestHandler(t *testing.T) {
 	// One collection at a time.
 	in, out := make(chan struct{}), make(chan struct{})
 	slow := func(context.Context) (*Snapshot, error) { close(in); <-out; return &Snapshot{}, nil }
-	h := Handler(slow)
-	go h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/metrics", nil))
+	h := Handler(listen, slow)
+	get := func() *http.Request { r := httptest.NewRequest("GET", "/metrics", nil); r.Host = listen; return r }
+	go h.ServeHTTP(httptest.NewRecorder(), get())
 	<-in
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	h.ServeHTTP(rec, get())
 	close(out)
 	if rec.Code != 503 {
 		t.Errorf("concurrent scrape: %d, want 503", rec.Code)

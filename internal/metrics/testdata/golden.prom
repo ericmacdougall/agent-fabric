@@ -34,7 +34,7 @@ fabric_dispatch_inflight 2
 # HELP fabric_dispatch_overdue DISPATCHED effects past the transport deadline stamped at dispatch.
 # TYPE fabric_dispatch_overdue gauge
 fabric_dispatch_overdue 1
-# HELP fabric_dispatch_limit Configured concurrent effect dispatches per store.
+# HELP fabric_dispatch_limit Effect dispatch limit for a store with this process's pool settings (the dispatcher's may differ).
 # TYPE fabric_dispatch_limit gauge
 fabric_dispatch_limit 8
 # HELP fabric_sched_counter_total Durable scheduler counters (sched_counters).
