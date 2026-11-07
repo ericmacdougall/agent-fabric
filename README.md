@@ -179,11 +179,18 @@ names: `FAB_RUN`, `FAB_MISSION`, `FAB_ATTEMPT`, `FAB_FENCE`,
 `CLAUDE_CODE_DISABLE_CLAUDE_MDS`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`,
 `GOCACHE`, `GOMODCACHE` and `GOFLAGS` (`internal/host/env.go`). A launch
 that sets any other name is refused, so a proxy or locale variable the
-claude binary turns out to need is a reviewed code change. On Linux each
-set name is passed with `systemd-run -E NAME=VALUE`, each allow-listed name
-left unset with `-E NAME=` (so the manager's value is overridden), and
-`fab __sandbox --env-keep <names>` execs the worker with only the set
-names. The worker is a static fab (`CGO_ENABLED=0`, see Deploying).
+claude binary turns out to need is a reviewed code change. On Linux no
+value goes on a command line, where sudo and systemd-run would show it to
+every local account for the whole run (goodqa#15177). fabd writes the pairs
+to `<run dir>/.fab-env-<run>` (mode 0640, new file, never through a
+symlink), every allow-listed name is blanked with `systemd-run -E NAME=`
+(so the manager's value is overridden), and `fab __sandbox --env-keep
+<names> --env-file <file>` reads the file, checks that it names exactly
+those names, removes it and execs the worker with only those pairs. fabd
+removes the file after the run if the worker never read it. The run
+directory's group must include the worker account, as the setgid
+`/srv/fabric/work` tree gives it. The worker is a static fab
+(`CGO_ENABLED=0`, see Deploying).
 
 A claude-code launch always passes `--setting-sources ""`, so no user or
 project settings load. The `--settings` file may hold only `permissions`,
@@ -354,7 +361,10 @@ Go 1.22, `pgx/v5` and `x/sys` only.
    password files, so the app and runner roles are granted the new tables;
    without it the app role gets `permission denied` (SQLSTATE 42501).
    `fab db roles` applies everything in one transaction, so a failed run
-   changes nothing; rerun it after fixing the cause.
+   changes nothing; rerun it after fixing the cause. Since 0029, fabd
+   refuses to start a worker when the runner login holds any grant that
+   `fab db roles` does not give, so skipping this step after an upgrade
+   that changed the runner's grants stops every launch.
 5. Restart, then smoke test: `fab version` and `fab metrics` (exit 0, and
    `fabric_schema_level` is the newest migration).
 

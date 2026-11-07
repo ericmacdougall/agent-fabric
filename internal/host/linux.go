@@ -47,7 +47,8 @@ type Linux struct {
 	User string
 
 	mu   sync.Mutex
-	cmds map[string]*exec.Cmd
+	cmds     map[string]*exec.Cmd
+	envFiles map[string]string // unit -> environment file, removed after Wait
 }
 
 func (l *Linux) Name() string { return "linux-cgroup-landlock" }
@@ -86,11 +87,13 @@ func unitName(run string) string {
 	}, run) + ".service"
 }
 
-// startArgs is the systemd-run argument list of a worker. The environment
-// is exact (goodqa#15087 AC-6): each pair fabric sets is passed with -E,
-// and `fab __sandbox --env-keep` execs the worker with only those names,
-// so nothing the worker user's systemd manager holds reaches it.
-func (l *Linux) startArgs(g Grant, unit string, argv, env []string) ([]string, error) {
+// startArgs is the systemd-run argument list of a worker and the pairs to
+// write to envFile. The environment is exact (goodqa#15087 AC-6) and off
+// the command line (goodqa#15177): every allow-listed name is blanked with
+// -E NAME=, so no value the worker user's systemd manager holds survives,
+// and `fab __sandbox --env-keep NAMES --env-file FILE` execs the worker
+// with exactly the pairs in the file. No value appears in any argument.
+func (l *Linux) startArgs(g Grant, unit, envFile string, argv, env []string) ([]string, []string, error) {
 	// --expand-environment=no: otherwise the manager substitutes $VAR,
 	// ${VAR} and $$ in every argv element (the prompt included) from the
 	// unit's full environment before __sandbox filters it (inspection
@@ -106,29 +109,17 @@ func (l *Linux) startArgs(g Grant, unit string, argv, env []string) ([]string, e
 	// Explicit environment only (DESIGN 3.7): never the host's.
 	pairs, names, err := WorkerEnv(append([]string{"FAB_RUN=" + g.Token, "HOME=" + os.Getenv("HOME"), "PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"}, env...))
 	if err != nil {
-		return nil, err
-	}
-	for _, e := range pairs {
-		args = append(args, "-E", e)
-	}
-	// An allow-listed name fabric does not set is overridden to empty, so the
-	// manager's value never reaches systemd-run's child; --env-keep then
-	// drops it.
-	set := map[string]bool{}
-	for _, n := range names {
-		set[n] = true
+		return nil, nil, err
 	}
 	for _, n := range WorkerEnvNames {
-		if !set[n] {
-			args = append(args, "-E", n+"=")
-		}
+		args = append(args, "-E", n+"=")
 	}
 	rw := []string{g.RunDir, os.TempDir()}
 	if g.Profile == "P1" {
 		rw = append(rw, g.Worktree) // review runs cannot write the worktree
 	}
 	rw = append(rw, l.ExtraRW...)
-	sandbox := []string{l.Self, "__sandbox", "--env-keep", strings.Join(names, ",")}
+	sandbox := []string{l.Self, "__sandbox", "--env-keep", strings.Join(names, ","), "--env-file", envFile}
 	for _, d := range l.ReadOnly {
 		sandbox = append(sandbox, "--ro", d)
 	}
@@ -144,8 +135,12 @@ func (l *Linux) startArgs(g Grant, unit string, argv, env []string) ([]string, e
 	sandbox = append(sandbox, "--")
 	args = append(args, "--")
 	args = append(args, sandbox...)
-	return append(args, argv...), nil
+	return append(args, argv...), pairs, nil
 }
+
+// envFile is where a run's environment waits for `fab __sandbox`: the run
+// directory, which the worker account reaches through its group.
+func envFile(g Grant) string { return filepath.Join(g.RunDir, ".fab-env-"+string(g.Run)) }
 
 // Start launches argv under `systemd-run --user --pipe --wait` so the host
 // owns the worker's stdio, wraps it in `fab __sandbox`, and resolves the
@@ -158,21 +153,30 @@ func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.F
 		return Handle{}, errors.New("linux profile: Self (fab binary) not set")
 	}
 	unit := unitName(string(g.Run))
-	args, err := l.startArgs(g, unit, argv, env)
+	ef := envFile(g)
+	args, pairs, err := l.startArgs(g, unit, ef, argv, env)
 	if err != nil {
+		return Handle{}, err
+	}
+	if err := WriteEnvFile(ef, pairs, l.User != ""); err != nil {
 		return Handle{}, err
 	}
 	cmd := l.asWorker("systemd-run", args...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.Stdin = nil
 	if err := cmd.Start(); err != nil {
+		os.Remove(ef)
 		return Handle{}, fmt.Errorf("systemd-run: %w", err)
 	}
 	l.mu.Lock()
 	if l.cmds == nil {
 		l.cmds = map[string]*exec.Cmd{}
 	}
+	if l.envFiles == nil {
+		l.envFiles = map[string]string{}
+	}
 	l.cmds[unit] = cmd
+	l.envFiles[unit] = ef
 	l.mu.Unlock()
 	// The unit's cgroup path is deterministic for a user unit, so inventory
 	// and stop never ask the bus; a unit that already finished has no
@@ -189,11 +193,15 @@ func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.F
 func (l *Linux) Wait(h Handle) (int, error) {
 	l.mu.Lock()
 	cmd := l.cmds[h.Unit]
+	ef := l.envFiles[h.Unit]
 	l.mu.Unlock()
 	if cmd == nil {
 		return -1, errors.New("unknown handle")
 	}
 	err := cmd.Wait()
+	if ef != "" {
+		os.Remove(ef) // normally already gone: __sandbox removes it on read
+	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return ee.ExitCode(), nil

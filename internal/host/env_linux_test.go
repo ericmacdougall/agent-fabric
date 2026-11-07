@@ -8,16 +8,19 @@ import (
 	"testing"
 )
 
-// goodqa#15087 AC-6 (a): every name fabric sets gets exactly one -E with its
-// final value (a caller pair replaces fabric's default), and --env-keep
-// lists exactly those names, so the worker sees nothing else. A variable
-// only in fabd's own environment gets no -E.
+// goodqa#15087 AC-6 (a), goodqa#15177: every name fabric sets appears once
+// in the environment-file pairs with its final value (a caller pair
+// replaces fabric's default), --env-keep lists exactly those names and
+// --env-file names the run's file, so the worker sees nothing else. Every
+// allow-listed name is blanked with an empty -E, so no value the manager
+// holds survives and no value is on the command line. A variable only in
+// fabd's own environment is in neither.
 func TestLinuxEnvOverrideAndKeep(t *testing.T) {
 	t.Setenv("FABRIC_SENTINEL_ENV", "planted")
 	t.Setenv("ANTHROPIC_API_KEY", "planted-key")
 	g := controlGrant(t.TempDir())
 	l := &Linux{Self: "/srv/fabric/bin/fab"}
-	args, err := l.startArgs(g, "fab-x.service", []string{"env"}, []string{"LANG=fabric-lang", "CLAUDE_CONFIG_DIR=/run/x/claude-config", "FAB_MISSION=m_1"})
+	args, pairs, err := l.startArgs(g, "fab-x.service", envFile(g), []string{"env"}, []string{"LANG=fabric-lang", "CLAUDE_CONFIG_DIR=/run/x/claude-config", "FAB_MISSION=m_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,43 +38,53 @@ func TestLinuxEnvOverrideAndKeep(t *testing.T) {
 	if !expandOff {
 		t.Fatalf("systemd-run args %q lack --expand-environment=no before the command", args)
 	}
-	want := map[string]string{"FAB_RUN": g.Token, "LANG": "fabric-lang", "CLAUDE_CONFIG_DIR": "/run/x/claude-config", "FAB_MISSION": "m_1"}
-	got := map[string][]string{}
-	var keep string
+	blank := map[string]int{}
+	var keep, file string
 	sawSandbox := false
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "-E" && i+1 < len(args) && !sawSandbox:
 			name, val, _ := strings.Cut(args[i+1], "=")
-			got[name] = append(got[name], val)
+			if val != "" {
+				t.Fatalf("-E %s carries a value on the command line", name)
+			}
+			blank[name]++
 			i++
 		case args[i] == "__sandbox":
 			sawSandbox = true
 		case args[i] == "--env-keep" && i+1 < len(args):
 			keep = args[i+1]
 			i++
+		case args[i] == "--env-file" && i+1 < len(args):
+			file = args[i+1]
+			i++
 		}
 	}
-	// Every allow-listed name fabric leaves unset is overridden to empty,
-	// so the manager's value cannot reach the sandbox; --env-keep (below)
-	// then drops it.
 	for _, n := range WorkerEnvNames {
-		if _, set := want[n]; set || n == "HOME" || n == "PATH" {
-			continue
+		if blank[n] != 1 {
+			t.Fatalf("-E %s= appears %d times, want exactly one blanking override", n, blank[n])
 		}
-		if len(got[n]) != 1 || got[n][0] != "" {
-			t.Fatalf("-E for unset allow-listed %s: %q, want exactly one empty override", n, got[n])
-		}
-		delete(got, n)
 	}
+	if len(blank) != len(WorkerEnvNames) {
+		t.Fatalf("%d names blanked, want the %d allow-listed ones", len(blank), len(WorkerEnvNames))
+	}
+	if file != envFile(g) {
+		t.Fatalf("--env-file %q, want %q", file, envFile(g))
+	}
+	got := map[string][]string{}
+	for _, p := range pairs {
+		name, val, _ := strings.Cut(p, "=")
+		got[name] = append(got[name], val)
+	}
+	want := map[string]string{"FAB_RUN": g.Token, "LANG": "fabric-lang", "CLAUDE_CONFIG_DIR": "/run/x/claude-config", "FAB_MISSION": "m_1"}
 	for n, v := range want {
 		if len(got[n]) != 1 || got[n][0] != v {
-			t.Fatalf("-E for %s: %q, want exactly one with the final value", n, got[n])
+			t.Fatalf("pair for %s: %q, want exactly one with the final value", n, got[n])
 		}
 	}
 	for _, n := range []string{"HOME", "PATH"} {
 		if len(got[n]) != 1 {
-			t.Fatalf("-E for %s appears %d times, want 1", n, len(got[n]))
+			t.Fatalf("pair for %s appears %d times, want 1", n, len(got[n]))
 		}
 	}
 	for _, n := range []string{"FABRIC_SENTINEL_ENV", "ANTHROPIC_API_KEY"} {
@@ -79,30 +92,26 @@ func TestLinuxEnvOverrideAndKeep(t *testing.T) {
 			t.Fatalf("fabd's own %s was passed to the worker", n)
 		}
 	}
-	var names []string
-	for n := range got {
-		names = append(names, n)
-	}
 	if keep == "" {
-		t.Fatal("no --env-keep: the worker would inherit the systemd manager's environment")
+		t.Fatal("no --env-keep: the worker environment is not named")
 	}
 	keepSet := map[string]bool{}
 	for _, n := range strings.Split(keep, ",") {
 		keepSet[n] = true
 	}
-	if len(keepSet) != len(names) {
-		t.Fatalf("--env-keep %q, want exactly the %d names given -E (%v)", keep, len(names), names)
+	if len(keepSet) != len(got) {
+		t.Fatalf("--env-keep %q, want exactly the %d names in the file", keep, len(got))
 	}
-	for _, n := range names {
+	for n := range got {
 		if !keepSet[n] {
 			t.Fatalf("--env-keep %q misses %s", keep, n)
 		}
 	}
-	if _, err := l.startArgs(g, "fab-x.service", []string{"env"}, []string{"NOT A NAME=x"}); err == nil {
+	if _, _, err := l.startArgs(g, "fab-x.service", envFile(g), []string{"env"}, []string{"NOT A NAME=x"}); err == nil {
 		t.Fatal("a malformed environment entry was accepted")
 	}
 	for _, e := range []string{"LD_PRELOAD=/x.so", "ANTHROPIC_API_KEY=k", "BASH_ENV=/x"} {
-		if _, err := l.startArgs(g, "fab-x.service", []string{"env"}, []string{e}); !errors.Is(err, ErrGrantInvalid) {
+		if _, _, err := l.startArgs(g, "fab-x.service", envFile(g), []string{"env"}, []string{e}); !errors.Is(err, ErrGrantInvalid) {
 			t.Fatalf("%s outside the allow-list: %v, want ErrGrantInvalid", e, err)
 		}
 	}

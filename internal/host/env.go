@@ -2,9 +2,12 @@ package host
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // envName is the shape of a variable name fabric sets for a worker. A
@@ -63,9 +66,57 @@ func WorkerEnv(pairs []string) (env, names []string, err error) {
 	return env, names, nil
 }
 
-// KeepEnv filters environ to the listed names: what `fab __sandbox
-// --env-keep` execs the worker with.
-func KeepEnv(environ []string, keep string) ([]string, error) {
+// maxEnvFile bounds a worker environment file.
+const maxEnvFile = 1 << 20
+
+// WriteEnvFile writes a worker's NAME=VALUE pairs, NUL-separated, to a new
+// file (goodqa#15177: values never go on a command line, where sudo and
+// systemd-run would show them to every local account for the whole run).
+// The file must not exist and is never followed through a symlink. Mode is
+// 0600, or 0640 when a separate worker account reads it through the run
+// directory's group.
+func WriteEnvFile(path string, pairs []string, groupRead bool) error {
+	mode := os.FileMode(0o600)
+	if groupRead {
+		mode = 0o640
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode)
+	if err != nil {
+		return fmt.Errorf("worker environment file: %w", err)
+	}
+	err = f.Chmod(mode) // the umask may have narrowed it
+	if err == nil {
+		_, err = f.WriteString(strings.Join(pairs, "\x00"))
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+		return fmt.Errorf("worker environment file: %w", err)
+	}
+	return nil
+}
+
+// ReadEnvFile reads and removes a worker environment file: what `fab
+// __sandbox --env-file` execs the worker with. Every entry must be
+// NAME=VALUE with an allow-listed name listed in keep, at most once, and
+// every name in keep must be present, so the file and the launcher's name
+// list agree exactly.
+func ReadEnvFile(path, keep string) ([]string, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("--env-file: %w", err)
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() || st.Size() > maxEnvFile {
+		return nil, fmt.Errorf("--env-file: not a regular file of at most %d bytes", maxEnvFile)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxEnvFile+1))
+	if err != nil {
+		return nil, fmt.Errorf("--env-file: %w", err)
+	}
+	os.Remove(path) // best effort: the launcher removes it after the run too
 	want := map[string]bool{}
 	for _, n := range strings.Split(keep, ",") {
 		if !envName.MatchString(n) {
@@ -73,11 +124,20 @@ func KeepEnv(environ []string, keep string) ([]string, error) {
 		}
 		want[n] = true
 	}
+	seen := map[string]bool{}
 	var out []string
-	for _, e := range environ {
-		if name, _, ok := strings.Cut(e, "="); ok && want[name] {
+	if len(b) > 0 {
+		for _, e := range strings.Split(string(b), "\x00") {
+			name, _, ok := strings.Cut(e, "=")
+			if !ok || !envName.MatchString(name) || !allowedName(name) || !want[name] || seen[name] {
+				return nil, fmt.Errorf("--env-file: entry %q is not an expected NAME=VALUE", name)
+			}
+			seen[name] = true
 			out = append(out, e)
 		}
+	}
+	if len(seen) != len(want) {
+		return nil, fmt.Errorf("--env-file: %d entries, want the %d names of --env-keep", len(seen), len(want))
 	}
 	return out, nil
 }
