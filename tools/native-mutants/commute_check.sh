@@ -9,9 +9,9 @@ W=$(mktemp -d)
 cd ~/fabric-s1/internal/store/migrations
 mkdir "$W/m"
 cp 00*.sql "$W/m/"
-git -C ~/repos/fabric show main:internal/store/migrations/0021_effect_settle_guard.sql > "$W/m/0021_effect_settle_guard.sql"
-git -C ~/repos/fabric show main:internal/store/migrations/0023_effect_dispatch_deadlines.sql > "$W/m/0023_effect_dispatch_deadlines.sql"
-git -C ~/repos/fabric show feat/ac12-publish:internal/store/migrations/0024_publish_quarantine.sql > "$W/m/0024_publish_quarantine.sql"
+[ -f "$W/m/0021_effect_settle_guard.sql" ] || git -C ~/repos/fabric show main:internal/store/migrations/0021_effect_settle_guard.sql > "$W/m/0021_effect_settle_guard.sql"
+[ -f "$W/m/0023_effect_dispatch_deadlines.sql" ] || git -C ~/repos/fabric show main:internal/store/migrations/0023_effect_dispatch_deadlines.sql > "$W/m/0023_effect_dispatch_deadlines.sql"
+ls "$W/m"/0024_* >/dev/null 2>&1 || git -C ~/repos/fabric show feat/ac12-publish:internal/store/migrations/0024_publish_quarantine.sql > "$W/m/0024_publish_quarantine.sql"
 ls "$W/m" | tr '\n' ' '; echo
 dsn() { echo "$ADMIN" | sed "s#/[A-Za-z_0-9]*\(?\|\$\)#/$1\1#"; }
 mk() { psql "$ADMIN" -qAtc "DROP DATABASE IF EXISTS $1 WITH (FORCE)" -c "CREATE DATABASE $1" >/dev/null; }
