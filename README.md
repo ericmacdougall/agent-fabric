@@ -301,7 +301,13 @@ at all. An operator-only role for these commands is follow-up work.
   runner role (`FABRIC_RUNNER_DSN`), never as the app or owner role.
   Fabd hands a worker only that login, checked as a runner role before the
   first launch whether or not `--hold` is set; without it the worker gets
-  no `FABRIC_DSN` at all, never fabd's own (goodqa#15173).
+  no `FABRIC_DSN` at all, never fabd's own (goodqa#15173). The check
+  refuses a runner login holding any write on any table beyond the
+  runner's list (column grants, DELETE, TRUNCATE and TRIGGER included), or
+  CREATE in the schema (goodqa#15167). Only the owner writes `fabric_schema`
+  (0029, goodqa#15163), and every function runs with a pinned
+  `search_path` that searches `pg_temp` last, so a session's temporary
+  table cannot shadow a table a trigger reads (0029, goodqa#15164).
   Since 0018 a runner may only submit, dispatch, settle and retry effects
   for a running attempt, request jobs for one, and raise open asks; approval,
   effect readback and answers need the app role. These guards bind the
@@ -347,6 +353,8 @@ Go 1.22, `pgx/v5` and `x/sys` only.
 4. Run `fab db roles` as the owner after every migration, with the same
    password files, so the app and runner roles are granted the new tables;
    without it the app role gets `permission denied` (SQLSTATE 42501).
+   `fab db roles` applies everything in one transaction, so a failed run
+   changes nothing; rerun it after fixing the cause.
 5. Restart, then smoke test: `fab version` and `fab metrics` (exit 0, and
    `fabric_schema_level` is the newest migration).
 
