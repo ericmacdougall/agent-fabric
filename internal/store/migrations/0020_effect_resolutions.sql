@@ -65,10 +65,38 @@ BEGIN
         RAISE EXCEPTION 'effect % may not be deleted', OLD.id USING ERRCODE = 'insufficient_privilege';
     END IF;
     IF TG_OP = 'INSERT' THEN
-        IF NEW.state IN ('RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN
-            RAISE EXCEPTION 'effect % may not be inserted %', NEW.id, NEW.state USING ERRCODE = 'check_violation';
+        -- Review Q4 on 3f38cc3: born in the initial state, never sent.
+        IF NEW.state NOT IN ('INTENT', 'APPROVAL_REQUIRED') OR NEW.dispatches <> 0 OR NEW.receipt IS NOT NULL
+           OR NEW.approval_sha IS NOT NULL OR NEW.approved_by IS NOT NULL THEN
+            RAISE EXCEPTION 'effect % may be inserted only as a new intent (got %, dispatches %)', NEW.id, NEW.state, NEW.dispatches
+                USING ERRCODE = 'check_violation';
         END IF;
         RETURN NEW;
+    END IF;
+    -- Review Q1/Q2 on 3f38cc3 (main ruling): every column is immutable after
+    -- insert except this allowlist, so a column added later is frozen too.
+    IF (to_jsonb(NEW) - ARRAY['state', 'dispatches', 'receipt', 'approval_sha', 'approved_by', 'last_error', 'updated_at'])
+       IS DISTINCT FROM (to_jsonb(OLD) - ARRAY['state', 'dispatches', 'receipt', 'approval_sha', 'approved_by', 'last_error', 'updated_at']) THEN
+        RAISE EXCEPTION 'effect % changed an immutable column', NEW.id USING ERRCODE = 'check_violation';
+    END IF;
+    -- dispatches: exactly +1, and only on the move into DISPATCHED.
+    IF OLD.state IN ('INTENT', 'APPROVED') AND NEW.state = 'DISPATCHED' THEN
+        IF NEW.dispatches <> OLD.dispatches + 1 THEN
+            RAISE EXCEPTION 'effect % dispatch must count one (% -> %)', NEW.id, OLD.dispatches, NEW.dispatches
+                USING ERRCODE = 'check_violation';
+        END IF;
+    ELSIF NEW.dispatches <> OLD.dispatches THEN
+        RAISE EXCEPTION 'effect % dispatch count changes only by a dispatch', NEW.id USING ERRCODE = 'check_violation';
+    END IF;
+    -- The approval is set once, by approve, bound to the request hash.
+    IF (NEW.approval_sha, NEW.approved_by) IS DISTINCT FROM (OLD.approval_sha, OLD.approved_by)
+       AND NOT (OLD.state = 'APPROVAL_REQUIRED' AND NEW.state = 'APPROVED' AND OLD.approval_sha IS NULL
+                AND NEW.approval_sha = NEW.request_sha AND coalesce(NEW.approved_by, '') <> '') THEN
+        RAISE EXCEPTION 'effect % approval changes only by approve', NEW.id USING ERRCODE = 'check_violation';
+    END IF;
+    -- The receipt is written while the outcome is open, then frozen.
+    IF NEW.receipt IS DISTINCT FROM OLD.receipt AND OLD.state NOT IN ('DISPATCHED', 'UNKNOWN', 'RECONCILING') THEN
+        RAISE EXCEPTION 'effect % receipt is settled (%)', NEW.id, OLD.state USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.state IS NOT DISTINCT FROM OLD.state THEN
         RETURN NEW;
@@ -120,13 +148,22 @@ SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
     st text;
     fe bigint;
+    am text;
+    term text;
 BEGIN
     IF (TG_OP = 'INSERT' AND NEW.state IN ('INTENT', 'APPROVAL_REQUIRED'))
        OR (TG_OP = 'UPDATE' AND NEW.state = 'DISPATCHED' AND OLD.state IS DISTINCT FROM 'DISPATCHED') THEN
-        SELECT a.state, a.fence INTO st, fe FROM public.attempts a WHERE a.id = NEW.attempt_id FOR SHARE;
-        IF st IS NULL OR st NOT IN ('ADMITTED', 'LEASED', 'PREPARING', 'RUNNING') OR fe <> NEW.fence THEN
-            RAISE EXCEPTION 'effect % needs a live attempt % at fence % (attempt is %, fence %)',
-                NEW.id, NEW.attempt_id, NEW.fence, coalesce(st, 'missing'), fe USING ERRCODE = 'check_violation';
+        -- Review Q3: the effect's own mission, not terminal; missions before
+        -- attempts, the order Store.Execute locks them in.
+        SELECT m.terminal INTO term FROM public.missions m WHERE m.id = NEW.mission_id FOR SHARE;
+        IF term IS DISTINCT FROM 'NONE' THEN
+            RAISE EXCEPTION 'effect % mission % is %', NEW.id, NEW.mission_id, coalesce(term, 'missing')
+                USING ERRCODE = 'check_violation';
+        END IF;
+        SELECT a.state, a.fence, a.mission_id INTO st, fe, am FROM public.attempts a WHERE a.id = NEW.attempt_id FOR SHARE;
+        IF st IS NULL OR st NOT IN ('ADMITTED', 'LEASED', 'PREPARING', 'RUNNING') OR fe <> NEW.fence OR am <> NEW.mission_id THEN
+            RAISE EXCEPTION 'effect % needs a live attempt % of mission % at fence % (attempt is %, fence %, mission %)',
+                NEW.id, NEW.attempt_id, NEW.mission_id, NEW.fence, coalesce(st, 'missing'), fe, am USING ERRCODE = 'check_violation';
         END IF;
     END IF;
     RETURN NEW;

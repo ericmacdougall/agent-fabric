@@ -167,10 +167,19 @@ func TestRunnerCannotApproveEffects(t *testing.T) {
 		VALUES ('e_ap', 'm_ap', 'r_ap_1', 1, 'comment', 's', 'k_ap', '{}', 'sha', 'APPROVAL_REQUIRED')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := owner.pool.Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state, approval_sha, approved_by) VALUES
-		('e_ap3', 'm_ap', 'r_ap_1', 1, 'comment', 's', 'k_ap3', '{}', 'sha', 'FAILED_DEFINITE', NULL, NULL),
-		('e_ok', 'm_ap', 'r_ap_1', 1, 'comment', 's', 'k_ok', '{}', 'sha', 'FAILED_DEFINITE', 'sha', 'eric')`); err != nil {
-		t.Fatal(err)
+	// Fixtures reach FAILED_DEFINITE through the broker's own steps (0020
+	// allows an effect to be born only as a new intent).
+	for _, q := range []string{
+		`INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state) VALUES
+			('e_ap3', 'm_ap', 'r_ap_1', 1, 'comment', 's3', 'k_ap3', '{}', 'sha', 'INTENT'),
+			('e_ok', 'm_ap', 'r_ap_1', 1, 'comment', 's4', 'k_ok', '{}', 'sha', 'APPROVAL_REQUIRED')`,
+		"UPDATE effects SET state = 'APPROVED', approval_sha = 'sha', approved_by = 'eric' WHERE id = 'e_ok'",
+		"UPDATE effects SET state = 'DISPATCHED', dispatches = dispatches + 1 WHERE id IN ('e_ap3', 'e_ok')",
+		"UPDATE effects SET state = 'FAILED_DEFINITE' WHERE id IN ('e_ap3', 'e_ok')",
+	} {
+		if _, err := owner.pool.Exec(ctx, q); err != nil {
+			t.Fatalf("fixture %q: %v", q, err)
+		}
 	}
 	for _, q := range []string{
 		"UPDATE effects SET state = 'APPROVED' WHERE id = 'e_ap'",

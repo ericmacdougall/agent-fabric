@@ -67,7 +67,28 @@ func TestReplayBindsWholeIntent(t *testing.T) {
 func TestDispatchRefusesRequestThatNoLongerMatchesItsHash(t *testing.T) {
 	ctx, st, b, fake := setup(t)
 	e, _ := b.Submit(ctx, fake, spec("ki3", "approved text"))
-	if _, err := st.Pool().Exec(ctx, `UPDATE effects SET request = '{"ticket": "goodqa#0", "body": "swapped"}' WHERE id = $1`, e.ID); err != nil {
+	swap := `UPDATE effects SET request = '{"ticket": "goodqa#0", "body": "swapped"}' WHERE id = $1`
+	// Review Q1 on 3f38cc3: the database refuses the swap for every role.
+	if _, err := st.Pool().Exec(ctx, swap, e.ID); err == nil {
+		t.Fatal("a request swap after insert was accepted")
+	}
+	// The hash check in Dispatch is the second layer: exercise it with the
+	// guard off, which only the table owner can do.
+	tx, err := st.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"ALTER TABLE effects DISABLE TRIGGER effects_zz_outcome_guard", swap, "ALTER TABLE effects ENABLE TRIGGER effects_zz_outcome_guard"} {
+		if _, err := tx.Exec(ctx, q, func() []any {
+			if q == swap {
+				return []any{e.ID}
+			}
+			return nil
+		}()...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.Dispatch(ctx, fake, e.ID); !errors.Is(err, ErrRequestTampered) {
@@ -86,8 +107,15 @@ func TestStaleReceiptDoesNotSettleLaterDispatch(t *testing.T) {
 	e, _ := b.Submit(ctx, fake, spec("ki4", "hello"))
 	b.afterTransport = func(e Effect, rc Receipt) {
 		// The row is recovered, read back NOT_APPLIED, retried and dispatched again.
-		if _, err := st.Pool().Exec(context.Background(), `UPDATE effects SET dispatches = dispatches + 1 WHERE id = $1`, e.ID); err != nil {
-			t.Error(err)
+		for _, q := range []string{
+			"UPDATE effects SET state = 'UNKNOWN' WHERE id = $1",
+			"UPDATE effects SET state = 'NOT_APPLIED' WHERE id = $1",
+			"UPDATE effects SET state = 'INTENT' WHERE id = $1",
+			"UPDATE effects SET state = 'DISPATCHED', dispatches = dispatches + 1 WHERE id = $1",
+		} {
+			if _, err := st.Pool().Exec(context.Background(), q, e.ID); err != nil {
+				t.Error(err)
+			}
 		}
 	}
 	got, err := b.Dispatch(ctx, fake, e.ID)

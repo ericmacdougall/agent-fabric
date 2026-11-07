@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -126,6 +127,39 @@ func TestMigrateIdempotent(t *testing.T) {
 	names, _ := fs.Glob(migrationFS, "migrations/*.sql")
 	if n := count(t, st, ctx, "SELECT count(*) FROM fabric_schema"); n != len(names) || n < 2 {
 		t.Fatalf("schema rows = %d, want %d embedded migrations", n, len(names))
+	}
+}
+
+// Review R1 on 3f38cc3: a migration edited after it was applied is refused,
+// not silently skipped.
+func TestMigrateRefusesChangedMigration(t *testing.T) {
+	st, ctx := openTest(t)
+	var name, sum string
+	if err := st.pool.QueryRow(ctx, "SELECT name, sha256 FROM fabric_schema ORDER BY name LIMIT 1").Scan(&name, &sum); err != nil {
+		t.Fatalf("schema checksum column: %v", err)
+	}
+	if len(sum) != 64 {
+		t.Fatalf("%s recorded checksum %q", name, sum)
+	}
+	t.Cleanup(func() {
+		st.pool.Exec(context.Background(), "UPDATE fabric_schema SET sha256 = $2 WHERE name = $1", name, sum)
+	}) //nolint:errcheck
+	if _, err := st.pool.Exec(ctx, "UPDATE fabric_schema SET sha256 = $2 WHERE name = $1", name, strings.Repeat("0", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Migrate(ctx); err == nil || !strings.Contains(err.Error(), name) {
+		t.Fatalf("migrate over a changed %s: %v, want a refusal naming it", name, err)
+	}
+	// A ledger from before checksums (NULL) is stamped, not refused.
+	if _, err := st.pool.Exec(ctx, "UPDATE fabric_schema SET sha256 = NULL WHERE name = $1", name); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate over a legacy ledger row: %v", err)
+	}
+	var got string
+	if err := st.pool.QueryRow(ctx, "SELECT sha256 FROM fabric_schema WHERE name = $1", name).Scan(&got); err != nil || got != sum {
+		t.Fatalf("legacy row stamped %q, want %q (%v)", got, sum, err)
 	}
 }
 

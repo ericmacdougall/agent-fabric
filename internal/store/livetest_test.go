@@ -94,7 +94,7 @@ func TestDoneCountsBrokerEffects(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, s := range path[state] {
-					if _, err := st.pool.Exec(ctx, "UPDATE effects SET state = $2 WHERE id = $1", id, s); err != nil {
+					if _, err := st.pool.Exec(ctx, "UPDATE effects SET state = $2, dispatches = dispatches + CASE WHEN $2 = 'DISPATCHED' THEN 1 ELSE 0 END WHERE id = $1", id, s); err != nil {
 						t.Fatalf("fixture %s -> %s: %v", id, s, err)
 					}
 				}

@@ -130,7 +130,7 @@ func TestAppRoleCannotBypassEffectOutcomes(t *testing.T) {
 	ab := appBroker(t, ctx, st)
 	mk := func(key, state string) string {
 		t.Helper()
-		e, err := ab.Submit(ctx, fake, spec(key, key))
+		e, err := ab.Submit(ctx, fake, uspec(key))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,7 +142,7 @@ func TestAppRoleCannotBypassEffectOutcomes(t *testing.T) {
 				"NOT_APPLIED":     {"DISPATCHED", "UNKNOWN", "NOT_APPLIED"},
 				"FAILED_DEFINITE": {"DISPATCHED", "FAILED_DEFINITE"},
 			}[state] {
-				if _, err := st.Pool().Exec(ctx, "UPDATE effects SET state = $2, subject = id WHERE id = $1", e.ID, s); err != nil {
+				if _, err := st.Pool().Exec(ctx, "UPDATE effects SET state = $2, dispatches = dispatches + CASE WHEN $2 = 'DISPATCHED' THEN 1 ELSE 0 END WHERE id = $1", e.ID, s); err != nil {
 					t.Fatalf("fixture %s -> %s: %v", key, s, err)
 				}
 			}
@@ -345,5 +345,139 @@ func TestAbandonStrandedIntent(t *testing.T) {
 	}
 	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET state = 'NOT_APPLIED' WHERE id = $1", e.ID); err == nil {
 		t.Error("an earlier audit row authorized a second abandon")
+	}
+}
+
+// uspec is spec with its own subject, so fixtures can pass through the
+// live-subject states side by side.
+func uspec(key string) IntentSpec {
+	s := spec(key, key)
+	s.Subject = "ticket:goodqa#" + key
+	return s
+}
+
+// Review Q1/Q2 on 3f38cc3 (main ruling): after insert every column is
+// immutable except an allowlist (state, dispatches by the dispatch path,
+// receipt while unsettled, the approval on approve, last_error, updated_at).
+func TestEffectColumnsImmutable(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	runnerBroker(t, ctx, st)
+	ab := appBroker(t, ctx, st)
+	if err := st.CreateMission(ctx, "m_2", "GoodQA goodqa#14791", "fabric", "main"); err != nil {
+		t.Fatal(err)
+	}
+	fake.LoseAfter = true
+	unk, _ := b.Submit(ctx, fake, uspec("q1u"))
+	if unk, _ = b.Dispatch(ctx, fake, unk.ID); unk.State != Unknown {
+		t.Fatalf("setup unknown: %s", unk.State)
+	}
+	fake.LoseAfter = false
+	ok, _ := b.Submit(ctx, fake, uspec("q1c"))
+	if ok, _ = b.Dispatch(ctx, fake, ok.ID); ok.State != Confirmed {
+		t.Fatalf("setup confirmed: %s", ok.State)
+	}
+	fake.Reject = true
+	re, _ := b.Submit(ctx, fake, uspec("q1r"))
+	if re, _ = b.Dispatch(ctx, fake, re.ID); re.State != FailedDefinite {
+		t.Fatalf("setup failed: %s", re.State)
+	}
+	fake.Reject = false
+	if re, _ = b.Retry(ctx, re.ID); re.State != Intent || re.Dispatches != 1 {
+		t.Fatalf("setup retried: %+v", re)
+	}
+	for _, c := range []struct{ name, q, id string }{
+		{"Q1b move to another mission", "UPDATE effects SET mission_id = 'm_2' WHERE id = $1", unk.ID},
+		{"request rewritten", `UPDATE effects SET request = '{"ticket":"goodqa#0","body":"swapped"}' WHERE id = $1`, unk.ID},
+		{"request hash rewritten", "UPDATE effects SET request_sha = 'x' WHERE id = $1", unk.ID},
+		{"subject", "UPDATE effects SET subject = 'elsewhere' WHERE id = $1", unk.ID},
+		{"kind", "UPDATE effects SET kind = 'other' WHERE id = $1", unk.ID},
+		{"key", "UPDATE effects SET idem_key = 'k_new' WHERE id = $1", unk.ID},
+		{"attempt", "UPDATE effects SET attempt_id = 'r_9' WHERE id = $1", unk.ID},
+		{"fence", "UPDATE effects SET fence = 9 WHERE id = $1", unk.ID},
+		{"created_at", "UPDATE effects SET created_at = now() - interval '1 day' WHERE id = $1", unk.ID},
+		{"id", "UPDATE effects SET id = 'e_new' WHERE id = $1", unk.ID},
+		{"settled receipt", `UPDATE effects SET receipt = '{"comment_id":"forged"}' WHERE id = $1`, ok.ID},
+		{"Q2 dispatches reset", "UPDATE effects SET dispatches = 0 WHERE id = $1", re.ID},
+		{"dispatch without the count", "UPDATE effects SET state = 'DISPATCHED' WHERE id = $1", re.ID},
+		{"dispatch count jump", "UPDATE effects SET state = 'DISPATCHED', dispatches = dispatches + 2 WHERE id = $1", re.ID},
+		{"approval outside approve", "UPDATE effects SET approval_sha = request_sha, approved_by = 'eric' WHERE id = $1", re.ID},
+	} {
+		if _, err := ab.pool.Exec(ctx, c.q, c.id); err == nil {
+			t.Errorf("app role: %s accepted", c.name)
+		}
+	}
+	// Allowed: diagnostics on any row.
+	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET last_error = 'note', updated_at = now() WHERE id = $1", ok.ID); err != nil {
+		t.Errorf("last_error note refused: %v", err)
+	}
+}
+
+// Review Q4 on 3f38cc3: an effect is born INTENT or APPROVAL_REQUIRED,
+// never sent, with no receipt or approval.
+func TestEffectInsertOnlyInitial(t *testing.T) {
+	ctx, st, _, _ := setup(t)
+	ackRun(t, ctx, st)
+	runnerBroker(t, ctx, st)
+	ab := appBroker(t, ctx, st)
+	ins := `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state, dispatches, receipt, approval_sha, approved_by)
+		VALUES ($1, 'm_1', 'r_1', 1, 'ticket_comment', $1, $1, '{}', 'sha', $2, $3, $4, $5, $6)`
+	for _, c := range []struct {
+		name, state string
+		dispatches  int
+		receipt     any
+		sha, by     any
+	}{
+		{"born confirmed", "CONFIRMED", 1, `{"comment_id":"c"}`, nil, nil},
+		{"born not applied", "NOT_APPLIED", 0, nil, nil, nil},
+		{"born dispatched", "DISPATCHED", 1, nil, nil, nil},
+		{"born approved", "APPROVED", 0, nil, "sha", "eric"},
+		{"born failed", "FAILED_DEFINITE", 0, nil, nil, nil},
+		{"intent already sent", "INTENT", 1, nil, nil, nil},
+		{"intent with a receipt", "INTENT", 0, `{"comment_id":"c"}`, nil, nil},
+		{"intent with an approval", "APPROVAL_REQUIRED", 0, nil, "sha", "eric"},
+	} {
+		if _, err := ab.pool.Exec(ctx, ins, "e_"+c.state+fmt.Sprint(c.dispatches), c.state, c.dispatches, c.receipt, c.sha, c.by); err == nil {
+			t.Errorf("app role inserted an effect %s", c.name)
+		}
+	}
+	if _, err := ab.pool.Exec(ctx, ins, "e_fine", "INTENT", 0, nil, nil, nil); err != nil {
+		t.Errorf("a plain intent insert was refused: %v", err)
+	}
+}
+
+// Review Q3 on 3f38cc3: the fence is the effect's own mission's attempt, and
+// that mission is not terminal.
+func TestFenceBelongsToMission(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	runnerBroker(t, ctx, st)
+	ab := appBroker(t, ctx, st)
+	if err := st.CreateMission(ctx, "m_2", "GoodQA goodqa#14791", "fabric", "main"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		key string
+		cmd domain.Command
+	}{
+		{"a2", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_2"}},
+		{"s2", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_2", Attempt: "r_2", Host: "h_t2", Role: "writer"}},
+		{"k2", domain.Command{Kind: domain.CmdAckStart, Mission: "m_2", Attempt: "r_2", Fence: 1}},
+	} {
+		if _, err := st.Execute(ctx, "fabd", domain.CommandID(c.key), c.cmd); err != nil {
+			t.Fatalf("%s: %v", c.key, err)
+		}
+	}
+	cross := uspec("q3")
+	cross.Attempt, cross.Fence = "r_2", 1 // m_2's live attempt, on m_1
+	if _, err := b.Submit(ctx, fake, cross); !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Errorf("submit with another mission's attempt: %v, want ErrInvalidTransition", err)
+	}
+	if _, err := ab.pool.Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state)
+		VALUES ('e_q3', 'm_1', 'r_2', 1, 'ticket_comment', 's_q3', 'k_q3', '{}', 'sha', 'INTENT')`); err == nil {
+		t.Error("raw insert with another mission's attempt accepted")
+	}
+	if fake.Count() != 0 {
+		t.Fatalf("remote writes: %d", fake.Count())
 	}
 }

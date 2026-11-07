@@ -191,7 +191,7 @@ func (b *Broker) Submit(ctx context.Context, exec Executor, spec IntentSpec) (Ef
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return Effect{}, err
 	}
-	if err := liveFence(ctx, tx, spec.Attempt, spec.Fence); err != nil {
+	if err := liveFence(ctx, tx, spec.Mission, spec.Attempt, spec.Fence); err != nil {
 		return Effect{}, err
 	}
 	state := Intent
@@ -210,15 +210,20 @@ func (b *Broker) Submit(ctx context.Context, exec Executor, spec IntentSpec) (Ef
 	return b.Load(ctx, id)
 }
 
-func liveFence(ctx context.Context, tx pgx.Tx, attempt domain.AttemptID, fence int64) error {
+// liveFence: the attempt is live at this fence and belongs to the effect's
+// mission (review Q3 on 3f38cc3).
+func liveFence(ctx context.Context, tx pgx.Tx, mission domain.MissionID, attempt domain.AttemptID, fence int64) error {
 	var cur int64
-	var state string
-	err := tx.QueryRow(ctx, "SELECT fence, state FROM attempts WHERE id = $1", string(attempt)).Scan(&cur, &state)
+	var state, owner string
+	err := tx.QueryRow(ctx, "SELECT fence, state, mission_id FROM attempts WHERE id = $1", string(attempt)).Scan(&cur, &state, &owner)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: attempt %s", domain.ErrNotFound, attempt)
 	}
 	if err != nil {
 		return err
+	}
+	if owner != string(mission) {
+		return fmt.Errorf("%w: attempt %s belongs to mission %s, not %s", domain.ErrInvalidTransition, attempt, owner, mission)
 	}
 	if cur != fence {
 		return fmt.Errorf("%w: effect fence %d, attempt holds %d", domain.ErrStaleFence, fence, cur)
@@ -287,7 +292,7 @@ func (b *Broker) Dispatch(ctx context.Context, exec Executor, id string) (Effect
 	default:
 		return Effect{}, fmt.Errorf("%w: effect %s is %s", ErrNotDispatchable, id, e.State)
 	}
-	if err := liveFence(ctx, tx, e.Attempt, e.Fence); err != nil {
+	if err := liveFence(ctx, tx, e.Mission, e.Attempt, e.Fence); err != nil {
 		return Effect{}, err
 	}
 	ok, detail, err := exec.Precondition(ctx, e)
@@ -296,7 +301,7 @@ func (b *Broker) Dispatch(ctx context.Context, exec Executor, id string) (Effect
 	}
 	// Review O3: Precondition may take a network round trip; the attempt
 	// can end meanwhile. Re-check (the 0020 trigger holds it from here).
-	if err := liveFence(ctx, tx, e.Attempt, e.Fence); err != nil {
+	if err := liveFence(ctx, tx, e.Mission, e.Attempt, e.Fence); err != nil {
 		return Effect{}, err
 	}
 	if !ok {
@@ -532,10 +537,10 @@ func (b *Broker) Abandon(ctx context.Context, id, reason, evidence, actor string
 		return Effect{}, err
 	}
 	defer tx.Rollback(context.Background()) //nolint:errcheck
-	var state, attempt string
+	var state, attempt, mission string
 	var fence int64
 	var dispatches int
-	err = tx.QueryRow(ctx, "SELECT state, attempt_id, fence, dispatches FROM effects WHERE id = $1 FOR UPDATE", id).Scan(&state, &attempt, &fence, &dispatches)
+	err = tx.QueryRow(ctx, "SELECT state, attempt_id, mission_id, fence, dispatches FROM effects WHERE id = $1 FOR UPDATE", id).Scan(&state, &attempt, &mission, &fence, &dispatches)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Effect{}, fmt.Errorf("%w: effect %s", domain.ErrNotFound, id)
 	}
@@ -550,7 +555,7 @@ func (b *Broker) Abandon(ctx context.Context, id, reason, evidence, actor string
 	if dispatches != 0 {
 		return Effect{}, fmt.Errorf("%w: effect %s was dispatched %d time(s); settle it by readback or fab effect resolve", domain.ErrInvalidTransition, id, dispatches)
 	}
-	if liveFence(ctx, tx, domain.AttemptID(attempt), fence) == nil {
+	if liveFence(ctx, tx, domain.MissionID(mission), domain.AttemptID(attempt), fence) == nil {
 		return Effect{}, fmt.Errorf("%w: attempt %s can still dispatch effect %s", domain.ErrAttemptLive, attempt, id)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO effect_resolutions (effect_id, from_state, to_state, reason, evidence, actor) VALUES ($1, $2, $3, $4, $5, $6)`,

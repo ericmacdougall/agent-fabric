@@ -96,21 +96,39 @@ func (s *Store) Migrate(ctx context.Context) error {
 		name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
+	// Review R1 on 3f38cc3: record each migration's checksum and refuse one
+	// that changed after it was applied. A row from before checksums (NULL)
+	// is stamped with the current file, trusted on first sight.
+	if _, err := conn.Exec(ctx, `ALTER TABLE fabric_schema ADD COLUMN IF NOT EXISTS sha256 text`); err != nil {
+		return err
+	}
 	names, err := fs.Glob(migrationFS, "migrations/*.sql")
 	if err != nil {
 		return err
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		var applied bool
-		if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM fabric_schema WHERE name = $1)", name).Scan(&applied); err != nil {
-			return err
-		}
-		if applied {
-			continue
-		}
 		sql, err := migrationFS.ReadFile(name)
 		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(sql)
+		want := hex.EncodeToString(sum[:])
+		var recorded *string
+		err = conn.QueryRow(ctx, "SELECT sha256 FROM fabric_schema WHERE name = $1", name).Scan(&recorded)
+		if err == nil {
+			if recorded == nil {
+				if _, err := conn.Exec(ctx, "UPDATE fabric_schema SET sha256 = $2 WHERE name = $1 AND sha256 IS NULL", name, want); err != nil {
+					return err
+				}
+				continue
+			}
+			if *recorded != want {
+				return fmt.Errorf("migration %s changed after it was applied (recorded %.12s, file %.12s): ship a new migration instead", name, *recorded, want)
+			}
+			continue
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
 		tx, err := conn.Begin(ctx)
@@ -121,7 +139,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			tx.Rollback(ctx) //nolint:errcheck
 			return fmt.Errorf("migration %s: %w", name, err)
 		}
-		if _, err := tx.Exec(ctx, "INSERT INTO fabric_schema (name) VALUES ($1)", name); err != nil {
+		if _, err := tx.Exec(ctx, "INSERT INTO fabric_schema (name, sha256) VALUES ($1, $2)", name, want); err != nil {
 			tx.Rollback(ctx) //nolint:errcheck
 			return err
 		}

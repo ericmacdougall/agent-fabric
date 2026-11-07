@@ -1850,8 +1850,8 @@
   "expect": "TestLaunchedFinishResetsPrelaunchCount",
   "edits": [
    [
-    "\t\tif !e.Prelaunch {\n\t\t\ts.PrelaunchFailures, s.CapacityWaits, s.DeferMS = 0, 0, 0",
-    "\t\tif e.Prelaunch {\n\t\t\ts.PrelaunchFailures, s.CapacityWaits, s.DeferMS = 0, 0, 0"
+    "\t\tif !e.Prelaunch && s.ParkedReason == \"\" {\n\t\t\ts.PrelaunchFailures, s.CapacityWaits, s.DeferMS = 0, 0, 0",
+    "\t\tif e.Prelaunch && s.ParkedReason == \"\" {\n\t\t\ts.PrelaunchFailures, s.CapacityWaits, s.DeferMS = 0, 0, 0"
    ]
   ]
  },
@@ -3038,6 +3038,45 @@
    [
     "\tif reason == \"\" || evidence == \"\" || actor == \"\" {\n\t\treturn Effect{}, fmt.Errorf(\"%w: abandoning",
     "\tif reason == \"\" || actor == \"\" {\n\t\treturn Effect{}, fmt.Errorf(\"%w: abandoning"
+   ]
+  ]
+ },
+ {
+  "id": "M232_park_reset_by_launch",
+  "invariant": "pending_park",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestPendingParkCompletesAfterOtherAttemptEnds",
+  "edits": [
+   [
+    "\t\tif !e.Prelaunch && s.ParkedReason == \"\" {",
+    "\t\tif !e.Prelaunch {"
+   ]
+  ]
+ },
+ {
+  "id": "M233_park_never_completes",
+  "invariant": "pending_park",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestPendingParkCompletesAfterOtherAttemptEnds",
+  "edits": [
+   [
+    "\tif s.ParkedReason != \"\" && s.LiveAttempts() == 0 && s.UnresolvedAttempts() == 0 && s.Terminal == domain.TermNone {",
+    "\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M234_start_while_park_pending",
+  "invariant": "pending_park",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestPendingParkCompletesAfterOtherAttemptEnds",
+  "edits": [
+   [
+    "\t\tif m.ParkedReason != \"\" {\n\t\t\t// A park waiting",
+    "\t\tif false {\n\t\t\t// A park waiting"
    ]
   ]
  }

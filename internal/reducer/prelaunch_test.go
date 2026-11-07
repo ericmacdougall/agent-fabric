@@ -52,3 +52,30 @@ func TestLaunchedFinishResetsPrelaunchCount(t *testing.T) {
 		t.Fatalf("backoff is not capped: %d", got)
 	}
 }
+
+// Kimi rev 7 (pending park), checked against this tree: the budget runs out
+// on one role while another role's attempt is live. The park waits for it,
+// and that attempt's launched finish neither erases the run nor re-admits.
+func TestPendingParkCompletesAfterOtherAttemptEnds(t *testing.T) {
+	f, id, writer, wfence := startedMission(t)
+	for n := 1; n <= domain.PrelaunchBudget; n++ {
+		r := domain.AttemptID("r_rev" + string(rune('a'+n)))
+		ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: r, Host: "h_t2", Role: "reviewer"})
+		mustStep(t, f, domain.Command{Kind: domain.CmdFinishAttempt, Mission: id, Attempt: r, Fence: ev[0].Fence, Outcome: "abandoned", Prelaunch: true, Reason: "dispatch denied"})
+	}
+	m := f.missions[id]
+	if m.ParkedReason == "" || m.PrelaunchFailures != domain.PrelaunchBudget {
+		t.Fatalf("budget spent but not parked: %+v", m)
+	}
+	if !m.Execution.HoldsSlot() {
+		t.Fatalf("the park freed the slot while %s is live: %s", writer, m.Execution)
+	}
+	if _, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_more", Host: "h_t2", Role: "reviewer"}); err == nil {
+		t.Fatal("an attempt started while the park is pending")
+	}
+	mustStep(t, f, domain.Command{Kind: domain.CmdFinishAttempt, Mission: id, Attempt: writer, Fence: wfence, Outcome: "abandoned", Reason: "runner exited"})
+	m = f.missions[id]
+	if m.Execution != domain.ExecBlocked || m.ParkedReason == "" || m.PrelaunchFailures != domain.PrelaunchBudget || m.WaitKey != "" {
+		t.Fatalf("after the live attempt ended: execution %s, reason %q, count %d", m.Execution, m.ParkedReason, m.PrelaunchFailures)
+	}
+}

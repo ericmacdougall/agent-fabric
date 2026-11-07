@@ -133,9 +133,16 @@ func TestRunnerRoleBrokerFlows(t *testing.T) {
 	}
 	// Red-team K2 on 4d8e1de: a crash-left DISPATCHED effect of an ended run
 	// is the app role's readback, not a runner settle.
-	if _, err := st.Pool().Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state, dispatches)
-		VALUES ('e_crash', 'm_1', 'r_gone', 1, 'ticket_comment', 's_crash', 'k_crash', '{}', 'sha', 'DISPATCHED', 1)`); err != nil {
-		t.Fatal(err)
+	// The fixture is born an intent of r_1, dispatched, then r_1 ends.
+	for _, q := range []string{
+		`INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state)
+			VALUES ('e_crash', 'm_1', 'r_1', 1, 'ticket_comment', 's_crash', 'k_crash', '{}', 'sha', 'INTENT')`,
+		"UPDATE effects SET state = 'DISPATCHED', dispatches = 1 WHERE id = 'e_crash'",
+		"UPDATE attempts SET state = 'SUCCEEDED_UNVERIFIED' WHERE id = 'r_1'",
+	} {
+		if _, err := st.Pool().Exec(ctx, q); err != nil {
+			t.Fatalf("fixture %q: %v", q, err)
+		}
 	}
 	for _, to := range []string{"CONFIRMED", "FAILED_DEFINITE", "UNKNOWN"} {
 		if _, err := rs.Exec(ctx, `UPDATE effects SET state = $2, receipt = '{"comment_id":"forged"}' WHERE id = $1`, "e_crash", to); code(err) != "42501" {
