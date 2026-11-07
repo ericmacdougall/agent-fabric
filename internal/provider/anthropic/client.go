@@ -117,6 +117,7 @@ type AttemptRecord struct {
 type Hooks struct {
 	BeforeAttempt func(n int) error
 	AfterAttempt  func(AttemptRecord)
+	OnEvent       func(n int) // test seam: called once per stream event
 }
 
 var spendLimit = regexp.MustCompile(`(?i)(spend(ing)? limit|usage limit|spend cap|monthly (spend|usage)|credit balance)`)
@@ -139,7 +140,7 @@ func (c *Client) Send(ctx context.Context, body []byte, hk Hooks) (*Message, []A
 				return nil, recs, err
 			}
 		}
-		msg, rec, err := c.once(ctx, body, n)
+		msg, rec, err := c.once(ctx, body, n, hk.OnEvent)
 		recs = append(recs, rec)
 		if hk.AfterAttempt != nil {
 			hk.AfterAttempt(rec)
@@ -210,7 +211,7 @@ func (c *Client) classify(err error, n int) (time.Duration, bool, error) {
 	return backoff(), true, nil
 }
 
-func (c *Client) once(ctx context.Context, body []byte, n int) (*Message, AttemptRecord, error) {
+func (c *Client) once(ctx context.Context, body []byte, n int, onEvent func(int)) (*Message, AttemptRecord, error) {
 	rec := AttemptRecord{N: n}
 	key, err := c.cfg.Key(ctx)
 	if err != nil || key == "" {
@@ -264,6 +265,9 @@ func (c *Client) once(ctx context.Context, body []byte, n int) (*Message, Attemp
 				rec.Usage = &u
 			}
 			return nil, rec, err
+		}
+		if onEvent != nil {
+			onEvent(n)
 		}
 		done, err := a.feed(ev)
 		if err != nil {

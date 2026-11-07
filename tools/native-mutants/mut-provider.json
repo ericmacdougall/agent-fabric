@@ -1,0 +1,65 @@
+[
+ {
+  "id": "P1-drop-unknown-fields",
+  "file": "internal/provider/anthropic/stream.go",
+  "old": "\tvar buf bytes.Buffer\n\te := json.NewEncoder(&buf)\n\te.SetEscapeHTML(false)\n\tif err := e.Encode(b.fields)",
+  "new": "\tkeep := map[string]json.RawMessage{}\n\tfor _, k := range []string{\"type\", \"text\", \"thinking\", \"signature\", \"id\", \"name\", \"input\"} {\n\t\tif v, ok := b.fields[k]; ok {\n\t\t\tkeep[k] = v\n\t\t}\n\t}\n\tvar buf bytes.Buffer\n\te := json.NewEncoder(&buf)\n\te.SetEscapeHTML(false)\n\tif err := e.Encode(keep)",
+  "cmd": "go test ./internal/provider/anthropic -run 'TestUnknownFieldsSurvive' -count=1"
+ },
+ {
+  "id": "P2-ignore-retry-after",
+  "file": "internal/provider/anthropic/client.go",
+  "old": "return ae.RetryAfter, true, nil",
+  "new": "return backoff(), true, nil",
+  "cmd": "go test ./internal/provider/anthropic -run TestRetryMatrix -count=1"
+ },
+ {
+  "id": "P3-unknown-stop-is-end",
+  "file": "internal/provider/anthropic/stream.go",
+  "old": "\treturn StopUnknown\n}",
+  "new": "\treturn StopEnd\n}",
+  "cmd": "go test ./internal/provider/anthropic -run TestStopReasons -count=1"
+ },
+ {
+  "id": "P4-retry-spendcap-429",
+  "file": "internal/provider/anthropic/client.go",
+  "old": "case ae.Status == 429 && !ae.HasRetry:",
+  "new": "case false:",
+  "cmd": "go test ./internal/provider/anthropic -run TestRetryMatrix -count=1"
+ },
+ {
+  "id": "P5-truncated-event-delivered",
+  "file": "internal/provider/anthropic/sse.go",
+  "old": "\t\t\tif errors.Is(err, io.EOF) && have {\n\t\t\t\treturn sseEvent{}, io.ErrUnexpectedEOF\n\t\t\t}",
+  "new": "\t\t\tif errors.Is(err, io.EOF) && have {\n\t\t\t\treturn sseEvent{Name: name, Data: bytes.Clone(data.Bytes())}, nil\n\t\t\t}",
+  "cmd": "go test ./internal/provider/anthropic -run TestSSEMidStream -count=1"
+ },
+ {
+  "id": "P6-drop-signature",
+  "file": "internal/provider/anthropic/stream.go",
+  "old": "\t\tb.sig.WriteString(s)\n\t\tb.hasSig = true\n\t\treturn err",
+  "new": "\t\treturn err",
+  "cmd": "go test ./internal/provider/anthropic -run TestSSEToolUse -count=1"
+ },
+ {
+  "id": "P7-retry-protocol-error",
+  "file": "internal/provider/anthropic/client.go",
+  "old": "if errors.As(err, &pe) || errors.Is(err, ErrSSELimit) {\n\t\treturn 0, false, nil\n\t}",
+  "new": "if errors.As(err, &pe) || errors.Is(err, ErrSSELimit) {\n\t\treturn backoff(), true, nil\n\t}",
+  "cmd": "go test ./internal/provider/anthropic -run 'TestSSEProtocol|TestSSELimits' -count=1"
+ },
+ {
+  "id": "P8-escape-html",
+  "file": "internal/provider/anthropic/stream.go",
+  "old": "e.SetEscapeHTML(false)\n\tif err := e.Encode(b.fields)",
+  "new": "e.SetEscapeHTML(true)\n\tif err := e.Encode(b.fields)",
+  "cmd": "go test ./internal/provider/anthropic -run TestSSEToolUse -count=1"
+ },
+ {
+  "id": "P9-rebuild-assistant",
+  "file": "internal/provider/anthropic/request.go",
+  "old": "\t\t\tb.Write(c)\n\t\t}\n\t\tb.WriteString(`]}`)",
+  "new": "\t\t\tvar v any\n\t\t\t_ = json.Unmarshal(c, &v)\n\t\t\tcc, _ := json.Marshal(v)\n\t\t\tb.Write(cc)\n\t\t}\n\t\tb.WriteString(`]}`)",
+  "cmd": "go test ./internal/provider/anthropic -run TestBuildRequestVerbatim -count=1"
+ }
+]

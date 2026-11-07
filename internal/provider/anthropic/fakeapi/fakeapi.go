@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"time"
 )
@@ -54,12 +53,12 @@ type Server struct {
 	Validate func(body []byte) error
 	// BindThinking enables prefix-binding checks: a thinking block resent in
 	// the latest assistant message must equal what this server emitted.
-	emitted map[string]bool // signature -> true
+	emitted map[string]string // signature -> canonical thinking block
 	hold    chan struct{}
 }
 
 func New(steps ...Step) *Server {
-	s := &Server{steps: steps, emitted: map[string]bool{}}
+	s := &Server{steps: steps, emitted: map[string]string{}}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.handle))
 	return s
 }
@@ -111,6 +110,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("content-type", "text/event-stream")
 	fl, _ := w.(http.Flusher)
+	blocks := map[int]map[string]any{}
 	for i, e := range st.Events {
 		if st.CutAfter > 0 && i == st.CutAfter {
 			if st.CutMidEvent {
@@ -126,16 +126,47 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		if fl != nil {
 			fl.Flush()
 		}
-		// Remember emitted signatures for the binding check.
-		if strings.Contains(e.Data, "signature_delta") {
-			var d struct {
-				Delta struct{ Signature string } `json:"delta"`
-			}
-			if json.Unmarshal([]byte(e.Data), &d) == nil {
-				s.mu.Lock()
-				s.emitted[d.Delta.Signature] = true
-				s.mu.Unlock()
-			}
+		s.track(blocks, e)
+	}
+}
+
+// track rebuilds thinking blocks from the events it sends, so a replayed
+// block can be compared whole (text, signature and any unknown field).
+func (s *Server) track(blocks map[int]map[string]any, e Ev) {
+	var h struct {
+		Type  string         `json:"type"`
+		Index int            `json:"index"`
+		Block map[string]any `json:"content_block"`
+		Delta map[string]any `json:"delta"`
+	}
+	if json.Unmarshal([]byte(e.Data), &h) != nil {
+		return
+	}
+	switch h.Type {
+	case "content_block_start":
+		if h.Block["type"] == "thinking" {
+			blocks[h.Index] = h.Block
+		}
+	case "content_block_delta":
+		b := blocks[h.Index]
+		if b == nil {
+			return
+		}
+		switch h.Delta["type"] {
+		case "thinking_delta":
+			cur, _ := b["thinking"].(string)
+			add, _ := h.Delta["thinking"].(string)
+			b["thinking"] = cur + add
+		case "signature_delta":
+			b["signature"] = h.Delta["signature"]
+		}
+	case "content_block_stop":
+		if b := blocks[h.Index]; b != nil {
+			sig, _ := b["signature"].(string)
+			canon, _ := json.Marshal(b)
+			s.mu.Lock()
+			s.emitted[sig] = string(canon)
+			s.mu.Unlock()
 		}
 	}
 }
@@ -168,14 +199,17 @@ func checkHistory(body []byte, s *Server) error {
 				Type, ID, Signature, Thinking string
 			}
 			_ = json.Unmarshal(c, &b)
+			var whole map[string]any
+			_ = json.Unmarshal(c, &whole)
+			canon, _ := json.Marshal(whole)
 			if b.Type == "tool_use" {
 				uses = append(uses, b.ID)
 			}
 			if b.Type == "thinking" && m.Role == "assistant" {
 				s.mu.Lock()
-				ok := s.emitted[b.Signature]
+				want, known := s.emitted[b.Signature]
 				s.mu.Unlock()
-				if !ok {
+				if !known || want != string(canon) {
 					return fmt.Errorf("messages.%d: `thinking` blocks in the latest assistant message cannot be modified", i)
 				}
 			}
@@ -242,7 +276,7 @@ func ToolUse(think, sig, id, name, inputJSON string, in, out int) []Ev {
 	idx := 0
 	if think != "" {
 		e = append(e,
-			ev("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`),
+			ev("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":"","provider_meta":{"k":[1,2]}}}`),
 			ev("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":`+js(think)+`}}`),
 			ev("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":`+js(sig)+`}}`),
 			ev("content_block_stop", `{"type":"content_block_stop","index":0}`))

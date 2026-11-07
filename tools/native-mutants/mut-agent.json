@@ -1,0 +1,100 @@
+[
+ {
+  "id": "A1-exec-at-block-stop",
+  "file": "internal/provider/anthropic/client.go",
+  "old": "\t\t\t\trec.Usage = &u\n\t\t\t}\n\t\t\treturn nil, rec, err",
+  "new": "\t\t\t\trec.Usage = &u\n\t\t\t}\n\t\t\tif len(a.blocks) > 0 && a.blocks[len(a.blocks)-1].stopped {\n\t\t\t\ta.msg.StopReason = \"tool_use\"\n\t\t\t\tfor _, b := range a.blocks {\n\t\t\t\t\traw, _ := b.marshal()\n\t\t\t\t\ta.msg.Content = append(a.msg.Content, raw)\n\t\t\t\t}\n\t\t\t\treturn &a.msg, rec, nil\n\t\t\t}\n\t\t\treturn nil, rec, err",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestPartialStreamNeverExecutes"
+ },
+ {
+  "id": "A2-retype-assistant-content",
+  "file": "internal/agent/loop.go",
+  "old": "blk, _ := json.Marshal(res.Content)",
+  "new": "blk, _ := json.Marshal(func() []json.RawMessage {\n\t\tout := []json.RawMessage{}\n\t\tfor _, b := range res.Content {\n\t\t\tvar t struct {\n\t\t\t\tType string `json:\"type\"`\n\t\t\t\tThinking string `json:\"thinking,omitempty\"`\n\t\t\t\tSignature string `json:\"signature,omitempty\"`\n\t\t\t\tText string `json:\"text,omitempty\"`\n\t\t\t\tID string `json:\"id,omitempty\"`\n\t\t\t\tName string `json:\"name,omitempty\"`\n\t\t\t\tInput json.RawMessage `json:\"input,omitempty\"`\n\t\t\t}\n\t\t\t_ = json.Unmarshal(b, &t)\n\t\t\tnb, _ := json.Marshal(t)\n\t\t\tout = append(out, nb)\n\t\t}\n\t\treturn out\n\t}())",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestThinkingRoundTrip"
+ },
+ {
+  "id": "A3-hold-post-turn",
+  "file": "internal/agent/loop.go",
+  "old": "rs, err := c.Ledger.Hold(ctx, l.holdKey(idx, n), amt)",
+  "new": "var rs []store.Reservation\n\t\t\tvar err error",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestBudgetHeldBeforeSend"
+ },
+ {
+  "id": "A4-rerun-unresolved-shell",
+  "file": "internal/agent/loop.go",
+  "old": "\t\t\tif tc.SideEffecting {\n\t\t\t\ttext :=",
+  "new": "\t\t\tif false {\n\t\t\t\ttext :=",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestCrashResume"
+ },
+ {
+  "id": "A5-log-request-headers",
+  "file": "internal/provider/anthropic/client.go",
+  "old": "rec.Err = ae.Error()",
+  "new": "rec.Err = ae.Error() + fmt.Sprint(req.Header)",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestKeyNeverLeaks"
+ },
+ {
+  "id": "A6-history-mutable",
+  "file": "internal/store/migrations/0022_agent_turns.sql",
+  "old": "CREATE TRIGGER agent_messages_immutable BEFORE UPDATE OR DELETE ON agent_messages\n    FOR EACH ROW EXECUTE FUNCTION agent_messages_immutable();",
+  "new": "",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestAssistantHistoryIsImmutable"
+ },
+ {
+  "id": "A7-guard-bypass",
+  "file": "internal/agent/loop.go",
+  "old": "if c.Guard != nil {",
+  "new": "if false {",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestGuardRefusalDoesNotRun"
+ },
+ {
+  "id": "A8-no-redaction",
+  "file": "internal/agent/loop.go",
+  "old": "out = c.Redact.Redact(out)\n",
+  "new": "",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestToolOutputRedactedAtCreation"
+ },
+ {
+  "id": "A9-unknown-stop-is-done",
+  "file": "internal/agent/loop.go",
+  "old": "\t\treturn l.finish(ctx, OutcomeParked, \"unknown stop_reason \"",
+  "new": "\t\treturn l.finish(ctx, OutcomeDone, \"unknown stop_reason \"",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestUnknownStopReasonParks"
+ },
+ {
+  "id": "A10-no-restart-cap",
+  "file": "internal/agent/db.go",
+  "old": "if cap > 0 && starts > cap {",
+  "new": "if false {",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestCrashLoopBreaker"
+ },
+ {
+  "id": "A11-no-reap",
+  "file": "internal/agent/loop.go",
+  "old": "if _, err := c.Ledger.Reap(ctx); err != nil {",
+  "new": "if false {",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run 'TestHoldSurvivesCrash|TestCrashResume'"
+ },
+ {
+  "id": "A12-no-fence-check",
+  "file": "internal/agent/db.go",
+  "old": "if cur != fence {",
+  "new": "if false {",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestStaleFenceRefused"
+ },
+ {
+  "id": "A13-budget-not-cumulative",
+  "file": "internal/agent/ledger.go",
+  "old": "remaining := c.Total - spent",
+  "new": "remaining := c.Total + 0*spent",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestBudgetCumulative"
+ },
+ {
+  "id": "A14-timid-cost-ignores-cache",
+  "file": "internal/agent/prices.go",
+  "old": "ceilMul(u.CacheCreate, *p.CacheWrite) + ceilMul(u.CacheRead, *p.CacheRead) +",
+  "new": "",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestBudgetUsageCosts"
+ }
+]

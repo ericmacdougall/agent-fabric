@@ -16,6 +16,7 @@ type Usage struct {
 	Output      int64           `json:"output_tokens"`
 	CacheCreate int64           `json:"cache_creation_input_tokens"`
 	CacheRead   int64           `json:"cache_read_input_tokens"`
+	ServerTools int64           `json:"server_tool_uses"`
 	Raw         json.RawMessage `json:"raw,omitempty"`
 }
 
@@ -74,10 +75,11 @@ type assembler struct {
 func perr(f string, a ...any) error { return &ProtocolError{Msg: fmt.Sprintf(f, a...)} }
 
 type usageWire struct {
-	Input       *int64 `json:"input_tokens"`
-	Output      *int64 `json:"output_tokens"`
-	CacheCreate *int64 `json:"cache_creation_input_tokens"`
-	CacheRead   *int64 `json:"cache_read_input_tokens"`
+	Input       *int64           `json:"input_tokens"`
+	Output      *int64           `json:"output_tokens"`
+	CacheCreate *int64           `json:"cache_creation_input_tokens"`
+	CacheRead   *int64           `json:"cache_read_input_tokens"`
+	ServerTool  map[string]int64 `json:"server_tool_use"`
 }
 
 func (a *assembler) mergeUsage(raw json.RawMessage) error {
@@ -97,6 +99,12 @@ func (a *assembler) mergeUsage(raw json.RawMessage) error {
 	set(&a.msg.Usage.Output, w.Output)
 	set(&a.msg.Usage.CacheCreate, w.CacheCreate)
 	set(&a.msg.Usage.CacheRead, w.CacheRead)
+	if w.ServerTool != nil {
+		a.msg.Usage.ServerTools = 0
+		for _, n := range w.ServerTool {
+			a.msg.Usage.ServerTools += n
+		}
+	}
 	a.msg.Usage.Raw = bytes.Clone(raw)
 	return nil
 }
