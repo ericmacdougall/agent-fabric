@@ -3489,10 +3489,6 @@
    [
     "\tcmd.Cancel = func() error { return stopGroup(cmd.Process.Pid) }\n",
     ""
-   ],
-   [
-    "\t\tstopGroup(cmd.Process.Pid) //nolint:errcheck\n",
-    "\t\t_ = 0\n"
    ]
   ]
  },
@@ -3569,8 +3565,8 @@
   "expect": "TestDispatchDeadlineRowGuarded",
   "edits": [
    [
-    "NEW.deadline > now() + interval '15 minutes'",
-    "NEW.deadline > now() + interval '15 years'"
+    "NEW.deadline > clock_timestamp() + interval '15 minutes'",
+    "NEW.deadline > clock_timestamp() + interval '15 years'"
    ]
   ]
  },
@@ -3597,6 +3593,19 @@
    [
     "\n                   AND e.dispatches = NEW.dispatch) THEN",
     "\n                   AND NEW.dispatch > 0) THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M279_stamp_tx_start",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestStampAfterSlowPrecondition",
+  "edits": [
+   [
+    "VALUES ($1, $2, clock_timestamp() + $3::interval)`,",
+    "VALUES ($1, $2, now() + $3::interval)`,"
    ]
   ]
  }

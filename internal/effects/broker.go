@@ -133,6 +133,11 @@ const (
 //
 // Contract (review W2 on cbebbd6): every call returns by its context's
 // deadline, and nothing it started may reach the remote after it returns.
+// Bytes already sent may still be applied by the remote after a timeout, so
+// readback (and, for publish, the expected-head compare-and-swap) is the
+// real safety; the deadline only bounds when readback may start. A child
+// that leaves the process group (setsid, an ssh ControlMaster, a credential
+// daemon) escapes RunCommand: executors must disable such helpers.
 // The broker relies on this to decide when a dispatch whose session died is
 // stale. Network executors pass ctx to every request; process-based ones
 // use RunCommand, which stops the process group at the deadline. Check a
@@ -458,8 +463,10 @@ func (b *Broker) dispatchOn(ctx context.Context, c *pgxpool.Conn, exec Executor,
 	}
 	// Review nit 4 on cbebbd6: stamp this dispatch's deadline, so every
 	// reconciler judges staleness by it, not by its own timeout setting.
+	// Review X1 on 6717adc: clock_timestamp, not now() (the transaction
+	// start, before Precondition), so the window is the time actually left.
 	left := time.Until(deadlineOf(tctx))
-	if _, err := tx.Exec(ctx, `INSERT INTO effect_dispatches (effect_id, dispatch, deadline) VALUES ($1, $2, now() + $3::interval)`,
+	if _, err := tx.Exec(ctx, `INSERT INTO effect_dispatches (effect_id, dispatch, deadline) VALUES ($1, $2, clock_timestamp() + $3::interval)`,
 		id, e.Dispatches+1, interval(left)); err != nil {
 		return err
 	}

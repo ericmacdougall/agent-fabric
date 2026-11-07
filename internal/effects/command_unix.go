@@ -30,10 +30,8 @@ func RunCommand(ctx context.Context, dir, name string, args ...string) ([]byte, 
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
-	if cmd.Process != nil {
-		// Reap any of the group that outlived a normal exit of the leader.
-		stopGroup(cmd.Process.Pid) //nolint:errcheck
-	}
+	// No group stop after a normal exit: once every member has gone, the
+	// group id may be reused by an unrelated process (review nit on 6717adc).
 	if err == nil && ctx.Err() != nil {
 		err = ctx.Err()
 	}

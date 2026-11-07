@@ -302,3 +302,59 @@ func TestDispatchDeadlineRowGuarded(t *testing.T) {
 		t.Error("a valid deadline row was rewritten")
 	}
 }
+
+// slowPrecondition spends d in Precondition (honouring ctx), then parks the
+// transport like parkedSend.
+type slowPrecondition struct {
+	parkedSend
+	d time.Duration
+}
+
+func (s slowPrecondition) Precondition(ctx context.Context, e Effect) (bool, string, error) {
+	select {
+	case <-time.After(s.d):
+		return true, "", nil
+	case <-ctx.Done():
+		return false, "", ctx.Err()
+	}
+}
+
+// Review X1 on 6717adc: the stamped window starts when the deadline is
+// stamped, not at transaction start, so a slow Precondition does not make
+// the effect stale before its transport deadline.
+func TestStampAfterSlowPrecondition(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	runnerBroker(t, ctx, st)
+	ab := appBroker(t, ctx, st)
+	b.SetTransportTimeout(2 * time.Second)
+	ab.SetTransportTimeout(50 * time.Millisecond)
+	e, err := b.Submit(ctx, fake, uspec("x1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := slowPrecondition{parkedSend: parkedSend{Fake: fake, entered: make(chan struct{}), release: make(chan struct{})}, d: 1400 * time.Millisecond}
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() { _, err := b.Dispatch(ctx, sp, e.ID); done <- err }()
+	<-sp.entered
+	var killed bool
+	if err := st.Pool().QueryRow(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory'
+		AND classid = 4011 AND objid = hashtext($1)::oid AND objsubid = 2`, e.ID).Scan(&killed); err != nil || !killed {
+		t.Fatalf("terminate the dispatcher session: %v %v", killed, err)
+	}
+	if _, err := st.Pool().Exec(ctx, "UPDATE attempts SET state = 'UNKNOWN' WHERE id = 'r_1'"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Until(start.Add(1650 * time.Millisecond)))
+	if _, err := ab.Reconcile(ctx, fake, e.ID); !errors.Is(err, ErrNotReconcilable) {
+		t.Errorf("reconcile inside the transport deadline after a slow precondition: %v, want ErrNotReconcilable", err)
+	}
+	close(sp.release)
+	if err := <-done; err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if got, _ := ab.Load(ctx, e.ID); got.State != Confirmed || fake.Count() != 1 {
+		t.Fatalf("after the transport: %s remote=%d, want CONFIRMED 1", got.State, fake.Count())
+	}
+}

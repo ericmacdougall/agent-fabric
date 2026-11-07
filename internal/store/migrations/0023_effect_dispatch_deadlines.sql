@@ -6,7 +6,7 @@ CREATE TABLE effect_dispatches (
     effect_id text NOT NULL REFERENCES effects (id),
     dispatch  integer NOT NULL,
     deadline  timestamptz NOT NULL,
-    at        timestamptz NOT NULL DEFAULT now(),
+    at        timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (effect_id, dispatch)
 );
 
@@ -16,14 +16,15 @@ BEGIN
     IF TG_OP <> 'INSERT' THEN
         RAISE EXCEPTION 'effect_dispatches is append-only' USING ERRCODE = 'insufficient_privilege';
     END IF;
-    NEW.at := now();
+    -- Review X1: clock_timestamp, the time of this insert, as the window start.
+    NEW.at := clock_timestamp();
     -- Only for the dispatch just committed, with a bounded deadline (a far
     -- deadline would keep an effect from ever being reconciled).
     IF NOT EXISTS (SELECT 1 FROM public.effects e WHERE e.id = NEW.effect_id AND e.state = 'DISPATCHED'
                    AND e.dispatches = NEW.dispatch) THEN
         RAISE EXCEPTION 'effect % is not at dispatch %', NEW.effect_id, NEW.dispatch USING ERRCODE = 'check_violation';
     END IF;
-    IF NEW.deadline < now() - interval '5 seconds' OR NEW.deadline > now() + interval '15 minutes' THEN
+    IF NEW.deadline < clock_timestamp() - interval '5 seconds' OR NEW.deadline > clock_timestamp() + interval '15 minutes' THEN
         RAISE EXCEPTION 'dispatch deadline % out of range', NEW.deadline USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
