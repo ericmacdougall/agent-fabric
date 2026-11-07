@@ -8,7 +8,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,7 +31,8 @@ type Darwin struct {
 	SandboxExec string   // path to sandbox-exec; "" disables Seatbelt (controls then fail, by design)
 	ExtraRW     []string // extra writable paths; empty by default (review C2)
 	AllowP1     bool     // only the negative-control runner sets this
-	TCPPorts    []int    // outbound TCP ports a worker may connect to; empty means 443 only
+	TCPPorts    []int    // outbound TCP ports a worker may connect to; empty means 443 only (Linux: empty denies all)
+	ExtraRO     []string // reviewed read-only launch inputs under a denied home (provider, hooks, schema; review F4)
 
 	mu   sync.Mutex
 	cmds map[string]*exec.Cmd
@@ -46,45 +49,139 @@ func denyRead(home string) []string {
 	}
 }
 
-func (d *Darwin) profile(g Grant) string {
-	home := os.Getenv("HOME")
+// realPath resolves symlinks; an unresolvable path is cleaned, not used raw.
+func realPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
+}
+
+// homes returns every directory the profile treats as a home to deny
+// (review F1): HOME as set, the account's directory-service home (which an
+// overridden or empty HOME cannot move) and /Users (other accounts and
+// /Users/Shared). An empty, relative or root HOME is refused, because the
+// worker's tools and the controls would then disagree with the profile.
+func homes() ([]string, error) {
+	h := os.Getenv("HOME")
+	if h == "" || !filepath.IsAbs(h) || filepath.Clean(h) == "/" {
+		return nil, fmt.Errorf("darwin profile: HOME %q is not an absolute home directory; refusing to build a profile", h)
+	}
+	set := []string{realPath(h)}
+	u, err := user.Current()
+	if err != nil || u.HomeDir == "" || !filepath.IsAbs(u.HomeDir) {
+		return nil, fmt.Errorf("darwin profile: cannot resolve this account's home directory: %v", err)
+	}
+	for _, p := range []string{realPath(u.HomeDir), "/Users"} {
+		if !slices.Contains(set, p) {
+			set = append(set, p)
+		}
+	}
+	return set, nil
+}
+
+// ancestors lists every directory above p, up to and including "/".
+func ancestors(p string) []string {
+	var out []string
+	for d := filepath.Dir(p); ; d = filepath.Dir(d) {
+		out = append(out, d)
+		if d == "/" || d == "." {
+			return out
+		}
+	}
+}
+
+// insideTempRoot reports whether p is a system temp root or lies in one.
+// Sibling isolation is skipped there: denying reads of a shared temp
+// directory would break every tool that writes and rereads a temp file.
+func insideTempRoot(p string) bool {
+	for _, r := range []string{"/private/tmp", "/private/var/folders", "/tmp", "/var/folders"} {
+		if p == r || strings.HasPrefix(p, r+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *Darwin) profile(g Grant) (string, error) {
+	hs, err := homes()
+	if err != nil {
+		return "", err
+	}
 	rw := []string{g.RunDir, "/private/tmp", "/private/var/folders", "/dev"}
 	if g.Profile == "P1" {
 		rw = append(rw, g.Worktree)
 	}
 	rw = append(rw, d.ExtraRW...)
-	real := func(p string) string {
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			return r
-		}
-		return p
-	}
 	var b strings.Builder
 	b.WriteString("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*")
 	for _, p := range rw {
 		if p != "" {
-			fmt.Fprintf(&b, "\n  (subpath %q)", real(p))
+			fmt.Fprintf(&b, "\n  (subpath %q)", realPath(p))
 		}
 	}
 	b.WriteString(")\n")
 	// goodqa#15161 (Kimi K3): a worker runs as fabd's own uid, so a deny
 	// list under HOME always misses something (.docker, .pgpass,
-	// ~/.config/fabric). Deny every read under HOME, then allow back only
-	// the run's own directories; the later rule wins in Seatbelt.
-	if home != "" {
-		fmt.Fprintf(&b, "(deny file-read* (subpath %q))\n", real(home))
-		b.WriteString("(allow file-read*")
-		for _, p := range []string{g.RunDir, g.Worktree} {
-			if p != "" {
-				fmt.Fprintf(&b, "\n  (subpath %q)", real(p))
+	// ~/.config/fabric). Deny every read under every home, and under the
+	// directories holding other runs and other missions' worktrees (review
+	// F5), then allow back only this run's directories and the reviewed
+	// read-only launch inputs; the later rule wins in Seatbelt.
+	deny := append([]string{}, hs...)
+	for _, p := range []string{g.RunDir, g.Worktree} {
+		if parent := filepath.Dir(realPath(p)); parent != "/" && !insideTempRoot(parent) && !slices.Contains(deny, parent) {
+			deny = append(deny, parent)
+		}
+	}
+	b.WriteString("(deny file-read*")
+	for _, p := range deny {
+		fmt.Fprintf(&b, "\n  (subpath %q)", p)
+	}
+	b.WriteString(")\n(allow file-read*")
+	back := []string{realPath(g.RunDir), realPath(g.Worktree)}
+	for _, p := range d.ExtraRO {
+		r := realPath(p)
+		if !filepath.IsAbs(r) {
+			return "", fmt.Errorf("darwin profile: read-only input %q is not absolute", p)
+		}
+		// An input that is a home, or holds one, would undo the home deny.
+		for _, h := range hs {
+			if r == h || r == "/" || strings.HasPrefix(h, r+"/") {
+				return "", fmt.Errorf("darwin profile: read-only input %q exposes the home %s; name the provider's own directory instead", p, h)
 			}
 		}
-		b.WriteString(")\n")
+		back = append(back, r)
 	}
-	// The secret paths stay denied even if a run directory sits inside one.
+	for _, p := range back {
+		fmt.Fprintf(&b, "\n  (subpath %q)", p)
+	}
+	b.WriteString(")\n")
+	// Review F3: path canonicalisation (git, realpath(3), Node) lstat()s
+	// every component, so the ancestors of what was allowed back stay
+	// statable. Metadata only: their contents stay unreadable.
+	var meta []string
+	for _, p := range back {
+		for _, a := range ancestors(p) {
+			if !slices.Contains(meta, a) {
+				meta = append(meta, a)
+			}
+		}
+	}
+	b.WriteString("(allow file-read-metadata")
+	for _, a := range meta {
+		fmt.Fprintf(&b, "\n  (literal %q)", a)
+	}
+	b.WriteString(")\n")
+	// The secret paths stay denied even if an allowed directory sits inside
+	// one, for every home.
 	b.WriteString("(deny file-read*")
-	for _, p := range denyRead(home) {
-		fmt.Fprintf(&b, "\n  (subpath %q)\n  (literal %q)", real(p), real(p))
+	for _, h := range hs {
+		if h == "/Users" {
+			continue
+		}
+		for _, p := range denyRead(h) {
+			fmt.Fprintf(&b, "\n  (subpath %q)\n  (literal %q)", realPath(p), realPath(p))
+		}
 	}
 	b.WriteString(")\n")
 	// Red-team F4: no reading other processes' arguments or environment
@@ -105,7 +202,7 @@ func (d *Darwin) profile(g Grant) string {
 		fmt.Fprintf(&b, "\n  (remote tcp \"*:%d\")", p)
 	}
 	b.WriteString("\n  (literal \"/private/var/run/mDNSResponder\"))\n")
-	return b.String()
+	return b.String(), nil
 }
 
 // Start launches argv in a new session under sandbox-exec with an
@@ -121,7 +218,11 @@ func (d *Darwin) Start(g Grant, argv []string, env []string, stdout, stderr *os.
 		return Handle{}, errors.New("darwin profile: sandbox-exec not configured; refusing an unconfined launch")
 	}
 	profilePath := filepath.Join(g.RunDir, "seatbelt-"+string(g.Run)+".sb")
-	if err := os.WriteFile(profilePath, []byte(d.profile(g)), 0o600); err != nil {
+	prof, err := d.profile(g)
+	if err != nil {
+		return Handle{}, err
+	}
+	if err := os.WriteFile(profilePath, []byte(prof), 0o600); err != nil {
 		return Handle{}, err
 	}
 	runFile := filepath.Join(g.RunDir, ".fab-run-"+string(g.Run))
@@ -323,9 +424,10 @@ func (d *Darwin) runControl(g Grant, script string) (string, error) {
 // NegativeControls proves on this Mac that (1) a group signal misses a
 // setsid grandchild, (2) the inventory reap gets it, (3) Seatbelt denies a
 // write outside the allowed set, (4) secret paths are unreadable, (5) an
-// unlisted file under HOME is unreadable, (6) a loopback service on a port
-// that is not allowed is unreachable, (7) the user's Claude configuration
-// is unwritable, (8) the environment is the allow-list, not the host's.
+// unlisted file in every home is unreadable while a run-dir file reads,
+// (6) an allowed loopback port is reached and another is not, (7) every
+// reviewed launch input is readable, (8) the user's Claude configuration
+// is unwritable, (9) the environment is the allow-list, not the host's.
 func (d *Darwin) NegativeControls(scratch string) ([]ControlResult, error) {
 	var out []ControlResult
 	add := func(name string, ok bool, detail string) { out = append(out, ControlResult{name, ok, detail}) }
@@ -376,40 +478,98 @@ func (d *Darwin) NegativeControls(scratch string) ([]ControlResult, error) {
 	}
 	add("secret_paths_unreadable", strings.Contains(res, "ssh=denied") && strings.Contains(res, "claudejson=denied"), res)
 
-	// goodqa#15161: an unlisted file under HOME is unreadable too.
-	unlisted := filepath.Join(os.Getenv("HOME"), fmt.Sprintf(".fab-nc-read-%d", time.Now().UnixNano()))
-	if err := os.WriteFile(unlisted, []byte("x"), 0o600); err != nil {
-		return out, err
-	}
-	res, err = d.runControl(g, fmt.Sprintf(`cat %q >/dev/null 2>&1 && echo home=readable || echo home=denied`, unlisted))
-	os.Remove(unlisted)
+	// goodqa#15161: an unlisted file in every home is unreadable too. The
+	// canaries go in the same homes the profile denies (review F1), and an
+	// allowed canary in the run dir must read in the same script, so a
+	// broken script cannot pass as a denial (review F7).
+	hs, err := homes()
 	if err != nil {
 		return out, err
 	}
-	add("home_reads_default_denied", strings.Contains(res, "home=denied"), res)
+	allowed := filepath.Join(g.RunDir, "nc-allowed.txt")
+	if err := os.WriteFile(allowed, []byte("x"), 0o600); err != nil {
+		return out, err
+	}
+	script := fmt.Sprintf(`cat %q >/dev/null 2>&1 && echo ok=read || echo ok=denied`, allowed)
+	var canaries []string
+	for _, h := range hs {
+		if h == "/Users" {
+			continue // not writable by an ordinary account; covered by the account home
+		}
+		c := filepath.Join(h, fmt.Sprintf(".fab-nc-read-%d", time.Now().UnixNano()))
+		if err := os.WriteFile(c, []byte("x"), 0o600); err != nil {
+			return out, err
+		}
+		canaries = append(canaries, c)
+		script += fmt.Sprintf(`; cat %q >/dev/null 2>&1 && echo home=readable || echo home=denied`, c)
+	}
+	res, err = d.runControl(g, script)
+	for _, c := range canaries {
+		os.Remove(c)
+	}
+	if err != nil {
+		return out, err
+	}
+	add("home_reads_default_denied", len(canaries) >= 1 && strings.Contains(res, "ok=read") && !strings.Contains(res, "home=readable") &&
+		strings.Count(res, "home=denied") == len(canaries), res)
 
 	// goodqa#15161: a loopback service on a port that is not allowed is
-	// unreachable.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return out, err
-	}
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			c.Write([]byte("HTTP/1.0 200 OK\r\n\r\nreached")) //nolint:errcheck
-			c.Close()
+	// unreachable, while one on an allowed port is reached in the same run
+	// (review F2), so a profile that denies all network cannot pass.
+	serve := func() (net.Listener, error) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, err
 		}
-	}()
-	res, err = d.runControl(g, fmt.Sprintf(`/usr/bin/curl -s --max-time 3 http://%s/ | grep -q reached && echo net=reached || echo net=denied`, ln.Addr()))
-	ln.Close()
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				c.Write([]byte("HTTP/1.0 200 OK\r\n\r\nreached")) //nolint:errcheck
+				c.Close()
+			}
+		}()
+		return ln, nil
+	}
+	other, err := serve()
 	if err != nil {
 		return out, err
 	}
-	add("network_limited_to_allowed_ports", strings.Contains(res, "net=denied"), res)
+	allow, err := serve()
+	if err != nil {
+		other.Close()
+		return out, err
+	}
+	dn := &Darwin{SandboxExec: d.SandboxExec, ExtraRW: d.ExtraRW, ExtraRO: d.ExtraRO, AllowP1: true,
+		TCPPorts: append(append([]int{}, d.TCPPorts...), allow.Addr().(*net.TCPAddr).Port)}
+	if len(d.TCPPorts) == 0 {
+		dn.TCPPorts = append(dn.TCPPorts, 443)
+	}
+	curl := `/usr/bin/curl -s --max-time 3 http://%s/ | grep -q reached && echo %s=reached || echo %s=denied`
+	res, err = dn.runControl(g, fmt.Sprintf(curl+"; "+curl, allow.Addr(), "allowed", "allowed", other.Addr(), "other", "other"))
+	other.Close()
+	allow.Close()
+	if err != nil {
+		return out, err
+	}
+	add("network_limited_to_allowed_ports", strings.Contains(res, "allowed=reached") && strings.Contains(res, "other=denied"), res)
+
+	// Review F4: every reviewed launch input (provider, hooks, schema)
+	// stays readable under the profile, so a host does not report
+	// containment and then fail every real launch.
+	if len(d.ExtraRO) > 0 {
+		script = "true"
+		for _, p := range d.ExtraRO {
+			script += fmt.Sprintf(`; if [ -d %q ]; then ls %q >/dev/null 2>&1 && echo in=read || echo in=denied:%s; else head -c 1 %q >/dev/null 2>&1 && echo in=read || echo in=denied:%s; fi`, p, p, filepath.Base(p), p, filepath.Base(p))
+		}
+		res, err = d.runControl(g, script)
+		if err != nil {
+			return out, err
+		}
+		add("launch_inputs_readable", strings.Count(res, "in=read") == len(d.ExtraRO) && !strings.Contains(res, "in=denied"), res)
+	}
 
 	res, err = d.runControl(g, `(echo x >> "$HOME/.claude/settings.json.fab-nc") 2>/dev/null && echo claude=writable || echo claude=denied; (mkdir -p "$HOME/Library/Caches/fab-nc") 2>/dev/null && echo cache=writable || echo cache=denied`)
 	if err != nil {

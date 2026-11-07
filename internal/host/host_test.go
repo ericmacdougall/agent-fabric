@@ -76,6 +76,18 @@ func TestNegativeControls(t *testing.T) {
 	if len(unexpected) > 0 {
 		t.Fatalf("controls failed on %s: %s", p.Name(), strings.Join(unexpected, ", "))
 	}
+	// goodqa#15161 review F8: the K3 controls must exist, not only pass.
+	if runtime.GOOS == "darwin" {
+		ran := map[string]bool{}
+		for _, r := range results {
+			ran[r.Name] = r.Passed
+		}
+		for _, n := range []string{"home_reads_default_denied", "network_limited_to_allowed_ports"} {
+			if passed, ok := ran[n]; !ok || !passed {
+				t.Errorf("control %s missing or failing (present=%v)", n, ok)
+			}
+		}
+	}
 	containment, names := Capabilities(results)
 	if containment != (len(failed) == 0) {
 		t.Fatalf("Capabilities reports containment=%v with failed=%v", containment, names)

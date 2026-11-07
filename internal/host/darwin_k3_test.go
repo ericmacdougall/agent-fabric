@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,11 +33,11 @@ func TestDarwinProfileDefaultDeny(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	for p, body := range map[string]string{
-		".docker/canary.txt":         "DOCKER-CANARY",
-		".config/fabric/canary.txt":  "FABRIC-CANARY",
-		".pgpass":                    "PGPASS-CANARY",
-		"projects/wt/inside.txt":     "WT-OK",
-		"projects/wt-sibling/x.txt":  "SIBLING-CANARY",
+		".docker/canary.txt":        "DOCKER-CANARY",
+		".config/fabric/canary.txt": "FABRIC-CANARY",
+		".pgpass":                   "PGPASS-CANARY",
+		"projects/wt/inside.txt":    "WT-OK",
+		"projects/wt-sibling/x.txt": "SIBLING-CANARY",
 	} {
 		full := filepath.Join(home, p)
 		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
@@ -48,9 +49,32 @@ func TestDarwinProfileDefaultDeny(t *testing.T) {
 	}
 	g := controlGrant(t.TempDir())
 	g.Worktree = filepath.Join(home, "projects", "wt") // a worktree under HOME stays readable
-	d := &Darwin{TCPPorts: []int{443}}
+	// Review F2: a second loopback service on an allowed port must be
+	// reachable, so a profile that denies all network fails this test.
+	okLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer okLn.Close()
+	go http.Serve(okLn, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "EGRESS-OK") })) //nolint:errcheck
+	// Review F4: a reviewed launch input under HOME is allowed back read-only.
+	input := filepath.Join(home, "tools", "provider")
+	if err := os.MkdirAll(filepath.Dir(input), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(input, []byte("INPUT-OK"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(input+"-sibling", []byte("SIBLING-OK"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := &Darwin{TCPPorts: []int{443, okLn.Addr().(*net.TCPAddr).Port}, ExtraRO: []string{input}}
 	prof := filepath.Join(t.TempDir(), "p.sb")
-	if err := os.WriteFile(prof, []byte(d.profile(g)), 0o600); err != nil {
+	text, err := d.profile(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(prof, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	run := func(env []string, argv ...string) string {
@@ -66,6 +90,48 @@ func TestDarwinProfileDefaultDeny(t *testing.T) {
 	}
 	if got := run(nil, "/bin/cat", filepath.Join(home, "projects", "wt", "inside.txt")); got != "WT-OK" {
 		t.Errorf("worker cannot read its own worktree under HOME: %q", got)
+	}
+	if got := run(nil, "/bin/cat", input); got != "INPUT-OK" {
+		t.Errorf("worker cannot read a reviewed launch input under HOME: %q", got)
+	}
+	if got := run(nil, "/bin/cat", filepath.Join(home, "tools", "provider-sibling")); strings.Contains(got, "OK") {
+		t.Errorf("allow-back of a launch input leaked a sibling")
+	}
+	if got := run(nil, "/bin/ls", filepath.Join(home, "projects")); strings.Contains(got, "wt-sibling") {
+		t.Errorf("worker listed the directory holding other worktrees: %q", got)
+	}
+	// Review F3: path canonicalisation of the worktree under HOME works
+	// (realpath(3) and git lstat every component).
+	wt := filepath.Join(home, "projects", "wt")
+	if got := run(nil, "/bin/realpath", wt); got != realPath(wt) {
+		t.Errorf("realpath of the worktree under the profile: %q", got)
+	}
+	if out, err := exec.Command("/usr/bin/git", "-C", wt, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	if got := run([]string{"HOME=" + wt, "GIT_CONFIG_NOSYSTEM=1", "PATH=/usr/bin:/bin"}, "/usr/bin/git", "-C", wt, "rev-parse", "--show-toplevel"); got != realPath(wt) {
+		t.Errorf("git rev-parse in a worktree under HOME failed under the profile: %q", got)
+	}
+
+	// Review F1: the account's own home is denied even though HOME points
+	// elsewhere (here a temp dir), and other accounts' homes are too.
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acct := filepath.Join(u.HomeDir, fmt.Sprintf(".fab-k3-acct-%d", time.Now().UnixNano()))
+	if err := os.WriteFile(acct, []byte("ACCT-CANARY"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(acct)
+	if got := run(nil, "/bin/cat", acct); strings.Contains(got, "CANARY") {
+		t.Error("worker read the account's home while HOME was overridden")
+	}
+	if got := run(nil, "/bin/ls", "/Users"); strings.Contains(got, filepath.Base(u.HomeDir)) {
+		t.Errorf("worker listed /Users: %q", got)
+	}
+	if got := run(nil, "/usr/bin/curl", "-s", "--max-time", "3", "http://"+okLn.Addr().String()+"/"); got != "EGRESS-OK" {
+		t.Errorf("worker could not reach a service on an allowed port: %q", got)
 	}
 
 	// Loopback service on a port that is not allowed.
@@ -125,6 +191,102 @@ func TestDarwinProfileDefaultDeny(t *testing.T) {
 	}
 	if !strings.Contains(got, "helper-ran") {
 		t.Fatalf("procargs helper did not run under the profile: %q", got)
+	}
+}
+
+// Review F1: an empty, relative or root HOME refuses the profile (and so
+// the launch) instead of silently dropping the home deny.
+func TestDarwinProfileRefusesBadHome(t *testing.T) {
+	g := controlGrant(t.TempDir())
+	for _, h := range []string{"", "relative/home", "/"} {
+		t.Setenv("HOME", h)
+		if _, err := (&Darwin{}).profile(g); err == nil {
+			t.Errorf("HOME=%q: profile built", h)
+		}
+		if _, err := (&Darwin{SandboxExec: "/usr/bin/sandbox-exec", AllowP1: true}).Start(g, []string{"/usr/bin/true"}, nil, nil, nil); err == nil {
+			t.Errorf("HOME=%q: Start launched", h)
+		}
+	}
+}
+
+// Review F4 live: a reviewed launch input under the account's home passes
+// launch_inputs_readable, and the same file without the allow-back fails
+// it (so the control is not vacuous). Opt-in like the other controls.
+func TestDarwinLaunchInputsControl(t *testing.T) {
+	if os.Getenv("FABRIC_HOST_CONTROLS") == "" {
+		t.Skip("set FABRIC_HOST_CONTROLS=1 to run the process-signalling controls")
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(u.HomeDir, ".fab-nc-input-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	in := filepath.Join(dir, "provider")
+	if err := os.WriteFile(in, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := func(d *Darwin) ControlResult {
+		res, err := d.NegativeControls(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range res {
+			if r.Name == "launch_inputs_readable" {
+				return r
+			}
+		}
+		t.Fatal("launch_inputs_readable did not run")
+		return ControlResult{}
+	}
+	if r := result(&Darwin{SandboxExec: "/usr/bin/sandbox-exec", ExtraRO: []string{in}}); !r.Passed {
+		t.Errorf("allowed-back input unreadable: %s", r.Detail)
+	}
+	// Control: an input the profile does not allow back is reported denied.
+	g := controlGrant(t.TempDir())
+	bare := &Darwin{SandboxExec: "/usr/bin/sandbox-exec", AllowP1: true}
+	res, err := bare.runControl(g, fmt.Sprintf(`head -c 1 %q >/dev/null 2>&1 && echo in=read || echo in=denied`, in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res, "in=denied") {
+		t.Errorf("control: an input under the home read without an allow-back: %q", res)
+	}
+}
+
+// Review F5: with a work root outside every home, the directories holding
+// other runs and other missions' worktrees are denied before the allow-back.
+// Every writable place on a test Mac is a home or a temp root, so this
+// checks the generated profile text; inside a temp root it is skipped.
+func TestDarwinProfileDeniesSiblingRuns(t *testing.T) {
+	g := controlGrant(t.TempDir())
+	g.Worktree, g.RunDir = "/opt/fabric-k3/wt/m1", "/opt/fabric-k3/run/a1"
+	text, err := (&Darwin{}).profile(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deny := text[strings.Index(text, "(deny file-read*"):strings.Index(text, "(allow file-read*")]
+	for _, p := range []string{`(subpath "/opt/fabric-k3/wt")`, `(subpath "/opt/fabric-k3/run")`, `(subpath "/Users")`} {
+		if !strings.Contains(deny, p) {
+			t.Errorf("read deny lacks %s:\n%s", p, deny)
+		}
+	}
+	// An input that is a home, or holds one, is refused.
+	for _, in := range []string{os.Getenv("HOME"), "/Users", "/", "relative"} {
+		if _, err := (&Darwin{ExtraRO: []string{in}}).profile(g); err == nil {
+			t.Errorf("read-only input %q accepted", in)
+		}
+	}
+	g = controlGrant(t.TempDir())
+	if text, err = (&Darwin{}).profile(g); err != nil {
+		t.Fatal(err)
+	}
+	deny = text[strings.Index(text, "(deny file-read*"):strings.Index(text, "(allow file-read*")]
+	if strings.Contains(deny, "/var/folders") || strings.Contains(deny, "/private/tmp") {
+		t.Errorf("read deny covers a shared temp root:\n%s", deny)
 	}
 }
 

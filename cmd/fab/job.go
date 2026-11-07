@@ -98,6 +98,14 @@ func daemonMain(args []string) error {
 		return err
 	}
 	os.Setenv("FABRIC_WORKER_USER", *workerUser)
+	os.Setenv("FABRIC_RUNNER_DSN_ENV", *runnerDSNEnv) // its port joins the worker's TCP allow-list (goodqa#15161)
+	// The schema is written before the profile and the controls, so the
+	// launch_inputs_readable control sees the file a real launch reads.
+	schemaPath := filepath.Join(*workRoot, "checkpoint.schema.json")
+	if err := os.WriteFile(schemaPath, []byte(checkpointSchema), 0o644); err != nil {
+		return err
+	}
+	darwinLaunchRO = launchInputs(*provider, os.Getenv("FABRIC_HOOKS_DIR"), schemaPath)
 	ln, err := launcherForThisHost()
 	if err != nil {
 		return err
@@ -122,10 +130,7 @@ func daemonMain(args []string) error {
 	cfg.Holds = holds
 	cfg.RunnerDSN = os.Getenv(*runnerDSNEnv)
 	// goodqa#15087 AC-6: the same launch the AC-6 (f) live check runs.
-	cfg.Launch = claude.ProductionLaunch(*provider, filepath.Join(*workRoot, "checkpoint.schema.json"), os.Getenv("FABRIC_HOOKS_DIR"))
-	if err := os.WriteFile(cfg.Launch.SchemaPath, []byte(checkpointSchema), 0o644); err != nil {
-		return err
-	}
+	cfg.Launch = claude.ProductionLaunch(*provider, schemaPath, os.Getenv("FABRIC_HOOKS_DIR"))
 	return withStore(func(ctx context.Context, st *store.Store) error {
 		s := sched.New(st, cfg, ln)
 		if p, ok := runnerProber(*workerUser); ok {

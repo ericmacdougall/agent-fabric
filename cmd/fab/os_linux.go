@@ -4,7 +4,6 @@ package main
 
 import (
 	"errors"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,16 +21,12 @@ import (
 func newLinuxProfile(self string) host.Profile {
 	home := os.Getenv("HOME")
 	ro := []string{"/usr/local/go", filepath.Join(home, "go", "pkg", "mod"), filepath.Join(home, ".local", "bin"), filepath.Join(home, ".local", "share", "fabric")}
-	ports := []int{443}
-	if u, err := url.Parse(os.Getenv("FABRIC_DSN")); err == nil && u.Port() != "" {
-		if p, err := strconv.Atoi(u.Port()); err == nil {
-			ports = append(ports, p)
-		}
-	}
-	return &host.Linux{Self: self, ReadOnly: ro, TCPPorts: ports, User: os.Getenv("FABRIC_WORKER_USER")}
+	return &host.Linux{Self: self, ReadOnly: ro, TCPPorts: workerTCPPorts(), User: os.Getenv("FABRIC_WORKER_USER")}
 }
 
 func newDarwinProfile(string) host.Profile { return nil }
+
+var darwinLaunchRO []string // Darwin only; set by `fab daemon` on every OS
 
 // sandboxMain: `fab __sandbox --env-keep NAMES [--ro DIR]... [--rw DIR]... [--tcp PORT]... -- argv`.
 // Applies Landlock to this process, then execs argv in place with exactly

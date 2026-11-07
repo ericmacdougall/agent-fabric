@@ -290,21 +290,49 @@ at all. An operator-only role for these commands is follow-up work.
 - macOS cannot see the environment of Apple platform binaries; attribution
   uses an inherited descriptor as a second signal, and a platform binary that
   calls `setsid` and closes inherited descriptors is still invisible.
-- A macOS worker runs as fabd's own user, so the Seatbelt profile is the
-  whole boundary (goodqa#15161):
-  - every read under `$HOME` is denied except the run's directory and
-    worktree, and the secret paths stay denied even inside those;
+- A macOS worker runs as fabd's own user, so its file, process-info and
+  network access is limited by the Seatbelt profile (goodqa#15161):
+  - `HOME` must be an absolute directory other than `/`, or the launch is
+    refused;
+  - every read under `$HOME`, under the account's directory-service home
+    (an overridden `HOME` does not move it) and under `/Users` is denied.
+    Reads are also denied in the directories holding other runs and other
+    missions' worktrees, unless the work root sits in a shared temp
+    directory. Only the run's directory, its worktree and the reviewed
+    launch inputs are allowed back. The secret paths stay denied even
+    inside those;
+  - the ancestors of what is allowed back can still be stat'ed (metadata
+    only), so git, `realpath` and Node can canonicalise paths;
+  - the launch inputs are the provider's installed directory (after
+    symlinks), `FABRIC_HOOKS_DIR`, the schema file and any extra absolute
+    paths in `FABRIC_DARWIN_EXTRA_RO` (for example nvm's node directory
+    when `claude` is an npm install). An entry that is a home or contains
+    one is refused. Any other tool on `PATH` under a home is unreadable,
+    so install toolchains outside `$HOME` or list them there;
   - reading other processes' arguments or environment (process info and
     `kern.procargs2`) is denied;
-  - network is denied except outbound TCP to 443 and the database port of
-    `FABRIC_DSN`, plus the DNS resolver socket. Seatbelt filters by port,
-    not host, so any host on those ports is reachable; that is
-    port-scoped, not mediated, egress;
-  - a provider installed under `$HOME` is unreadable to a worker, so
-    install it outside `$HOME`.
-  The negative controls `home_reads_default_denied` and
-  `network_limited_to_allowed_ports` prove this on the host before an
-  untrusted provider runs.
+  - network is denied except outbound TCP to 443 and the database ports of
+    `FABRIC_DSN` and the runner DSN (5432 when a postgres URL names no
+    port), plus the DNS resolver socket. Seatbelt filters by port, not
+    host, so any host on those ports is reachable; that is port-scoped,
+    not mediated, egress. Unix-domain sockets are denied too, so tools
+    that use a path socket for their own IPC (gpg-agent, ssh
+    ControlMaster, some language servers) fail. An empty port list means
+    443 on macOS but no TCP at all on Linux;
+  - the profile is still allow-default for mach IPC, signals and launchd:
+    a worker that asks launchd or LaunchServices to start a process gets
+    an unsandboxed one, and it can signal fabd. These denies are
+    goodqa#15196.
+  The negative controls check a sample of this on the host before an
+  untrusted provider runs:
+  - `home_reads_default_denied`: canaries in each home are unreadable, and
+    a run-dir file is readable in the same run;
+  - `network_limited_to_allowed_ports`: an allowed loopback port is
+    reached and another is refused;
+  - `launch_inputs_readable`: every launch input is readable.
+  The unit test `TestDarwinProfileDefaultDeny` covers the rest:
+  `kern.procargs2`, unix sockets, git in a worktree under the home, and
+  the sibling and allow-back boundaries.
 - The grant is an in-process struct, not a signed envelope; there is no
   separate host agent yet; the worker still carries a runner database DSN
   (asks and effects).

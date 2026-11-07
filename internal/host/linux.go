@@ -46,7 +46,7 @@ type Linux struct {
 	// only; containment is not demonstrated).
 	User string
 
-	mu   sync.Mutex
+	mu       sync.Mutex
 	cmds     map[string]*exec.Cmd
 	envFiles map[string]string // unit -> environment file, removed after Wait
 }
