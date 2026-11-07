@@ -22,6 +22,9 @@ import (
 type Env struct {
 	Cap       int
 	SlotsUsed int // missions other than this one that hold a slot
+	// UnsettledEffects: COMPLETE_MISSION only, the mission's broker effects
+	// that are DISPATCHED, UNKNOWN, RECONCILING or QUARANTINED (review N1).
+	UnsettledEffects int
 }
 
 // Decide returns the events a command produces, or a refusal. A refusal is a
@@ -410,6 +413,8 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		allowed := map[domain.EffectState][]domain.EffectState{
 			domain.EffectDispatched: {domain.EffectConfirmed, domain.EffectFailedDefinite, domain.EffectQuarantined},
 			domain.EffectUnknown:    {domain.EffectConfirmed, domain.EffectNotApplied, domain.EffectQuarantined},
+			// Review N2: the operator exit, with a reason and an evidence receipt.
+			domain.EffectQuarantined: {domain.EffectResolvedApplied, domain.EffectResolvedNotApplied},
 		}[f.State]
 		if allowed == nil {
 			return nil, fmt.Errorf("%w: resolve while %s", domain.ErrInvalidTransition, f.State)
@@ -421,10 +426,15 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if !ok {
 			return nil, fmt.Errorf("%w: effect %s %s -> %q", domain.ErrInvalidTransition, f.ID, f.State, cmd.Result)
 		}
+		if f.State == domain.EffectQuarantined && (cmd.Reason == "" || cmd.Receipt == "") {
+			return nil, fmt.Errorf("%w: resolving a quarantined effect needs a reason and an evidence receipt", domain.ErrInvalidTransition)
+		}
 		e := ev(domain.EvEffectResolved)
 		e.Effect = f.ID
 		e.Submission = cmd.Submission
 		e.Result = cmd.Result
+		e.Reason = cmd.Reason
+		e.Receipt = cmd.Receipt
 		return []domain.Event{e}, nil
 
 	case domain.CmdRelease:
@@ -487,7 +497,9 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if m.UnresolvedAttempts() > 0 {
 			return nil, fmt.Errorf("%w: done while an attempt is unresolved", domain.ErrUnknownUnresolved)
 		}
-		if n := m.UnsettledEffects(); n > 0 {
+		// Review N1: the broker's effects table counts too (Env, read in
+		// the command's transaction by the store).
+		if n := m.UnsettledEffects() + env.UnsettledEffects; n > 0 {
 			return nil, fmt.Errorf("%w: done while %d effect(s) are unsettled; settle or reconcile them first", domain.ErrUnknownUnresolved, n)
 		}
 		e := ev(domain.EvMissionSucceeded)

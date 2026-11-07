@@ -370,6 +370,15 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	}
 
 	env := reducer.Env{Cap: cap}
+	if cmd.Kind == domain.CmdCompleteMission {
+		// Review N1: the broker's effects for this mission, in this
+		// transaction. None can become unsettled meanwhile: Submit and
+		// Dispatch need a live fence, and done needs no live attempt.
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM effects WHERE mission_id = $1
+			AND state IN ('DISPATCHED', 'UNKNOWN', 'RECONCILING', 'QUARANTINED')`, string(cmd.Mission)).Scan(&env.UnsettledEffects); err != nil {
+			return Response{}, err
+		}
+	}
 	if cmd.Kind == domain.CmdAdmitMission {
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM missions WHERE id <> $1
 			AND execution IN ('ADMITTED', 'RUNNING', 'WAITING', 'PAUSED')`, string(cmd.Mission)).Scan(&env.SlotsUsed); err != nil {

@@ -62,6 +62,9 @@ const (
 	EffectUnknown        EffectState = "UNKNOWN"
 	EffectNotApplied     EffectState = "NOT_APPLIED"
 	EffectQuarantined    EffectState = "QUARANTINED"
+	// Review N2: an operator's resolution of a QUARANTINED effect.
+	EffectResolvedApplied    EffectState = "RESOLVED_APPLIED"
+	EffectResolvedNotApplied EffectState = "RESOLVED_NOT_APPLIED"
 )
 
 // HoldsSlot reports whether a mission in this execution state occupies one of
@@ -282,7 +285,7 @@ func (m Mission) UnsettledEffects() int {
 	n := 0
 	for _, f := range m.Effects {
 		switch f.State {
-		case EffectConfirmed, EffectFailedDefinite, EffectNotApplied:
+		case EffectConfirmed, EffectFailedDefinite, EffectNotApplied, EffectResolvedApplied, EffectResolvedNotApplied:
 		default:
 			n++
 		}

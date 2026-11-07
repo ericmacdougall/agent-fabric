@@ -144,3 +144,32 @@ func TestRevisedIntentClearsLiveTest(t *testing.T) {
 		t.Fatalf("done after re-acceptance on the old live test: %v, want ErrLiveTestMissing", err)
 	}
 }
+
+// Review N2 on aecf3fa: a QUARANTINED effect has an operator exit, with a
+// reason and an evidence receipt, to a settled terminal state.
+func TestQuarantinedEffectOperatorResolve(t *testing.T) {
+	f, id, a, fence := startedMission(t)
+	ev := mustStep(t, f, domain.Command{Kind: domain.CmdSubmitEffect, Mission: id, Attempt: a, Fence: fence, EffectKind: "ticket_comment",
+		Request: []byte(`{"ticket": 14922, "body": "q"}`)})
+	eid := ev[0].Effect
+	mustStep(t, f, domain.Command{Kind: domain.CmdEffectUnknown, Mission: id, Effect: eid, Submission: 1})
+	mustStep(t, f, domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: eid, Submission: 1, Result: "QUARANTINED"})
+	res := domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: eid, Submission: 1, Result: string(domain.EffectResolvedNotApplied)}
+	for _, c := range []domain.Command{
+		func() domain.Command { c := res; c.Receipt = "rcpt_op"; return c }(),  // no reason
+		func() domain.Command { c := res; c.Reason = "checked"; return c }(),   // no evidence
+		func() domain.Command { c := res; c.Result = "CONFIRMED"; return c }(), // not an operator outcome
+	} {
+		if _, err := f.step(t, c); !errors.Is(err, domain.ErrInvalidTransition) {
+			t.Errorf("operator resolve %+v: %v, want ErrInvalidTransition", c.Result, err)
+		}
+	}
+	res.Reason, res.Receipt = "ticket comments read back: not posted", "rcpt_op"
+	mustStep(t, f, res)
+	if got := f.missions[id].Effects[eid].State; got != domain.EffectResolvedNotApplied {
+		t.Fatalf("after the operator resolve: %s", got)
+	}
+	if n := f.missions[id].UnsettledEffects(); n != 0 {
+		t.Fatalf("a resolved effect still counts as unsettled (%d)", n)
+	}
+}

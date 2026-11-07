@@ -59,11 +59,33 @@ func goodqaExecutor() (*effects.GoodQA, error) {
 //	fab effect comment --mission M --attempt R --fence F --issue-id UUID --ticket goodqa#N --body TEXT --key K [--approve]
 //	fab effect reconcile --id E   (app role: readback is not a runner step, 0018)
 //	fab effect show --id E
+//	fab effect resolve --id E --outcome applied|not_applied --reason R --evidence REF   (app role; QUARANTINED only, audited)
 func effectMain(args []string) error {
 	if len(args) == 0 {
-		return errors.New("effect comment|reconcile|show")
+		return errors.New("effect comment|reconcile|show|resolve")
 	}
 	switch args[0] {
+	case "resolve":
+		fs := flag.NewFlagSet("effect resolve", flag.ContinueOnError)
+		id := fs.String("id", "", "effect id")
+		outcome := fs.String("outcome", "", "applied or not_applied: what the operator established")
+		reason := fs.String("reason", "", "how the outcome was established")
+		evidence := fs.String("evidence", "", "evidence reference (readback log, WAL id, remote record)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		to := map[string]effects.State{"applied": effects.ResolvedApplied, "not_applied": effects.ResolvedNotApplied}[*outcome]
+		if to == "" {
+			return errors.New("--outcome must be applied or not_applied")
+		}
+		return withStore(func(ctx context.Context, st *store.Store) error {
+			e, err := effects.New(st).ResolveQuarantined(ctx, *id, to, *reason, *evidence, actor())
+			if err != nil {
+				return err
+			}
+			fmt.Printf("effect %s %s (%s)\n", e.ID, e.State, e.LastError)
+			return nil
+		})
 	case "comment":
 		fs := flag.NewFlagSet("effect comment", flag.ContinueOnError)
 		mission := fs.String("mission", "", "mission id")

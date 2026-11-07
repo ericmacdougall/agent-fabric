@@ -76,6 +76,8 @@ func TestRolesLeastPrivilege(t *testing.T) {
 		{"runner", runner, "DELETE FROM waits"},
 		{"runner", runner, "INSERT INTO commands (actor, mission_id, command_id, kind, request_sha256, status, response) VALUES ('fabd', 'm_x', 'c_x', 'WAKE', 'x', 'OK', '{}')"},
 		{"runner", runner, "DELETE FROM jobs"},
+		// Review N2 on aecf3fa: the operator exit is not the runner's.
+		{"runner", runner, "INSERT INTO effect_resolutions (effect_id, from_state, to_state, reason, evidence, actor) VALUES ('e_x', 'QUARANTINED', 'RESOLVED_APPLIED', 'r', 'e', 'runner')"},
 	} {
 		if _, err := c.st.pool.Exec(ctx, c.stmt); sqlCode(err) != "42501" {
 			t.Errorf("%s: %q gave %v, want 42501", c.who, c.stmt, err)
@@ -194,7 +196,7 @@ func TestRolesUpgradeNarrowsRunner(t *testing.T) {
 	r := testRoles(t, owner, ctx)
 	runner := openAs(t, ctx, r.Runner())
 	// Each grant alone is enough to be refused.
-	for _, g := range []string{"UPDATE ON attempts", "UPDATE ON missions", "UPDATE ON slots", "DELETE ON waits", "INSERT ON commands"} {
+	for _, g := range []string{"UPDATE ON attempts", "UPDATE ON missions", "UPDATE ON slots", "DELETE ON waits", "INSERT ON commands", "INSERT ON effect_resolutions"} {
 		if _, err := owner.pool.Exec(ctx, "GRANT "+g+" TO "+r.Runner()); err != nil {
 			t.Fatal(err)
 		}

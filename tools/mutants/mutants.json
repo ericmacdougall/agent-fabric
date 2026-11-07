@@ -1850,8 +1850,8 @@
   "expect": "TestLaunchedFinishResetsPrelaunchCount",
   "edits": [
    [
-    "\t\tif !e.Prelaunch {\n\t\t\ts.PrelaunchFailures, s.DeferMS = 0, 0",
-    "\t\tif e.Prelaunch {\n\t\t\ts.PrelaunchFailures, s.DeferMS = 0, 0"
+    "\t\tif !e.Prelaunch {\n\t\t\ts.PrelaunchFailures, s.CapacityWaits, s.DeferMS = 0, 0, 0",
+    "\t\tif e.Prelaunch {\n\t\t\ts.PrelaunchFailures, s.CapacityWaits, s.DeferMS = 0, 0, 0"
    ]
   ]
  },
@@ -2752,6 +2752,110 @@
    [
     "\t\ts.Accepted = nil\n\t\t// Review M2: the delivery and live test rested on the revoked\n\t\t// acceptance; a re-acceptance needs its own.\n\t\ts.LiveTest = nil\n\t\ts.DeliveredGeneration = nil\n",
     "\t\ts.Accepted = nil\n"
+   ]
+  ]
+ },
+ {
+  "id": "M210_done_skips_broker_effects",
+  "invariant": "done_effects",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestDoneCountsBrokerEffects",
+  "edits": [
+   [
+    "\t\t\tAND state IN ('DISPATCHED', 'UNKNOWN', 'RECONCILING', 'QUARANTINED')`, string(cmd.Mission)).Scan(&env.UnsettledEffects)",
+    "\t\t\tAND false`, string(cmd.Mission)).Scan(&env.UnsettledEffects)"
+   ]
+  ]
+ },
+ {
+  "id": "M211_done_ignores_env_effects",
+  "invariant": "done_effects",
+  "pkg": "./internal/store",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestDoneCountsBrokerEffects",
+  "edits": [
+   [
+    "\t\tif n := m.UnsettledEffects() + env.UnsettledEffects; n > 0 {",
+    "\t\tif n := m.UnsettledEffects(); n > 0 {"
+   ]
+  ]
+ },
+ {
+  "id": "M212_resolve_without_reason",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestResolveQuarantinedEffect",
+  "edits": [
+   [
+    "\tif reason == \"\" || evidence == \"\" || actor == \"\" {",
+    "\tif actor == \"\" {"
+   ]
+  ]
+ },
+ {
+  "id": "M213_resolve_any_state",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestResolveQuarantinedEffect",
+  "edits": [
+   [
+    "\tif State(state) != Quarantined {",
+    "\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M214_unaudited_resolution",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestResolveQuarantinedEffect",
+  "edits": [
+   [
+    "        IF OLD.state <> 'QUARANTINED' OR NOT EXISTS (",
+    "        IF OLD.state <> 'QUARANTINED' OR false AND NOT EXISTS ("
+   ]
+  ]
+ },
+ {
+  "id": "M215_reducer_resolve_without_reason",
+  "invariant": "done_effects",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestQuarantinedEffectOperatorResolve",
+  "edits": [
+   [
+    "\t\tif f.State == domain.EffectQuarantined && (cmd.Reason == \"\" || cmd.Receipt == \"\") {",
+    "\t\tif false && f.State == domain.EffectQuarantined {"
+   ]
+  ]
+ },
+ {
+  "id": "M216_check_ignores_resolutions",
+  "invariant": "done_effects",
+  "pkg": "./internal/store",
+  "file": "internal/store/roles.go",
+  "expect": "TestRolesUpgradeNarrowsRunner",
+  "edits": [
+   [
+    " OR has_table_privilege(current_user, 'effect_resolutions', 'INSERT')`).Scan",
+    "`).Scan"
+   ]
+  ]
+ },
+ {
+  "id": "M217_resolutions_mutable",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestResolveQuarantinedEffect",
+  "edits": [
+   [
+    "    RAISE EXCEPTION 'effect_resolutions is append-only' USING ERRCODE = 'insufficient_privilege';",
+    "    RETURN NULL;"
    ]
   ]
  }

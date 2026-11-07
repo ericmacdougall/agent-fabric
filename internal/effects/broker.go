@@ -38,6 +38,9 @@ const (
 	Reconciling      State = "RECONCILING"
 	NotApplied       State = "NOT_APPLIED"
 	Quarantined      State = "QUARANTINED"
+	// Review N2: an operator settled a QUARANTINED effect (ResolveQuarantined).
+	ResolvedApplied    State = "RESOLVED_APPLIED"
+	ResolvedNotApplied State = "RESOLVED_NOT_APPLIED"
 )
 
 var (
@@ -463,3 +466,46 @@ func (b *Broker) Unresolved(ctx context.Context, age time.Duration, limit int) (
 // SettleRefused is how many dispatch outcomes this broker could not record
 // because their run had ended.
 func (b *Broker) SettleRefused() int64 { return b.settleRefused.Load() }
+
+// ResolveQuarantined is the operator exit for a QUARANTINED effect (review
+// N2 on aecf3fa): an app-role actor who has established the outcome by
+// other means (a manual readback, the remote's own log) records it with a
+// reason and an evidence reference. The audit row and the state change
+// commit together; migration 0020 refuses either without the other, and
+// the runner role can write neither.
+func (b *Broker) ResolveQuarantined(ctx context.Context, id string, outcome State, reason, evidence, actor string) (Effect, error) {
+	if outcome != ResolvedApplied && outcome != ResolvedNotApplied {
+		return Effect{}, fmt.Errorf("%w: a quarantined effect resolves to %s or %s, not %q", domain.ErrInvalidTransition, ResolvedApplied, ResolvedNotApplied, outcome)
+	}
+	if reason == "" || evidence == "" || actor == "" {
+		return Effect{}, fmt.Errorf("%w: resolving a quarantined effect needs a reason, an evidence reference and an actor", domain.ErrInvalidTransition)
+	}
+	tx, err := b.pool.Begin(ctx)
+	if err != nil {
+		return Effect{}, err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck
+	var state string
+	err = tx.QueryRow(ctx, "SELECT state FROM effects WHERE id = $1 FOR UPDATE", id).Scan(&state)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Effect{}, fmt.Errorf("%w: effect %s", domain.ErrNotFound, id)
+	}
+	if err != nil {
+		return Effect{}, err
+	}
+	if State(state) != Quarantined {
+		return Effect{}, fmt.Errorf("%w: resolve while %s (needs QUARANTINED)", domain.ErrInvalidTransition, state)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO effect_resolutions (effect_id, from_state, to_state, reason, evidence, actor) VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, state, string(outcome), reason, evidence, actor); err != nil {
+		return Effect{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now() WHERE id = $1`,
+		id, string(outcome), "resolved by "+actor+": "+reason); err != nil {
+		return Effect{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Effect{}, err
+	}
+	return b.Load(ctx, id)
+}

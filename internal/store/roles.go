@@ -141,7 +141,7 @@ func (s *Store) CheckRunnerRole(ctx context.Context) error {
 		has_table_privilege(current_user, 'hold_commands', 'INSERT')
 		OR has_table_privilege(current_user, 'attempts', 'UPDATE') OR has_table_privilege(current_user, 'missions', 'UPDATE')
 		OR has_table_privilege(current_user, 'slots', 'UPDATE') OR has_table_privilege(current_user, 'waits', 'DELETE')
-		OR has_table_privilege(current_user, 'commands', 'INSERT')`).Scan(&who, &super, &owner, &sched, &hold)
+		OR has_table_privilege(current_user, 'commands', 'INSERT') OR has_table_privilege(current_user, 'effect_resolutions', 'INSERT')`).Scan(&who, &super, &owner, &sched, &hold)
 	if err != nil {
 		return err
 	}

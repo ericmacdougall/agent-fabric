@@ -23,7 +23,13 @@ production readiness.
   database-time leases.
 - `internal/effects`: the effect broker (`INTENT -> DISPATCHED -> CONFIRMED |
   FAILED_DEFINITE | UNKNOWN -> reconciled by readback`), approval bound to the
-  request hash, a fake executor and a GoodQA ticket-comment executor.
+  request hash, a fake executor and a GoodQA ticket-comment executor. A
+  readback conflict leaves an effect `QUARANTINED`; only an app-role operator
+  can settle it (`fab effect resolve --outcome applied|not_applied --reason
+  --evidence`), audited in the append-only `effect_resolutions` table.
+- Done means live-tested: `fab done` is refused until `fab live-test` records a
+  receipt for the deployed commit of the current candidate, and while any of
+  the mission's effects (reducer or broker) is unsettled.
 - `internal/host`: Linux (systemd user unit + cgroup inventory + Landlock) and
   macOS (own session + Seatbelt + inventory by token and inherited descriptor)
   profiles, each with a negative-control suite that must pass before the
