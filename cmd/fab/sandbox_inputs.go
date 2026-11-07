@@ -81,6 +81,25 @@ func dsnPorts(dsn string) []string {
 	return strings.Split(port, ",")
 }
 
+// providerPath is the provider binary as an absolute path with symlinks
+// resolved ("" when it cannot be found). The launch line runs this file:
+// a symlink such as ~/.local/bin/claude sits in a directory the Darwin
+// profile denies, so exec through it fails (review 716fc04 C).
+func providerPath(provider string) string {
+	path, err := exec.LookPath(provider)
+	if err != nil {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	if r, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = r
+	}
+	return abs
+}
+
 // launchInputs lists the read-only inputs a real launch needs that may sit
 // under a home the Darwin profile denies (goodqa#15161 review F4): the
 // provider's installed directory, the hooks directory, the schema file,
@@ -93,13 +112,8 @@ func launchInputs(provider, hooksDir, schema string) []string {
 			out = append(out, filepath.Clean(p))
 		}
 	}
-	if path, err := exec.LookPath(provider); err == nil {
-		if abs, err := filepath.Abs(path); err == nil {
-			if r, err := filepath.EvalSymlinks(abs); err == nil {
-				abs = r
-			}
-			add(filepath.Dir(abs))
-		}
+	if p := providerPath(provider); p != "" {
+		add(filepath.Dir(p))
 	}
 	add(hooksDir)
 	add(schema)

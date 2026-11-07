@@ -102,10 +102,21 @@ func daemonMain(args []string) error {
 	// The schema is written before the profile and the controls, so the
 	// launch_inputs_readable control sees the file a real launch reads.
 	schemaPath := filepath.Join(*workRoot, "checkpoint.schema.json")
+	// The controls used to create the work root (0775, like controlGrant);
+	// the schema is now written first, so create it here (review 716fc04).
+	if err := os.MkdirAll(*workRoot, 0o775); err != nil {
+		return err
+	}
 	if err := os.WriteFile(schemaPath, []byte(checkpointSchema), 0o644); err != nil {
 		return err
 	}
 	darwinLaunchRO = launchInputs(*provider, os.Getenv("FABRIC_HOOKS_DIR"), schemaPath)
+	// The launch runs the resolved provider file, the same one the
+	// provider control starts (goodqa#15161 review C).
+	if p := providerPath(*provider); p != "" {
+		*provider = p
+	}
+	darwinProvider = *provider
 	ln, err := launcherForThisHost()
 	if err != nil {
 		return err

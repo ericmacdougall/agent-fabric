@@ -14,12 +14,16 @@ func newLinuxProfile(string) host.Profile { return nil }
 // reviewed read-only launch inputs (goodqa#15161 review F4).
 var darwinLaunchRO []string
 
+// darwinProvider is the resolved provider binary the profile's control
+// starts with --version (goodqa#15161 review C); "" skips that control.
+var darwinProvider string
+
 // newDarwinProfile grants no writable root in $HOME (review C2); each run
 // gets private configuration and caches under its run dir from the launch
 // line. Outbound TCP is limited to 443 and the database ports, as on Linux
 // (goodqa#15161).
 func newDarwinProfile(sandboxExec string) host.Profile {
-	return &host.Darwin{SandboxExec: sandboxExec, TCPPorts: workerTCPPorts(), ExtraRO: darwinLaunchRO}
+	return &host.Darwin{SandboxExec: sandboxExec, TCPPorts: workerTCPPorts(), ExtraRO: darwinLaunchRO, Provider: darwinProvider}
 }
 
 func sandboxMain([]string) error {

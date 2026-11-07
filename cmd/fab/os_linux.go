@@ -26,7 +26,11 @@ func newLinuxProfile(self string) host.Profile {
 
 func newDarwinProfile(string) host.Profile { return nil }
 
-var darwinLaunchRO []string // Darwin only; set by `fab daemon` on every OS
+// Darwin only; set by `fab daemon` on every OS.
+var (
+	darwinLaunchRO []string
+	darwinProvider string
+)
 
 // sandboxMain: `fab __sandbox --env-keep NAMES [--ro DIR]... [--rw DIR]... [--tcp PORT]... -- argv`.
 // Applies Landlock to this process, then execs argv in place with exactly

@@ -36,6 +36,7 @@ func TestDarwinProfileDefaultDeny(t *testing.T) {
 		".docker/canary.txt":        "DOCKER-CANARY",
 		".config/fabric/canary.txt": "FABRIC-CANARY",
 		".pgpass":                   "PGPASS-CANARY",
+		".gitconfig":                "[user]\n\tname = canary\n", // review A: git dies on a denied one
 		"projects/wt/inside.txt":    "WT-OK",
 		"projects/wt-sibling/x.txt": "SIBLING-CANARY",
 	} {
@@ -109,8 +110,14 @@ func TestDarwinProfileDefaultDeny(t *testing.T) {
 	if out, err := exec.Command("/usr/bin/git", "-C", wt, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
 	}
-	if got := run([]string{"HOME=" + wt, "GIT_CONFIG_NOSYSTEM=1", "PATH=/usr/bin:/bin"}, "/usr/bin/git", "-C", wt, "rev-parse", "--show-toplevel"); got != realPath(wt) {
-		t.Errorf("git rev-parse in a worktree under HOME failed under the profile: %q", got)
+	// Review A (716fc04): git runs with the production worker environment,
+	// where HOME is the real (denied) home, not with HOME moved aside.
+	wenv, err := darwinEnv(g, workerGitEnv(g))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := run(wenv, "/usr/bin/git", "-C", wt, "rev-parse", "--show-toplevel"); got != realPath(wt) {
+		t.Errorf("git rev-parse in a worktree under HOME failed under the profile with the worker env: %q", got)
 	}
 
 	// Review F1: the account's own home is denied even though HOME points
@@ -194,17 +201,28 @@ func TestDarwinProfileDefaultDeny(t *testing.T) {
 	}
 }
 
+// workerGitEnv is the part of the claude launch env (internal/provider/
+// claude/launch.go) that decides where git looks for configuration.
+func workerGitEnv(g Grant) []string {
+	return []string{
+		"CLAUDE_CONFIG_DIR=" + g.RunDir + "/claude-config",
+		"XDG_CACHE_HOME=" + g.RunDir + "/cache",
+		"XDG_CONFIG_HOME=" + g.RunDir + "/config",
+		"GIT_CONFIG_GLOBAL=" + g.RunDir + "/config/git/config",
+	}
+}
+
 // Review F1: an empty, relative or root HOME refuses the profile (and so
 // the launch) instead of silently dropping the home deny.
 func TestDarwinProfileRefusesBadHome(t *testing.T) {
 	g := controlGrant(t.TempDir())
 	for _, h := range []string{"", "relative/home", "/"} {
 		t.Setenv("HOME", h)
-		if _, err := (&Darwin{}).profile(g); err == nil {
-			t.Errorf("HOME=%q: profile built", h)
+		if _, err := (&Darwin{}).profile(g); err == nil || !strings.Contains(err.Error(), "HOME") {
+			t.Errorf("HOME=%q: profile built or refused for another reason: %v", h, err)
 		}
-		if _, err := (&Darwin{SandboxExec: "/usr/bin/sandbox-exec", AllowP1: true}).Start(g, []string{"/usr/bin/true"}, nil, nil, nil); err == nil {
-			t.Errorf("HOME=%q: Start launched", h)
+		if _, err := (&Darwin{SandboxExec: "/usr/bin/sandbox-exec", AllowP1: true}).Start(g, []string{"/usr/bin/true"}, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "HOME") {
+			t.Errorf("HOME=%q: Start launched or refused for another reason: %v", h, err)
 		}
 	}
 }
@@ -255,6 +273,47 @@ func TestDarwinLaunchInputsControl(t *testing.T) {
 	if !strings.Contains(res, "in=denied") {
 		t.Errorf("control: an input under the home read without an allow-back: %q", res)
 	}
+
+	// Review 716fc04 C: the provider must start, not only be readable. A
+	// script provider whose interpreter sits in an unlisted home directory
+	// (the nvm/npm case) is readable but fails provider_starts_under_profile.
+	starts := func(d *Darwin) ControlResult {
+		res, err := d.NegativeControls(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range res {
+			if r.Name == "provider_starts_under_profile" {
+				return r
+			}
+		}
+		t.Fatal("provider_starts_under_profile did not run")
+		return ControlResult{}
+	}
+	tools := filepath.Join(dir, "tools")
+	interp := filepath.Join(dir, "interp")
+	for _, p := range []string{tools, interp} {
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	good := filepath.Join(tools, "provider")
+	if err := os.WriteFile(good, []byte("#!/bin/sh\necho v1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/bin/sh", filepath.Join(interp, "fakenode")); err != nil {
+		t.Fatal(err)
+	}
+	nvm := filepath.Join(tools, "npm-provider")
+	if err := os.WriteFile(nvm, []byte("#!"+filepath.Join(interp, "fakenode")+"\necho v1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if r := starts(&Darwin{SandboxExec: "/usr/bin/sandbox-exec", ExtraRO: []string{tools}, Provider: good}); !r.Passed {
+		t.Errorf("an allowed-back provider did not start: %s", r.Detail)
+	}
+	if r := starts(&Darwin{SandboxExec: "/usr/bin/sandbox-exec", ExtraRO: []string{tools}, Provider: nvm}); r.Passed {
+		t.Errorf("a provider whose interpreter is unreadable passed: %s", r.Detail)
+	}
 }
 
 // Review F5: with a work root outside every home, the directories holding
@@ -274,11 +333,18 @@ func TestDarwinProfileDeniesSiblingRuns(t *testing.T) {
 			t.Errorf("read deny lacks %s:\n%s", p, deny)
 		}
 	}
-	// An input that is a home, or holds one, is refused.
-	for _, in := range []string{os.Getenv("HOME"), "/Users", "/", "relative"} {
+	// An input that is a home, holds one, is another account's home, holds
+	// the directory of other runs, or holds a secret path is refused.
+	home := os.Getenv("HOME")
+	for _, in := range []string{home, "/Users", "/", "relative", "/Users/someone-else", "/opt/fabric-k3", "/opt/fabric-k3/wt",
+		filepath.Join(home, ".config"), filepath.Join(home, "Library")} {
 		if _, err := (&Darwin{ExtraRO: []string{in}}).profile(g); err == nil {
 			t.Errorf("read-only input %q accepted", in)
 		}
+	}
+	// A tool's own directory is accepted.
+	if _, err := (&Darwin{ExtraRO: []string{filepath.Join(home, ".local", "share", "claude", "versions"), "/opt/fabric-k3/checkpoint.schema.json"}}).profile(g); err != nil {
+		t.Errorf("a tool directory was refused: %v", err)
 	}
 	g = controlGrant(t.TempDir())
 	if text, err = (&Darwin{}).profile(g); err != nil {

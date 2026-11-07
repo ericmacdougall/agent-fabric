@@ -152,6 +152,17 @@ func TestArgvFromGrantOnly(t *testing.T) {
 	if !contains(env, "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1") || !contains(env, "FAB_RUN="+g.Token) {
 		t.Fatalf("env: %v", env)
 	}
+	// goodqa#15161 review A: git's global config is the run's own, so a
+	// denied ~/.gitconfig never reaches git (host test workerGitEnv mirrors
+	// these three lines).
+	for _, want := range []string{"XDG_CONFIG_HOME=" + g.RunDir + "/config", "GIT_CONFIG_GLOBAL=" + g.RunDir + "/config/git/config"} {
+		if !contains(env, want) {
+			t.Fatalf("env lacks %s: %v", want, env)
+		}
+	}
+	if _, _, err := host.WorkerEnv(env); err != nil {
+		t.Fatalf("launch env not on the worker allow-list: %v", err)
+	}
 	g.Model = ""
 	if _, _, err := Argv(g, l); err == nil {
 		t.Fatal("grant without a model produced a launch line (R23)")

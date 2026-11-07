@@ -95,6 +95,10 @@ func Argv(g host.Grant, l Launch) (argv []string, env []string, err error) {
 		"CLAUDE_CONFIG_DIR=" + g.RunDir + "/claude-config",
 		"XDG_CACHE_HOME=" + g.RunDir + "/cache",
 		"XDG_CONFIG_HOME=" + g.RunDir + "/config",
+		// goodqa#15161 review A: git reads ~/.gitconfig even with
+		// XDG_CONFIG_HOME set, and dies when the Darwin profile denies it
+		// (EPERM is not "missing"). The global config is the run's own.
+		"GIT_CONFIG_GLOBAL=" + g.RunDir + "/config/git/config",
 		"GOCACHE=" + g.RunDir + "/cache/go-build",
 		"GOMODCACHE=" + g.RunDir + "/cache/gomod",
 		"GOFLAGS=-modcacherw",

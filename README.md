@@ -306,9 +306,16 @@ at all. An operator-only role for these commands is follow-up work.
   - the launch inputs are the provider's installed directory (after
     symlinks), `FABRIC_HOOKS_DIR`, the schema file and any extra absolute
     paths in `FABRIC_DARWIN_EXTRA_RO` (for example nvm's node directory
-    when `claude` is an npm install). An entry that is a home or contains
-    one is refused. Any other tool on `PATH` under a home is unreadable,
-    so install toolchains outside `$HOME` or list them there;
+    when `claude` is an npm install). An entry is refused when it is `/`,
+    a home, an account's home under `/Users`, or a directory holding a
+    home, the directory of other runs, or a secret path (so not
+    `~/.config` or `~/Library`). The launch runs the provider's resolved
+    file, not a symlink in a denied bin directory, and the control
+    `provider_starts_under_profile` runs it with `--version`. Any other
+    tool on `PATH` under a home is unreadable, so install toolchains
+    outside `$HOME` or list them there;
+  - the worker's git uses the run's own global config
+    (`GIT_CONFIG_GLOBAL`), because git exits on a denied `~/.gitconfig`;
   - reading other processes' arguments or environment (process info and
     `kern.procargs2`) is denied;
   - network is denied except outbound TCP to 443 and the database ports of
@@ -329,10 +336,12 @@ at all. An operator-only role for these commands is follow-up work.
     a run-dir file is readable in the same run;
   - `network_limited_to_allowed_ports`: an allowed loopback port is
     reached and another is refused;
-  - `launch_inputs_readable`: every launch input is readable.
+  - `launch_inputs_readable`: every launch input is readable;
+  - `provider_starts_under_profile`: the provider starts with `--version`.
   The unit test `TestDarwinProfileDefaultDeny` covers the rest:
-  `kern.procargs2`, unix sockets, git in a worktree under the home, and
-  the sibling and allow-back boundaries.
+  `kern.procargs2`, unix sockets, git with the worker's environment in a
+  worktree under a home that holds a `.gitconfig`, and the sibling and
+  allow-back boundaries.
 - The grant is an in-process struct, not a signed envelope; there is no
   separate host agent yet; the worker still carries a runner database DSN
   (asks and effects).

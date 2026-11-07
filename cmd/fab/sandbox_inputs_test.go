@@ -62,4 +62,13 @@ func TestLaunchInputs(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("got %v want %v", got, want)
 	}
+	// Review 716fc04 C: the launch and the provider control run the
+	// resolved file, never the symlink in a (denied) bin directory.
+	realBin, _ := filepath.EvalSymlinks(bin)
+	if p := providerPath(link); p != realBin {
+		t.Errorf("providerPath(%s) = %q, want %q", link, p, realBin)
+	}
+	if p := providerPath("no-such-provider-k3"); p != "" {
+		t.Errorf("missing provider resolved to %q", p)
+	}
 }

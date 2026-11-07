@@ -33,6 +33,7 @@ type Darwin struct {
 	AllowP1     bool     // only the negative-control runner sets this
 	TCPPorts    []int    // outbound TCP ports a worker may connect to; empty means 443 only (Linux: empty denies all)
 	ExtraRO     []string // reviewed read-only launch inputs under a denied home (provider, hooks, schema; review F4)
+	Provider    string   // absolute provider binary; when set, a control runs `Provider --version` under the profile
 
 	mu   sync.Mutex
 	cmds map[string]*exec.Cmd
@@ -103,6 +104,46 @@ func insideTempRoot(p string) bool {
 	return false
 }
 
+// within reports whether p is root or lies under it.
+func within(p, root string) bool {
+	return p == root || root == "/" || strings.HasPrefix(p, root+"/")
+}
+
+// exposes explains why a read-only input r would undo part of the read
+// deny (review 716fc04): it is "/" or a home or holds one, it is an
+// account's home under /Users, it holds the directory of other runs or
+// worktrees, or it holds a secret path (~/.config, ~/Library). "" means
+// the input is acceptable.
+func exposes(r string, hs, deny []string) string {
+	if r == "/" {
+		return "is the root directory"
+	}
+	for _, h := range hs {
+		if within(h, r) {
+			return "exposes the home " + h
+		}
+		if h == "/Users" && filepath.Dir(r) == "/Users" {
+			return "is an account's home"
+		}
+	}
+	for _, d := range deny {
+		if within(d, r) {
+			return "exposes the directory of other runs " + d
+		}
+	}
+	for _, h := range hs {
+		if h == "/Users" {
+			continue
+		}
+		for _, s := range denyRead(h) {
+			if within(realPath(s), r) || within(s, r) {
+				return "holds the secret path " + s
+			}
+		}
+	}
+	return ""
+}
+
 func (d *Darwin) profile(g Grant) (string, error) {
 	hs, err := homes()
 	if err != nil {
@@ -144,11 +185,8 @@ func (d *Darwin) profile(g Grant) (string, error) {
 		if !filepath.IsAbs(r) {
 			return "", fmt.Errorf("darwin profile: read-only input %q is not absolute", p)
 		}
-		// An input that is a home, or holds one, would undo the home deny.
-		for _, h := range hs {
-			if r == h || r == "/" || strings.HasPrefix(h, r+"/") {
-				return "", fmt.Errorf("darwin profile: read-only input %q exposes the home %s; name the provider's own directory instead", p, h)
-			}
+		if why := exposes(r, hs, deny); why != "" {
+			return "", fmt.Errorf("darwin profile: read-only input %q %s; name the tool's own directory instead", p, why)
 		}
 		back = append(back, r)
 	}
@@ -167,11 +205,13 @@ func (d *Darwin) profile(g Grant) (string, error) {
 			}
 		}
 	}
-	b.WriteString("(allow file-read-metadata")
-	for _, a := range meta {
-		fmt.Fprintf(&b, "\n  (literal %q)", a)
+	if len(meta) > 0 { // an empty filter list would allow all metadata
+		b.WriteString("(allow file-read-metadata")
+		for _, a := range meta {
+			fmt.Fprintf(&b, "\n  (literal %q)", a)
+		}
+		b.WriteString(")\n")
 	}
-	b.WriteString(")\n")
 	// The secret paths stay denied even if an allowed directory sits inside
 	// one, for every home.
 	b.WriteString("(deny file-read*")
@@ -569,6 +609,16 @@ func (d *Darwin) NegativeControls(scratch string) ([]ControlResult, error) {
 			return out, err
 		}
 		add("launch_inputs_readable", strings.Count(res, "in=read") == len(d.ExtraRO) && !strings.Contains(res, "in=denied"), res)
+	}
+	// Review 716fc04 C: the provider itself starts under the profile (an
+	// npm or nvm install needs its interpreter too, which reading the
+	// inputs does not show).
+	if d.Provider != "" {
+		res, err = d.runControl(g, fmt.Sprintf(`%q --version >/dev/null 2>&1 && echo provider=started || echo provider=failed:$?`, d.Provider))
+		if err != nil {
+			return out, err
+		}
+		add("provider_starts_under_profile", strings.Contains(res, "provider=started"), res)
 	}
 
 	res, err = d.runControl(g, `(echo x >> "$HOME/.claude/settings.json.fab-nc") 2>/dev/null && echo claude=writable || echo claude=denied; (mkdir -p "$HOME/Library/Caches/fab-nc") 2>/dev/null && echo cache=writable || echo cache=denied`)
