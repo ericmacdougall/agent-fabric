@@ -117,7 +117,13 @@ func (g *GoodQA) Dispatch(ctx context.Context, sub Submission) (Receipt, error) 
 		}
 		return Receipt{Outcome: OutcomeUnknown, Detail: "goodqa error: " + c}, nil
 	}
-	remote, _ := json.Marshal(map[string]any{"comment_id": commentID(data)})
+	// goodqa#15165: a success with no comment id proves nothing; reconcile
+	// reads the issue back and decides.
+	id := commentID(data)
+	if id == "" {
+		return Receipt{Outcome: OutcomeUnknown, Detail: "goodqa reply carried no comment id"}, nil
+	}
+	remote, _ := json.Marshal(map[string]any{"comment_id": id})
 	return Receipt{Outcome: OutcomeConfirmed, Detail: "comment posted", Remote: remote}, nil
 }
 
@@ -166,22 +172,41 @@ func (g *GoodQA) Reconcile(ctx context.Context, e Effect) (Observation, string, 
 		if code, ok := data["__error__"]; ok {
 			return ObsUnknown, fmt.Sprintf("readback refused: %v", code), nil
 		}
-		list, _ := data["comments"].([]any)
+		// goodqa#15165: only a well-formed page can prove absence. A missing
+		// or malformed list, item or paging field is UNKNOWN, never NOT_APPLIED.
+		list, ok := data["comments"].([]any)
+		if !ok {
+			return ObsUnknown, "readback page has no comments list", nil
+		}
 		for _, item := range list {
-			c, _ := item.(map[string]any)
-			if c == nil || c["archivedAt"] != nil && c["archivedAt"] != "" {
+			c, ok := item.(map[string]any)
+			if !ok {
+				return ObsUnknown, "readback page has a malformed comment", nil
+			}
+			if c["archivedAt"] != nil && c["archivedAt"] != "" {
 				continue
 			}
-			body, _ := c["body"].(string)
+			body, ok := c["body"].(string)
+			if !ok {
+				return ObsUnknown, "readback page has a comment without a body", nil
+			}
 			for _, m := range trailerRE.FindAllStringSubmatch(body, -1) {
 				if m[1] == e.IdemKey {
 					matches++
 				}
 			}
 		}
-		more, _ := data["hasMore"].(bool)
+		more := false
+		if v, present := data["hasMore"]; present {
+			if more, ok = v.(bool); !ok {
+				return ObsUnknown, "readback page has a malformed hasMore", nil
+			}
+		}
 		cursor, _ = data["nextCursor"].(string)
-		if !more || cursor == "" {
+		if more && cursor == "" {
+			return ObsUnknown, "readback page says more comments follow but gives no cursor", nil
+		}
+		if !more {
 			switch matches {
 			case 0:
 				return ObsNotApplied, "no comment carries the trailer", nil
