@@ -3,11 +3,13 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"fabric/internal/agent"
+	"fabric/internal/provider/anthropic/fakeapi"
 	"fabric/internal/store"
 )
 
@@ -178,5 +180,65 @@ func TestCrashLoopBreaker(t *testing.T) {
 	}
 	if perResource > 3 {
 		t.Fatalf("%d holds from 3 lives", perResource)
+	}
+}
+
+// F2: a request that was written and then lost is charged at the held amount.
+func TestTransportAfterWriteCharged(t *testing.T) {
+	r := newRig(t, fakeapi.Step{DieBeforeBody: true}, endStep("ok"))
+	out, err, _ := r.life()
+	if err != nil || out.Kind != agent.OutcomeDone {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+	reqs := r.srv.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("requests %d", len(reqs))
+	}
+	want := testPrices().WorstCase(len(reqs[0].Body), 1000) + testPrices().Cost(agent.Usage{Input: 150, Output: 20})
+	if got := r.spent(r.caps[2].Resource); got != want {
+		t.Fatalf("spent %d, want held %d for the lost request plus actual", got, want)
+	}
+}
+
+// F3: a second runner on a live attempt is refused and disturbs nothing.
+func TestSecondRunnerRefused(t *testing.T) {
+	r := newRig(t, endStep("one"))
+	hold := make(chan struct{})
+	reached := make(chan struct{})
+	r.crash = func(p string) {
+		if p == "after_hold" {
+			close(reached)
+			<-hold
+		}
+	}
+	done := make(chan agent.Outcome, 1)
+	go func() { o, _, _ := r.life(); done <- o }()
+	<-reached
+	r.crash = nil // the first loop already captured its own hook
+	_, err, _ := r.life()
+	if !errors.Is(err, agent.ErrAttemptBusy) {
+		t.Fatalf("second runner: %v", err)
+	}
+	close(hold)
+	if o := <-done; o.Kind != agent.OutcomeDone {
+		t.Fatalf("first runner disturbed: %+v", o)
+	}
+	res, _ := r.st.Reservations(context.Background(), attemptID)
+	if len(res) != len(r.caps) {
+		t.Fatalf("second runner touched the holds: %d reservations", len(res))
+	}
+}
+
+// F5: a resume under a different configuration is refused.
+func TestConfigChangeRefused(t *testing.T) {
+	r := newRig(t, endStep("a"), endStep("b"))
+	r.crashAt("after_hold", 1)
+	if _, _, died := r.life(); died == nil {
+		t.Fatal("no crash")
+	}
+	r.crash = nil
+	r.cfgMod = func(c *agent.Config) { c.System = "a different system prompt" }
+	if _, err, _ := r.life(); !errors.Is(err, agent.ErrConfigChanged) {
+		t.Fatalf("err=%v, want ErrConfigChanged", err)
 	}
 }

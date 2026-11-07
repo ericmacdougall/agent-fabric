@@ -175,3 +175,41 @@ func (r *Read) read(ctx context.Context, p string) (string, error) {
 	}
 	return string(buf), nil
 }
+
+// NoSymlinkPath checks that every component of rel under root is a real
+// directory or file, never a symlink, and returns an error otherwise. grep
+// and similar children follow a symlink given as an operand, so the path is
+// vetted here before it is handed over.
+func NoSymlinkPath(root, rel string) error {
+	if rel == "" || rel == "." {
+		return nil
+	}
+	real, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	dirfd, err := unix.Open(real, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	for _, c := range strings.Split(rel, "/") {
+		if c == "" || c == "." {
+			continue
+		}
+		if c == ".." {
+			unix.Close(dirfd)
+			return errors.New("path contains ..")
+		}
+		fd, err := unix.Openat(dirfd, c, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+		unix.Close(dirfd)
+		if err != nil {
+			if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EMLINK) {
+				return errors.New("symbolic links are not followed")
+			}
+			return err
+		}
+		dirfd = fd
+	}
+	unix.Close(dirfd)
+	return nil
+}

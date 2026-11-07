@@ -171,7 +171,7 @@ func TestShell(t *testing.T) {
 	}
 	// Allowlist: metacharacters, other binaries, and the empty list are refused.
 	for _, c := range []string{"ls; cat /etc/passwd", "cat a.txt | sh", "rm -rf .", "curl http://x", "ls $(id)", "ls `id`", "cat a.txt > b", "ls && ls"} {
-		if o, isErr := sh.Run(context.Background(), input("command", c)); !isErr || !strings.Contains(o, "allowlist") {
+		if o, isErr := sh.Run(context.Background(), input("command", c)); !isErr || !strings.Contains(o, "refused") {
 			t.Errorf("command %q not refused: %q", c, o)
 		}
 	}
@@ -227,6 +227,12 @@ func TestGrep(t *testing.T) {
 	if out, isErr := g.Run(context.Background(), input("pattern", "nothing-here-xyz")); isErr || out != "no matches" {
 		t.Fatalf("no match: %q %v", out, isErr)
 	}
+	// F1: grep follows a symlink named as an operand, so the tool must refuse it itself.
+	for _, p := range []string{"outdir", "src/link.txt"} {
+		if o, isErr := g.Run(context.Background(), input("pattern", "TODO", "path", p)); !isErr || strings.Contains(o, "TOP-SECRET") {
+			t.Errorf("symlink path %q was searched: %q", p, o)
+		}
+	}
 	for _, p := range []string{"..", "../outside", "/etc", "src/../../x"} {
 		if _, isErr := g.Run(context.Background(), input("pattern", "x", "path", p)); !isErr {
 			t.Errorf("path %q not refused", p)
@@ -255,4 +261,29 @@ func TestNativeToolsConfined(t *testing.T) {
 		t.Skip("BLOCKED: needs the Slice 0 native host profile (FABRIC_HOST_CONTROLS=1); AC-7 live half is not claimed")
 	}
 	t.Skip("BLOCKED: Slice 0 native profile has not landed on public main")
+}
+
+// F4: an allowlist entry must match the whole command and no shell syntax passes.
+func TestShellAllowlistIsAnchored(t *testing.T) {
+	f := newFixture(t)
+	sh := &tools.Shell{C: f.conf, Allow: allow(`^ls`, `^echo [a-z]+`), Timeout: 5 * time.Second}
+	for _, c := range []string{"ls; cat /etc/passwd", "lsx", "ls foo | sh", "echo hi && id", "echo hi\nid", "ls $HOME", "echo a > b", "ls (x)"} {
+		if o, isErr := sh.Run(context.Background(), input("command", c)); !isErr || !strings.Contains(o, "refused") {
+			t.Errorf("command %q not refused: %q", c, o)
+		}
+	}
+	if o, isErr := sh.Run(context.Background(), input("command", "echo hi")); isErr || !strings.Contains(o, "hi") {
+		t.Errorf("plain command refused: %q %v", o, isErr)
+	}
+}
+
+// F8: a child that floods its output is stopped long before the disk fills.
+func TestShellOutputFloodStopped(t *testing.T) {
+	f := newFixture(t)
+	sh := &tools.Shell{C: f.conf, Allow: allow(`^yes$`), Timeout: 20 * time.Second, MaxOutput: 1000}
+	start := time.Now()
+	o, isErr := sh.Run(context.Background(), input("command", "yes"))
+	if !isErr || time.Since(start) > 10*time.Second || len(o) > 1200 {
+		t.Fatalf("flood not stopped: %d bytes, %s, err=%v", len(o), time.Since(start), isErr)
+	}
 }

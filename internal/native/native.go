@@ -225,7 +225,7 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		Redact:  policy.Redactor{Literals: []string{key}},
 		Attempt: domain.AttemptID(g.Attempt), Fence: fence,
 		Model: g.Model, MaxTokens: g.MaxTokens, System: g.System, Extra: g.Extra, Prompt: g.Prompt,
-		MaxTurns: g.MaxTurns, MaxTotalTokens: g.MaxTotalTokens, Wall: time.Duration(g.WallSeconds) * time.Second, RestartCap: max(g.RestartCap, 1),
+		MaxTurns: g.MaxTurns, MaxTotalTokens: g.MaxTotalTokens, Wall: time.Duration(g.WallSeconds) * time.Second, RestartCap: restartCap(g.RestartCap),
 		Prices: prices, BillingMode: agent.BillingAPIKey,
 	})
 	if err != nil {
@@ -301,4 +301,12 @@ func finishNative(ctx context.Context, st *store.Store, db *agent.DB, led *agent
 	spent, err := led.Spent(ctx, agent.SpendResource("run", g.Attempt))
 	r.SpentMicro = spent
 	return r, err
+}
+
+// restartCap defaults to 5 starts so one crash does not park the attempt.
+func restartCap(n int) int {
+	if n <= 0 {
+		return 5
+	}
+	return n
 }

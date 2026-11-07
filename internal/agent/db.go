@@ -21,7 +21,35 @@ type DB struct {
 	BeforeCommit func(point string) error
 }
 
-var ErrRestartCap = errors.New("restart cap reached")
+var (
+	ErrRestartCap    = errors.New("restart cap reached")
+	ErrAttemptBusy   = errors.New("another runner holds this attempt")
+	ErrConfigChanged = errors.New("the run configuration changed since this attempt started")
+)
+
+// Lock takes a session advisory lock for the attempt for the life of the
+// run. A second `fab mission run` on the same attempt fails fast instead of
+// sharing its fence, reaping its holds or marking its running tools
+// interrupted; a crash drops the connection and so the lock.
+func (d *DB) Lock(ctx context.Context, attempt domain.AttemptID) (func(), error) {
+	conn, err := d.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var got bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1, 11))`, "agent-run:"+string(attempt)).Scan(&got); err != nil {
+		conn.Release()
+		return nil, err
+	}
+	if !got {
+		conn.Release()
+		return nil, fmt.Errorf("%w: %s", ErrAttemptBusy, attempt)
+	}
+	return func() {
+		conn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1, 11))`, "agent-run:"+string(attempt)) //nolint:errcheck
+		conn.Release()
+	}, nil
+}
 
 type Message struct {
 	Idx        int
@@ -86,13 +114,17 @@ func (d *DB) fenced(ctx context.Context, attempt domain.AttemptID, fence int64, 
 
 // StartRun registers a (re)start and returns the new start count. The restart
 // cap parks a crash loop before it can spend again.
-func (d *DB) StartRun(ctx context.Context, attempt domain.AttemptID, fence int64, billingMode string, cap int) (int, error) {
+func (d *DB) StartRun(ctx context.Context, attempt domain.AttemptID, fence int64, billingMode, configSHA string, cap int) (int, error) {
 	var starts int
 	err := d.fenced(ctx, attempt, fence, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `INSERT INTO agent_runs (attempt_id, fence, billing_mode, starts) VALUES ($1, $2, $3, 1)
+		var stored string
+		if err := tx.QueryRow(ctx, `SELECT config_sha FROM agent_runs WHERE attempt_id = $1`, string(attempt)).Scan(&stored); err == nil && stored != configSHA {
+			return fmt.Errorf("%w: attempt %s", ErrConfigChanged, attempt)
+		}
+		err := tx.QueryRow(ctx, `INSERT INTO agent_runs (attempt_id, fence, billing_mode, config_sha, starts) VALUES ($1, $2, $3, $4, 1)
 			ON CONFLICT (attempt_id) DO UPDATE SET starts = agent_runs.starts + 1
 			WHERE agent_runs.fence = $2 AND agent_runs.outcome IS NULL
-			RETURNING starts`, string(attempt), fence, billingMode).Scan(&starts)
+			RETURNING starts`, string(attempt), fence, billingMode, configSHA).Scan(&starts)
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Finished or fenced differently: report the stored row, do not count.
 			return tx.QueryRow(ctx, `SELECT starts FROM agent_runs WHERE attempt_id = $1`, string(attempt)).Scan(&starts)
@@ -126,9 +158,18 @@ func (d *DB) Run(ctx context.Context, attempt domain.AttemptID) (RunRow, error) 
 // Finish records the terminal outcome once.
 func (d *DB) Finish(ctx context.Context, attempt domain.AttemptID, fence int64, outcome, note string) error {
 	return d.fenced(ctx, attempt, fence, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE agent_runs SET outcome = $3, outcome_note = $4, ended_at = now()
+		tag, err := tx.Exec(ctx, `UPDATE agent_runs SET outcome = $3, outcome_note = $4, ended_at = now()
 			WHERE attempt_id = $1 AND fence = $2 AND outcome IS NULL`, string(attempt), fence, outcome, note)
-		return err
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			var o *string
+			if err := tx.QueryRow(ctx, `SELECT outcome FROM agent_runs WHERE attempt_id = $1 AND fence = $2`, string(attempt), fence).Scan(&o); err != nil || o == nil || *o != outcome {
+				return fmt.Errorf("%w: outcome %s was not recorded for %s", domain.ErrInvalidTransition, outcome, attempt)
+			}
+		}
+		return nil
 	})
 }
 

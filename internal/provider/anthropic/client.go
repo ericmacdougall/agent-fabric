@@ -16,6 +16,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/http/httptrace"
 	"regexp"
 	"strconv"
 	"strings"
@@ -242,8 +243,14 @@ func (c *Client) once(ctx context.Context, body []byte, n int, onEvent func(int)
 	req.Header.Set("accept", "text/event-stream")
 	req.Header.Set("anthropic-version", c.cfg.Version)
 	req.Header.Set("x-api-key", key)
-	rec.MaybeBilled = true
+	// MaybeBilled only once the request body has really been written: a dial
+	// or TLS failure ran no model, a reset after the write may have.
+	wrote := false
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(i httptrace.WroteRequestInfo) { wrote = i.Err == nil },
+	}))
 	resp, err := c.cfg.HTTP.Do(req)
+	rec.MaybeBilled = wrote
 	if err != nil {
 		rec.Outcome = "transport"
 		err = scrubErr(err, key)

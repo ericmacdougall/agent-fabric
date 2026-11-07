@@ -73,13 +73,27 @@ func (o *Oracle) Check(ctx context.Context, tool string, input json.RawMessage) 
 	return agent.Decision{Allow: true}
 }
 
+// denied fails closed: empty output or an explicit allow passes; any other
+// decision (deny, ask, a legacy block, unparseable text) denies, because no
+// human is present to answer an ask.
 func denied(out []byte) bool {
+	out = bytes.TrimSpace(out)
+	if len(out) == 0 {
+		return false
+	}
 	var d struct {
 		H struct {
 			Decision string `json:"permissionDecision"`
 		} `json:"hookSpecificOutput"`
+		Decision string `json:"decision"`
 	}
-	return json.Unmarshal(bytes.TrimSpace(out), &d) == nil && d.H.Decision == "deny"
+	if json.Unmarshal(out, &d) != nil {
+		return true
+	}
+	if d.Decision != "" && d.Decision != "approve" && d.Decision != "allow" {
+		return true
+	}
+	return d.H.Decision != "" && d.H.Decision != "allow"
 }
 
 func firstLine(s string) string {

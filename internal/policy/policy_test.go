@@ -156,3 +156,21 @@ func TestInjectionCannotApprove(t *testing.T) {
 		t.Error("approval-looking arguments unlocked a refused command")
 	}
 }
+
+// F7: anything but an empty or explicit-allow answer denies, since no human can answer an ask.
+func TestOracleDenyShapes(t *testing.T) {
+	cases := map[string]bool{
+		``: true,
+		`{"hookSpecificOutput":{"permissionDecision":"allow"}}`: true,
+		`{"hookSpecificOutput":{"permissionDecision":"ask"}}`:   false,
+		`{"hookSpecificOutput":{"permissionDecision":"deny"}}`:  false,
+		`{"decision":"block"}`:                                  false,
+		`not json at all`:                                       false,
+	}
+	for out, allow := range cases {
+		o := &Oracle{Hooks: [][]string{{"sh", "-c", "printf '%s' '" + out + "'"}}, Cwd: t.TempDir()}
+		if got := o.Check(context.Background(), "shell", shell("ls")).Allow; got != allow {
+			t.Errorf("output %q: allow=%v want %v", out, got, allow)
+		}
+	}
+}

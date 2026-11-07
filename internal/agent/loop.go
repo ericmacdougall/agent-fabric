@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"time"
 
@@ -89,6 +90,36 @@ func New(c Config) (*Loop, error) {
 	return l, nil
 }
 
+// configSHA pins everything that shapes the request prefix or the safety
+// envelope. A resume under a different model, system prompt, tool set, price
+// table or extra parameters is refused: replayed signed thinking would be
+// bound to a prefix that no longer exists.
+func (l *Loop) configSHA() string {
+	c := l.c
+	h := sha256.New()
+	w := func(s string) { fmt.Fprintf(h, "%d:%s|", len(s), s) }
+	w(c.Model)
+	w(strconv.Itoa(c.MaxTokens))
+	w(c.System)
+	w(c.Prompt)
+	keys := make([]string, 0, len(c.Extra))
+	for k := range c.Extra {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		w(k)
+		w(string(c.Extra[k]))
+	}
+	for _, t := range c.Tools {
+		w(string(t.Def()))
+		w(strconv.FormatBool(t.SideEffecting()))
+	}
+	pj, _ := json.Marshal(c.Prices)
+	w(string(pj))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func (l *Loop) crash(point string) {
 	if l.c.Crash != nil {
 		l.c.Crash(point)
@@ -114,7 +145,12 @@ func contentBlocks(b []byte) ([]json.RawMessage, error) {
 // call again after a crash: it resumes from the checkpointed history.
 func (l *Loop) Run(ctx context.Context) (Outcome, error) {
 	c := l.c
-	starts, err := c.DB.StartRun(ctx, c.Attempt, c.Fence, c.BillingMode, c.RestartCap)
+	unlock, err := c.DB.Lock(ctx, c.Attempt)
+	if err != nil {
+		return Outcome{}, err
+	}
+	defer unlock()
+	starts, err := c.DB.StartRun(ctx, c.Attempt, c.Fence, c.BillingMode, l.configSHA(), c.RestartCap)
 	if errors.Is(err, ErrRestartCap) {
 		return l.finish(ctx, OutcomeParked, "restart cap: "+err.Error(), 0)
 	}
@@ -255,7 +291,15 @@ func (l *Loop) charge(r AttemptRecord, held int64) int64 {
 			return l.c.Prices.Cost(*r.Usage)
 		}
 		return held
-	case "http_error", "transport":
+	case "http_error":
+		return 0
+	case "transport":
+		// The body was written but no response arrived (reset, deadline): the
+		// provider may have generated and billed. Only a failure before the
+		// write (dial, TLS) is free.
+		if r.MaybeBilled {
+			return held
+		}
 		return 0
 	default:
 		return held

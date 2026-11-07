@@ -42,13 +42,6 @@
   "cmd": "go test ./internal/tools -count=1 -run TestShell"
  },
  {
-  "id": "T8-grep-follows-symlinks",
-  "file": "internal/tools/exec.go",
-  "old": "\"grep\", \"-rnI\"",
-  "new": "\"grep\", \"-RnI\"",
-  "cmd": "go test ./internal/tools -count=1 -run TestGrep"
- },
- {
   "id": "T9-grep-pattern-is-option",
   "file": "internal/tools/exec.go",
   "old": "mode, \"-e\", in.Pattern, \"--\", p}",
@@ -131,5 +124,61 @@
   "old": "if g.LiveTest && g.Caps.Run > liveTestCapMicros {",
   "new": "if false {",
   "cmd": "go test ./internal/native -count=1 -run TestMissionRunRefusals"
+ },
+ {
+  "id": "R1-grep-symlink-operand",
+  "file": "internal/tools/exec.go",
+  "old": "if err := NoSymlinkPath(g.Root, p); err != nil {",
+  "new": "if false {",
+  "cmd": "go test ./internal/tools -count=1 -run TestGrep"
+ },
+ {
+  "id": "R4-allowlist-unanchored",
+  "file": "internal/tools/exec.go",
+  "old": "loc[0] == 0 && loc[1] == len(in.Command)",
+  "new": "true",
+  "cmd": "go test ./internal/tools -count=1 -run TestShellAllowlistIsAnchored"
+ },
+ {
+  "id": "R4b-metachars-allowed",
+  "file": "internal/tools/exec.go",
+  "old": "if strings.ContainsAny(in.Command,",
+  "new": "if false && strings.ContainsAny(in.Command,",
+  "cmd": "go test ./internal/tools -count=1 -run TestShellAllowlistIsAnchored"
+ },
+ {
+  "id": "R8-flood-not-stopped",
+  "file": "internal/tools/exec.go",
+  "old": "fi.Size() > limit",
+  "new": "fi.Size() > limit*1000000",
+  "cmd": "go test ./internal/tools -count=1 -run TestShellOutputFloodStopped"
+ },
+ {
+  "id": "R7-ask-is-allow",
+  "file": "internal/policy/oracle.go",
+  "old": "return d.H.Decision != \"\" && d.H.Decision != \"allow\"",
+  "new": "return d.H.Decision == \"deny\"",
+  "cmd": "go test ./internal/policy -count=1 -run TestOracleDenyShapes"
+ },
+ {
+  "id": "R2-lost-request-free",
+  "file": "internal/agent/loop.go",
+  "old": "\t\tif r.MaybeBilled {\n\t\t\treturn held\n\t\t}\n\t\treturn 0",
+  "new": "\t\treturn 0",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestTransportAfterWriteCharged"
+ },
+ {
+  "id": "R3-no-attempt-lock",
+  "file": "internal/agent/db.go",
+  "old": "if !got {",
+  "new": "if false {",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestSecondRunnerRefused"
+ },
+ {
+  "id": "R5-config-not-pinned",
+  "file": "internal/agent/db.go",
+  "old": "err == nil && stored != configSHA {",
+  "new": "err == nil && false {",
+  "cmd": "set -a && . ~/fabric-dev/test.env && set +a && go test ./internal/agent -count=1 -run TestConfigChangeRefused"
  }
 ]

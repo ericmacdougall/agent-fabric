@@ -8,6 +8,7 @@ CREATE TABLE agent_runs (
     attempt_id    text PRIMARY KEY REFERENCES attempts (id),
     fence         bigint NOT NULL,
     starts        int NOT NULL DEFAULT 0 CHECK (starts >= 0),
+    config_sha    text NOT NULL,
     billing_mode  text NOT NULL CHECK (billing_mode IN ('api_key', 'subscription')),
     outcome       text,
     outcome_note  text,
