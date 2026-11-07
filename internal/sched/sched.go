@@ -34,10 +34,13 @@ const WakeChannel = "fabric_wake"
 type Launcher interface {
 	Start(g host.Grant, argv []string, env []string, stdout, stderr *os.File) (host.Handle, error)
 	Wait(h host.Handle) (int, error)
-	// StartJob runs a host job in its own unit or detached process under the
-	// worker identity; it returns once the job is proven started.
-	StartJob(unit string, argv []string, env []string) error
+	// No StartJob: host jobs are disabled (goodqa#15082 F0). A job's argv
+	// came from the confined run and was launched outside its sandbox.
 }
+
+// ErrHostJobsDisabled refuses a host job before anything is written or run.
+// Typed, policy-approved job templates are future work (goodqa#15082).
+var ErrHostJobsDisabled = fmt.Errorf("%w: host jobs are disabled (goodqa#15082)", domain.ErrInvalidTransition)
 
 // Prober reads a runner back by attempt id (G1). known false: no answer.
 type Prober interface {
@@ -193,7 +196,7 @@ func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 			fmt.Fprintln(os.Stderr, "fabd: reservation sweep:", err)
 		}
 	}
-	if n, err := s.startRequestedJobs(ctx); err != nil {
+	if n, err := s.retireRequestedJobs(ctx); err != nil {
 		return false, err
 	} else if n > 0 {
 		worked = true
@@ -830,66 +833,47 @@ type JobRow struct {
 	Woken    bool
 }
 
-// RequestJob inserts a REQUESTED job after checking the fence is live; the
-// daemon starts it (review C1: the worker never reaches the user manager).
+// RequestJob is refused: host jobs are disabled (goodqa#15082 F0). The
+// argv came from the confined run and the daemon launched it outside the
+// sandbox. Nothing is read or written.
 func RequestJob(ctx context.Context, st *store.Store, id string, mission domain.MissionID, attempt domain.AttemptID, fence int64, argv []string, rundir string) error {
-	var cur int64
-	var state string
-	err := st.Pool().QueryRow(ctx, "SELECT fence, state FROM attempts WHERE id = $1", string(attempt)).Scan(&cur, &state)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("%w: attempt %s", domain.ErrNotFound, attempt)
-	}
-	if err != nil {
-		return err
-	}
-	if cur != fence || !domain.AttemptState(state).Live() {
-		return fmt.Errorf("%w: job for attempt %s at fence %d (holds %d, %s)", domain.ErrStaleFence, attempt, fence, cur, state)
-	}
-	a, _ := json.Marshal(argv)
-	_, err = st.Pool().Exec(ctx, `INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state) VALUES ($1, $2, $3, $4, $5, $6, 'REQUESTED') ON CONFLICT (id) DO NOTHING`,
-		id, string(mission), string(attempt), fence, a, rundir)
-	return err
+	return ErrHostJobsDisabled
 }
 
-// startRequestedJobs launches each REQUESTED job in its own unit (Linux) or
-// as a detached process (macOS) from outside the sandbox, then marks it
-// STARTED with the unit name, or FAILED_TO_START with the launcher output.
-func (s *Scheduler) startRequestedJobs(ctx context.Context) (int, error) {
-	rows, err := s.st.Pool().Query(ctx, `SELECT id, argv, rundir FROM jobs WHERE state = 'REQUESTED' ORDER BY started_at LIMIT 20`)
+// retireRequestedJobs never launches a job. It moves each REQUESTED job of
+// an attempt on this host to FAILED_TO_START; rows of other hosts, or with
+// no matching attempt, are left alone. The host predicate is repeated in
+// the update, and one row's failure does not stop the others.
+func (s *Scheduler) retireRequestedJobs(ctx context.Context) (int, error) {
+	rows, err := s.st.Pool().Query(ctx, `SELECT j.id FROM jobs j JOIN attempts a ON a.id = j.attempt_id AND a.mission_id = j.mission_id
+		WHERE j.state = 'REQUESTED' AND a.host = $1 ORDER BY j.id LIMIT 20`, string(s.cfg.Host))
 	if err != nil {
 		return 0, err
 	}
-	type req struct {
-		id, rundir string
-		argv       []string
-	}
-	var reqs []req
+	var ids []string
 	for rows.Next() {
-		var r req
-		var a []byte
-		if err := rows.Scan(&r.id, &a, &r.rundir); err != nil {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			rows.Close()
 			return 0, err
 		}
-		json.Unmarshal(a, &r.argv) //nolint:errcheck
-		reqs = append(reqs, r)
+		ids = append(ids, id)
 	}
 	rows.Close()
-	for _, r := range reqs {
-		if s.cfg.FabBin == "" || len(r.argv) == 0 {
-			s.st.Pool().Exec(ctx, "UPDATE jobs SET state = 'FAILED_TO_START', log_tail = 'no fab binary or empty argv' WHERE id = $1", r.id) //nolint:errcheck
-			continue
-		}
-		unit := "fab-job-" + r.id
-		watch := append([]string{s.cfg.FabBin, "job", "watch", "--id", r.id, "--rundir", r.rundir, "--"}, r.argv...)
-		launchErr := s.ln.StartJob(unit, watch, []string{"FABRIC_DSN=" + s.runnerDSN(), "FABRIC_HOME=" + filepath.Join(r.rundir, "fabric-home")})
-		if launchErr != nil {
-			s.st.Pool().Exec(ctx, "UPDATE jobs SET state = 'FAILED_TO_START', log_tail = $2 WHERE id = $1 AND state = 'REQUESTED'", r.id, launchErr.Error()) //nolint:errcheck
-			continue
-		}
-		s.st.Pool().Exec(ctx, "UPDATE jobs SET state = 'STARTED', unit = $2 WHERE id = $1 AND state = 'REQUESTED'", r.id, unit) //nolint:errcheck
+	if err := rows.Err(); err != nil {
+		return 0, err
 	}
-	return len(reqs), nil
+	n := 0
+	for _, id := range ids {
+		tag, err := s.st.Pool().Exec(ctx, `UPDATE jobs j SET state = 'FAILED_TO_START', log_tail = 'host jobs are disabled (goodqa#15082)'
+			FROM attempts a WHERE j.id = $1 AND j.state = 'REQUESTED' AND a.id = j.attempt_id AND a.mission_id = j.mission_id AND a.host = $2`, id, string(s.cfg.Host))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fabd: retire job", id+":", err)
+			continue
+		}
+		n += int(tag.RowsAffected())
+	}
+	return n, nil
 }
 
 // FinishJob records the exit and pings the wake channel.

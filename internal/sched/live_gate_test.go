@@ -191,18 +191,18 @@ func TestLiveGatedRestart(t *testing.T) {
 		n, _ := counts(t, st, b)
 		return n > 0 && s.Launched > 0
 	})
-	// B's run requests a host job as the runner role (0018 needs its attempt
-	// RUNNING), the scheduler starts it, the job's watcher records its exit
-	// as the runner (0017), and the wake reads the job's unit back.
+	// B's run asks for a host job as the runner role. Host jobs are disabled
+	// (goodqa#15082 F0): the request is refused inside the sandbox, no job
+	// row is written, and B ends blocked instead of waiting on a job.
 	attemptB := domain.AttemptID("r_lgb" + tag + "_1")
-	jobState := func() (state string, woken bool) {
-		st.Pool().QueryRow(ctx, "SELECT state, woken FROM jobs WHERE attempt_id = $1", string(attemptB)).Scan(&state, &woken) //nolint:errcheck
-		return
-	}
-	waitFor("B's host job requested, run and woken", 150*time.Second, func() bool {
+	waitFor("B's host job refused and B ended", 150*time.Second, func() bool {
 		tick()
-		js, woken := jobState()
-		return js == "EXITED" && woken
+		return state(attemptB) == "VERIFIED"
 	})
+	var jobsB int
+	st.Pool().QueryRow(ctx, "SELECT count(*) FROM jobs WHERE attempt_id = $1", string(attemptB)).Scan(&jobsB) //nolint:errcheck
+	if jobsB != 0 {
+		t.Fatalf("B's refused host job left %d job row(s)", jobsB)
+	}
 	fmt.Printf("live gated restart: tag=%s launched_after_restart=%d capacity_waits=%d saw_live_unknown=%v\n", tag, s.Launched, s.CapacityWaits, sawLiveUnknown)
 }

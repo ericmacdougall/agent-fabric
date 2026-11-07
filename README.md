@@ -152,8 +152,15 @@ Database text is sanitized before it is drawn: ticket text, ask questions and re
   uses an inherited descriptor as a second signal, and a platform binary that
   calls `setsid` and closes inherited descriptors is still invisible.
 - The grant is an in-process struct, not a signed envelope; there is no
-  separate host agent yet; the worker still carries a database DSN for
-  `fab job run`.
+  separate host agent yet; the worker still carries a runner database DSN
+  (asks and effects).
+- **Host jobs are disabled** (goodqa#15082). A run used to request a job whose
+  argv the daemon launched outside the run's sandbox. Now `fab job run` and
+  `fab job watch` exit 3, the runner role has no INSERT on `jobs` (and
+  migration 0025 refuses one even if granted by hand), and the daemon only
+  retires its own host's leftover REQUESTED rows to FAILED_TO_START. A legacy
+  watcher may still record its exit. Typed, approved job templates are
+  future work; until then a run cannot start work that outlives it.
 - **The dispatch gate (`fab daemon --hold`) is an accident guard, not a
   security boundary yet.** It stops the scheduler from over-admitting a
   resource by mistake. It is not proven against a runner that writes the

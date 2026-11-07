@@ -1,15 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -22,100 +19,20 @@ import (
 
 // jobMain:
 //
-//	fab job run --mission M --attempt R --fence F --rundir D [--id J] -- argv...
-//	fab job watch --id J --rundir D -- argv...      (the host-side watcher; internal)
 //	fab job show --id J
 //
-// A job is host-owned: it runs in its own transient unit on Linux (so it
-// outlives the worker run and is stopped with the mission), and its exit is
-// recorded as a row plus a wake hint. STARTED is only reported after the
-// unit or process is proven to exist (bg_job's contract, DESIGN.md 3.4).
+// `fab job run` and `fab job watch` are refused (exit 3): host jobs are
+// disabled (goodqa#15082 F0), because the run chose the argv and the
+// daemon launched it outside the sandbox. `show` reads legacy rows.
 func jobMain(args []string) error {
 	if len(args) == 0 {
 		return errors.New("job run|watch|show")
 	}
 	switch args[0] {
-	case "run":
-		fs := flag.NewFlagSet("job run", flag.ContinueOnError)
-		mission := fs.String("mission", os.Getenv("FAB_MISSION"), "mission id")
-		attempt := fs.String("attempt", os.Getenv("FAB_ATTEMPT"), "attempt id")
-		fence := fs.Int64("fence", envInt(os.Getenv("FAB_FENCE")), "attempt fence")
-		rundir := fs.String("rundir", os.Getenv("FAB_RUN_DIR"), "run directory for logs")
-		id := fs.String("id", "", "job id (default: minted)")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		argv := fs.Args()
-		if len(argv) == 0 || *rundir == "" {
-			return errors.New("job run needs --rundir and -- argv")
-		}
-		if *id == "" {
-			*id = fmt.Sprintf("j_%s_%d", strings.TrimPrefix(*attempt, "r_"), time.Now().UnixNano()%1_000_000)
-		}
-		self, err := os.Executable()
-		if err != nil {
-			return err
-		}
-		_ = self
-		// The worker only requests the job; the daemon, outside the sandbox,
-		// starts it in its own unit (review C1). STARTED is printed only once
-		// the daemon has proven the unit exists (bg_job's contract).
-		return withStore(func(ctx context.Context, st *store.Store) error {
-			if err := sched.RequestJob(ctx, st, *id, domain.MissionID(*mission), domain.AttemptID(*attempt), *fence, argv, *rundir); err != nil {
-				return err
-			}
-			sched.Notify(ctx, st)
-			deadline := time.Now().Add(20 * time.Second)
-			for time.Now().Before(deadline) {
-				j, err := sched.LoadJob(ctx, st, *id)
-				if err != nil {
-					return err
-				}
-				switch j.State {
-				case "STARTED", "EXITED":
-					fmt.Printf("job %s STARTED (wait token job:%s)\n", *id, *id)
-					return nil
-				case "FAILED_TO_START":
-					return fmt.Errorf("job %s failed to start: %s", *id, j.LogTail)
-				}
-				time.Sleep(200 * time.Millisecond)
-			}
-			return fmt.Errorf("job %s: the daemon did not start it within 20s (is fab daemon running?)", *id)
-		})
-	case "watch":
-		fs := flag.NewFlagSet("job watch", flag.ContinueOnError)
-		id := fs.String("id", "", "job id")
-		rundir := fs.String("rundir", "", "run directory")
-		if err := fs.Parse(args[1:]); err != nil {
-			return err
-		}
-		argv := fs.Args()
-		if *id == "" || len(argv) == 0 {
-			return errors.New("job watch --id J --rundir D -- argv")
-		}
-		os.MkdirAll(filepath.Join(*rundir, "jobs"), 0o755) //nolint:errcheck
-		logf, err := os.Create(filepath.Join(*rundir, "jobs", *id+".log"))
-		if err != nil {
-			return err
-		}
-		var tail bytes.Buffer
-		w := io.MultiWriter(logf, &tail)
-		cmd := exec.Command(argv[0], argv[1:]...)
-		cmd.Stdout, cmd.Stderr = w, w
-		cmd.Env = os.Environ()
-		err = cmd.Run()
-		logf.Close()
-		code := 0
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			code = ee.ExitCode()
-		} else if err != nil {
-			code = 127
-			tail.WriteString(err.Error())
-		}
-		return withStore(func(ctx context.Context, st *store.Store) error {
-			return sched.FinishJob(ctx, st, *id, code, tail.String())
-		})
+	case "run", "watch":
+		// goodqa#15082 F0: host jobs are disabled. Refuse before parsing
+		// flags, touching the filesystem, the database or running anything.
+		return refusal(sched.ErrHostJobsDisabled)
 	case "show":
 		fs := flag.NewFlagSet("job show", flag.ContinueOnError)
 		id := fs.String("id", "", "job id")

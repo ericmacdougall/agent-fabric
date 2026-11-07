@@ -118,9 +118,26 @@ func TestRolesLeastPrivilege(t *testing.T) {
 			t.Errorf("runner: %q gave %v, want 42501", q, err)
 		}
 	}
-	// The runner's own write paths still work: a job request and an ask.
-	if _, err := runner.pool.Exec(ctx, `INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state) VALUES ('j_rl', 'm_rl', 'r_rl_2', $1, '[]', '/x', 'REQUESTED')`, fence); err != nil {
-		t.Fatalf("control: the runner cannot request a job: %v", err)
+	// goodqa#15082 F0: host jobs are disabled. A runner cannot request one,
+	// even for its own running attempt, and not even after a manual grant:
+	// the scheduler would have launched its argv outside the sandbox.
+	jobReq := `INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state) VALUES ('j_rlx', 'm_rl', 'r_rl_2', $1, '["sh","-c","id"]', '/x', 'REQUESTED')`
+	if _, err := runner.pool.Exec(ctx, jobReq, fence); sqlCode(err) != "42501" {
+		t.Errorf("runner: requesting a host job gave %v, want 42501", err)
+	}
+	if _, err := owner.pool.Exec(ctx, "GRANT INSERT ON jobs TO "+r.Runner()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.pool.Exec(ctx, jobReq, fence); sqlCode(err) != "42501" {
+		t.Errorf("runner with a manual INSERT grant: requesting a host job gave %v, want 42501 (the trigger)", err)
+	}
+	if _, err := owner.pool.Exec(ctx, "REVOKE INSERT ON jobs FROM "+r.Runner()); err != nil {
+		t.Fatal(err)
+	}
+	// A legacy job row (written by the scheduler role, as before 0025) can
+	// still have its exit recorded by an old watcher running as the runner.
+	if _, err := app.pool.Exec(ctx, `INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state) VALUES ('j_rl', 'm_rl', 'r_rl_2', $1, '[]', '/x', 'REQUESTED')`, fence); err != nil {
+		t.Fatalf("control: the scheduler role cannot write a legacy job row: %v", err)
 	}
 	if _, err := runner.pool.Exec(ctx, `UPDATE jobs SET state = 'STARTED' WHERE id = 'j_rl'`); sqlCode(err) != "42501" {
 		t.Errorf("runner: marking a job STARTED gave %v, want 42501 (the scheduler starts jobs)", err)
