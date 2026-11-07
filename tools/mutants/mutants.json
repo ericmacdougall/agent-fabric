@@ -3959,5 +3959,83 @@
     ""
    ]
   ]
+ },
+ {
+  "id": "M308_metrics_label_passthrough",
+  "invariant": "metrics",
+  "pkg": "./internal/metrics",
+  "file": "internal/metrics/metrics.go",
+  "expect": "TestHostileLabels",
+  "edits": [
+   [
+    "\tif labelRE.MatchString(v) {",
+    "\tif true {"
+   ]
+  ]
+ },
+ {
+  "id": "M309_metrics_label_regex_wide",
+  "invariant": "metrics",
+  "pkg": "./internal/metrics",
+  "file": "internal/metrics/metrics.go",
+  "expect": "TestHostileLabels",
+  "edits": [
+   [
+    "`^[A-Za-z0-9_.:-]{1,64}$`",
+    "`^[^\\n]{1,64}$`"
+   ]
+  ]
+ },
+ {
+  "id": "M310_metrics_listen_any",
+  "invariant": "metrics",
+  "pkg": "./internal/metrics",
+  "file": "internal/metrics/http.go",
+  "expect": "TestCheckListen",
+  "edits": [
+   [
+    "if ip == nil || !ip.IsLoopback() {",
+    "if ip == nil {"
+   ]
+  ]
+ },
+ {
+  "id": "M311_metrics_listen_unchecked",
+  "invariant": "metrics",
+  "pkg": "./internal/metrics",
+  "file": "internal/metrics/http.go",
+  "expect": "TestCheckListen",
+  "edits": [
+   [
+    "\tif allowRemote {\n\t\treturn nil\n\t}",
+    "\treturn nil"
+   ]
+  ]
+ },
+ {
+  "id": "M312_metrics_no_timeouts",
+  "invariant": "metrics",
+  "pkg": "./internal/metrics",
+  "file": "internal/metrics/metrics.go",
+  "expect": "TestCollectLockTimeout",
+  "edits": [
+   [
+    "[]string{\"SET LOCAL statement_timeout = \" + ms, \"SET LOCAL lock_timeout = \" + ms}",
+    "[]string{\"SELECT \" + ms}"
+   ]
+  ]
+ },
+ {
+  "id": "M313_metrics_write_txn",
+  "invariant": "metrics",
+  "pkg": "./internal/metrics",
+  "file": "internal/metrics/metrics.go",
+  "expect": "TestCollectDoesNotBlockDispatch",
+  "edits": [
+   [
+    "`SELECT count(*) FROM effects WHERE state = 'DISPATCHED'`",
+    "`SELECT count(*) FROM (SELECT 1 FROM effects WHERE state = 'DISPATCHED' FOR UPDATE) x`"
+   ]
+  ]
  }
 ]

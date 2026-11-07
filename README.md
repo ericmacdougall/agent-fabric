@@ -60,6 +60,42 @@ production readiness.
 - `internal/sched`, `cmd/fab`: the daemon loop, jobs, waits, a CLI, and a
   recorded fake provider for shadow runs.
 
+## Metrics
+
+`fab metrics` prints the fabric's health once in the Prometheus text format
+(0.0.4). `fab serve-metrics` serves the same thing at `GET /metrics`. It
+listens on `127.0.0.1:9464` by default and refuses any address that is not
+a literal loopback IP unless `--allow-remote` is passed, because there is no
+auth. It has no write routes, and it runs one collection at a time; a
+scrape that arrives during one gets 503.
+
+Every value comes from the database, in one read-only transaction with a
+statement and lock timeout (`--timeout`, default 2s). The collector takes no
+row locks, so it never delays a dispatch. Label values are ids and enum
+values only. Anything else becomes `other`, and ticket text, questions,
+subjects, paths and requests are never read. Live per-process counters (a
+broker's executor overruns, dispatch slots in use) arrive later, with an
+in-process `serve-metrics` in the daemon.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `fabric_build_info` | gauge | version | always 1 |
+| `fabric_schema_migrations_applied` | gauge | | rows in `fabric_schema` |
+| `fabric_schema_level` | gauge | | number of the latest migration |
+| `fabric_missions` | gauge | execution, terminal | missions by state |
+| `fabric_attempts_active` | gauge | state, lease (`live`/`stale`) | LEASED, PREPARING and RUNNING attempts |
+| `fabric_effects` | gauge | kind, state | effects by state |
+| `fabric_effect_oldest_age_seconds` | gauge | state (QUARANTINED, RECONCILING, UNKNOWN) | oldest effect in that state, 0 when none |
+| `fabric_dispatch_inflight` | gauge | | effects in DISPATCHED |
+| `fabric_dispatch_overdue` | gauge | | DISPATCHED past the deadline stamped at dispatch |
+| `fabric_dispatch_limit` | gauge | | configured dispatches per store |
+| `fabric_sched_counter_total` | counter | name | `sched_counters` |
+| `fabric_resource_capacity`, `_held`, `_spent_month` | gauge | resource, unit | dispatch-gate resources; spent is settled usage this UTC month |
+| `fabric_native_spent_month_usd_micros` | gauge | | native provider cost this UTC month |
+| `fabric_budget_cap_usd_micros` | gauge | scope (month, job, live_test) | fixed ceilings (constants) |
+| `fabric_asks_open` | gauge | kind | open asks |
+| `fabric_asks_open_oldest_age_seconds` | gauge | | oldest open ask, 0 when none |
+
 ## Known limits (honest list)
 
 - **Linux sandbox findings are still being fixed.** A code inspection found

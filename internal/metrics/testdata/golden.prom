@@ -1,0 +1,66 @@
+# HELP fabric_build_info Build version of the reporting binary (always 1).
+# TYPE fabric_build_info gauge
+fabric_build_info{version="v1.2.3-test"} 1
+# HELP fabric_schema_migrations_applied Migrations recorded in fabric_schema.
+# TYPE fabric_schema_migrations_applied gauge
+fabric_schema_migrations_applied 24
+# HELP fabric_schema_level Numeric prefix of the latest applied migration.
+# TYPE fabric_schema_level gauge
+fabric_schema_level 24
+# HELP fabric_missions Missions by execution and terminal state.
+# TYPE fabric_missions gauge
+fabric_missions{execution="IDLE",terminal="NONE"} 1
+fabric_missions{execution="RUNNING",terminal="NONE"} 1
+fabric_missions{execution="other",terminal="NONE"} 1
+# HELP fabric_attempts_active Active attempts by state and lease freshness (live: lease unexpired).
+# TYPE fabric_attempts_active gauge
+fabric_attempts_active{state="LEASED",lease="stale"} 1
+fabric_attempts_active{state="RUNNING",lease="live"} 1
+# HELP fabric_effects Effects by kind and state.
+# TYPE fabric_effects gauge
+fabric_effects{kind="publish",state="DISPATCHED"} 1
+fabric_effects{kind="publish",state="QUARANTINED"} 1
+fabric_effects{kind="ticket_comment",state="CONFIRMED"} 1
+fabric_effects{kind="ticket_comment",state="DISPATCHED"} 1
+fabric_effects{kind="ticket_comment",state="UNKNOWN"} 1
+# HELP fabric_effect_oldest_age_seconds Age of the oldest effect in a state needing attention (0: none).
+# TYPE fabric_effect_oldest_age_seconds gauge
+fabric_effect_oldest_age_seconds{state="QUARANTINED"} 100
+fabric_effect_oldest_age_seconds{state="RECONCILING"} 0
+fabric_effect_oldest_age_seconds{state="UNKNOWN"} 30
+# HELP fabric_dispatch_inflight Effects in DISPATCHED (a transport may be running).
+# TYPE fabric_dispatch_inflight gauge
+fabric_dispatch_inflight 2
+# HELP fabric_dispatch_overdue DISPATCHED effects past the transport deadline stamped at dispatch.
+# TYPE fabric_dispatch_overdue gauge
+fabric_dispatch_overdue 1
+# HELP fabric_dispatch_limit Configured concurrent effect dispatches per store.
+# TYPE fabric_dispatch_limit gauge
+fabric_dispatch_limit 8
+# HELP fabric_sched_counter_total Durable scheduler counters (sched_counters).
+# TYPE fabric_sched_counter_total counter
+fabric_sched_counter_total{name="runs_launched_total"} 3
+# HELP fabric_resource_capacity Configured capacity per resource.
+# TYPE fabric_resource_capacity gauge
+fabric_resource_capacity{resource="usd_api",unit="usd_micros"} 100000000
+# HELP fabric_resource_held Amount currently held per resource.
+# TYPE fabric_resource_held gauge
+fabric_resource_held{resource="usd_api",unit="usd_micros"} 2000000
+# HELP fabric_resource_spent_month Settled usage this UTC calendar month per resource.
+# TYPE fabric_resource_spent_month gauge
+fabric_resource_spent_month{resource="usd_api",unit="usd_micros"} 1500000
+# HELP fabric_native_spent_month_usd_micros Native provider cost recorded this UTC calendar month, in USD micros.
+# TYPE fabric_native_spent_month_usd_micros gauge
+fabric_native_spent_month_usd_micros 250000
+# HELP fabric_budget_cap_usd_micros Configured spending ceilings in USD micros (constants).
+# TYPE fabric_budget_cap_usd_micros gauge
+fabric_budget_cap_usd_micros{scope="job"} 5000000
+fabric_budget_cap_usd_micros{scope="live_test"} 1000000
+fabric_budget_cap_usd_micros{scope="month"} 100000000
+# HELP fabric_asks_open Open asks by kind.
+# TYPE fabric_asks_open gauge
+fabric_asks_open{kind="decision"} 1
+fabric_asks_open{kind="permission"} 1
+# HELP fabric_asks_open_oldest_age_seconds Age of the oldest open ask (0: none).
+# TYPE fabric_asks_open_oldest_age_seconds gauge
+fabric_asks_open_oldest_age_seconds 50

@@ -62,6 +62,10 @@ func main() {
 		err = daemonMain(os.Args[2:])
 	case "db":
 		err = dbMain(os.Args[2:])
+	case "metrics":
+		err = metricsMain(os.Args[2:])
+	case "serve-metrics":
+		err = serveMetricsMain(os.Args[2:])
 	case "migrate":
 		err = withStore(func(ctx context.Context, st *store.Store) error { return st.Migrate(ctx) })
 	default:
@@ -90,6 +94,8 @@ func usage() {
                                        record a live_test receipt for the deployed commit (AC-6)
   done --mission M --key K             close a mission; refused without a live_test receipt (AC-6)
   status                               missions, slots, open asks
+  metrics [--timeout D]                health metrics (Prometheus text format, read-only)
+  serve-metrics [--listen 127.0.0.1:9464] [--allow-remote] [--timeout D]   GET /metrics; loopback only by default
   asks [--state open]                  the inbox
   ask new --id I --question Q --source S [--mission M --kind K --option O ...]
   ask answer I --answer A --source S   answer; wakes the mission waiting on ask:I

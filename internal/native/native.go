@@ -35,6 +35,13 @@ const (
 	liveTestCapMicros = 1_000_000   // USD 1 per live test
 )
 
+// The same ceilings, exported read-only for metrics.
+const (
+	MonthCapMicros    = monthCapMicros
+	JobCapMicros      = jobCapMicros
+	LiveTestCapMicros = liveTestCapMicros
+)
+
 // Grant is the file `fab mission run --grant` reads. It carries no
 // secret: the key comes from KeyCommand (a secret-manager read).
 type Grant struct {
