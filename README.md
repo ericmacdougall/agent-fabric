@@ -62,8 +62,8 @@ Go 1.22, `pgx/v5` and `x/sys` only.
 
 ## License
 
-AGPL-3.0-only. See `LICENSE` for the full text.
+Apache-2.0. See `LICENSE` for the full text and `NOTICE` for attribution.
 
-SPDX-License-Identifier: AGPL-3.0-only
+SPDX-License-Identifier: Apache-2.0
 
 Copyright (C) 2026 Eric MacDougall
