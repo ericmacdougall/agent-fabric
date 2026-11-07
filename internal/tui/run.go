@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,8 +18,11 @@ import (
 
 // Terminal control written by Run itself; never built from data.
 const (
-	altScreenOn  = "\x1b[?1049h\x1b[?25l"
-	altScreenOff = "\x1b[?25h\x1b[?1049l"
+	// Autowrap is off while the view is up (?7l), so a line a terminal
+	// draws wider than counted is clipped rather than wrapped onto the
+	// next row (review F1 on ff48df1).
+	altScreenOn  = "\x1b[?1049h\x1b[?25l\x1b[?7l"
+	altScreenOff = "\x1b[?7h\x1b[?25h\x1b[?1049l"
 	home         = "\x1b[H"
 	clearEOL     = "\x1b[K"
 )
@@ -64,6 +68,11 @@ func Run(ctx context.Context, s *Session, in, out *os.File, interval time.Durati
 
 	keys := make(chan []byte, 16)
 	go func() { // exits with the process; a blocked read cannot be cancelled portably
+		defer func() {
+			if recover() != nil {
+				close(keys) // the loop then quits and restores the terminal
+			}
+		}()
 		buf := make([]byte, 256)
 		for {
 			n, err := in.Read(buf)
@@ -92,8 +101,15 @@ func Run(ctx context.Context, s *Session, in, out *os.File, interval time.Durati
 		busy = true
 		id := s.M.DetailID
 		go func() {
+			var r result
+			defer func() {
+				if p := recover(); p != nil { // review F3: show it as a failed refresh
+					r = result{err: fmt.Errorf("refresh panicked"), id: id}
+				}
+				results <- r
+			}()
 			d, det, err := s.Src.Fetch(ctx, id)
-			results <- result{d, det, err, id}
+			r = result{d, det, err, id}
 		}()
 	}
 	draw := func() {

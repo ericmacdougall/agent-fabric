@@ -4124,8 +4124,8 @@
   "expect": "TestLongFields",
   "edits": [
    [
-    "\t\treturn 2\n",
-    "\t\treturn 1\n"
+    "r >= 0x20000 && r <= 0x3fffd:\n\t\treturn 2\n",
+    "r >= 0x20000 && r <= 0x3fffd:\n\t\treturn 1\n"
    ]
   ]
  },
@@ -4269,6 +4269,58 @@
    [
     "\t\tlost := len(code) >= 2",
     "\t\tlost := false && len(code) >= 2"
+   ]
+  ]
+ },
+ {
+  "id": "M332_tui_tag_chars_kept",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/clean.go",
+  "expect": "TestClean",
+  "edits": [
+   [
+    "\tcase r >= 0xe0000 && r <= 0xe007f: // tag characters",
+    "\tcase false && r >= 0xe0000: // tag characters"
+   ]
+  ]
+ },
+ {
+  "id": "M333_tui_emoji_symbols_width_one",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/clean.go",
+  "expect": "TestLongFields",
+  "edits": [
+   [
+    "\tcase r >= 0x2300 && unicode.Is(unicode.So, r):\n\t\treturn 2\n",
+    "\tcase r >= 0x2300 && unicode.Is(unicode.So, r):\n\t\treturn 1\n"
+   ]
+  ]
+ },
+ {
+  "id": "M334_tui_autowrap_left_on",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/run.go",
+  "expect": "TestAutowrapOff",
+  "edits": [
+   [
+    "\"\\x1b[?1049h\\x1b[?25l\\x1b[?7l\"",
+    "\"\\x1b[?1049h\\x1b[?25l\""
+   ]
+  ]
+ },
+ {
+  "id": "M335_tui_deadline_shown_disconnected",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/load.go",
+  "expect": "TestClassify",
+  "edits": [
+   [
+    "\tif errors.Is(err, context.DeadlineExceeded) {\n\t\treturn Failure{}\n\t}\n",
+    ""
    ]
   ]
  }

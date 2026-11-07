@@ -287,6 +287,12 @@ func classify(err error) Failure {
 		}
 		return Failure{Disconnected: lost, Code: code}
 	}
+	// The client deadline (timeout plus one second) passed: the server did
+	// not answer in time, which is stale data, not a lost connection (review
+	// F2 on ff48df1).
+	if errors.Is(err, context.DeadlineExceeded) {
+		return Failure{}
+	}
 	return Failure{Disconnected: true}
 }
 

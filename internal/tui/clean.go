@@ -9,6 +9,7 @@ package tui
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -50,19 +51,26 @@ func invisible(r rune) bool {
 		return true
 	case r == 0x061c || r == 0xfeff || r == 0x00ad: // ALM, BOM, soft hyphen
 		return true
+	case r >= 0xe0000 && r <= 0xe007f: // tag characters (invisible "ASCII smuggling")
+		return true
 	}
 	return false
 }
 
 // runeWidth is a conservative display width: wide East Asian and emoji
 // ranges count as 2 so a line never overflows; combining marks count as 0.
+// Every symbol (category So) from U+2300 up counts as 2, because terminals
+// draw many of them (U+2705, U+231A, U+26A1, U+2B50 ...) as two-cell emoji;
+// over-counting only costs alignment (review F1 on ff48df1).
 func runeWidth(r rune) int {
 	switch {
 	case r >= 0x300 && r <= 0x36f: // combining diacritics
 		return 0
+	case r >= 0x2300 && unicode.Is(unicode.So, r):
+		return 2
 	case r >= 0x1100 && r <= 0x115f, r >= 0x2e80 && r <= 0xa4cf, r >= 0xac00 && r <= 0xd7a3,
 		r >= 0xf900 && r <= 0xfaff, r >= 0xfe30 && r <= 0xfe4f, r >= 0xff00 && r <= 0xff60,
-		r >= 0xffe0 && r <= 0xffe6, r >= 0x1f300 && r <= 0x1faff, r >= 0x20000 && r <= 0x3fffd:
+		r >= 0xffe0 && r <= 0xffe6, r >= 0x1f000 && r <= 0x1faff, r >= 0x20000 && r <= 0x3fffd:
 		return 2
 	}
 	return 1

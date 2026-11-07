@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,6 +27,9 @@ func TestClassify(t *testing.T) {
 		{&pgconn.PgError{Code: "57014"}, false, "57014"},
 		{fmt.Errorf("begin: %w", &pgconn.PgError{Code: "25006"}), false, "25006"},
 		{errors.New("dial tcp: connection refused"), true, ""},
+		// Review F2 on ff48df1: the client deadline means the server did not
+		// answer in time, not that the connection is gone.
+		{fmt.Errorf("begin: %w", context.DeadlineExceeded), false, ""},
 	} {
 		f := classify(c.err)
 		if f.Disconnected != c.lost || f.Code != c.code {
@@ -57,6 +61,8 @@ func TestClean(t *testing.T) {
 		{"cut", "abcdefghij", 5, "abcd~"},
 		{"cjk cut", "漢字漢字漢字", 5, "漢字~"},
 		{"fits", "abc", 3, "abc"},
+		{"tag characters", "a\U000e0041\U000e0042b\U000e007f", 0, "ab"},
+		{"emoji width", "\u2705\u2b50x", 4, "\u2705~"},
 	}
 	for _, c := range cases {
 		got := Clean(c.in, c.max)
@@ -85,5 +91,14 @@ func assertInert(t *testing.T, what, s string) {
 	}
 	if strings.ContainsRune(s, 0xfffd) {
 		t.Fatalf("%s: replacement rune leaked in %q", what, s)
+	}
+}
+
+// Review F1 on ff48df1: autowrap is off while the view is up, so a line
+// that is still too wide is clipped, never wrapped onto the next row; it
+// is restored on exit.
+func TestAutowrapOff(t *testing.T) {
+	if !strings.Contains(altScreenOn, "\x1b[?7l") || !strings.Contains(altScreenOff, "\x1b[?7h") {
+		t.Fatalf("autowrap not disabled/restored: %q / %q", altScreenOn, altScreenOff)
 	}
 }

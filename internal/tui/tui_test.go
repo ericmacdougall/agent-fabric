@@ -143,7 +143,8 @@ func cells(s string) int {
 	for _, r := range s {
 		switch {
 		case unicode.Is(unicode.Mn, r):
-		case unicode.In(r, unicode.Han, unicode.Hangul, unicode.Hiragana, unicode.Katakana) || (r >= 0xff01 && r <= 0xff60):
+		case unicode.In(r, unicode.Han, unicode.Hangul, unicode.Hiragana, unicode.Katakana) || (r >= 0xff01 && r <= 0xff60),
+			unicode.Is(unicode.So, r) && r >= 0x2300: // symbols terminals may draw as emoji (review F1 on ff48df1)
 			n += 2
 		default:
 			n++
@@ -490,8 +491,9 @@ func TestNarrowFrame(t *testing.T) {
 // NEG-10: very long and full-width fields are cut to the terminal.
 func TestLongFields(t *testing.T) {
 	m := &Model{Data: &Data{Now: fixedNow,
-		Missions: []Mission{{ID: strings.Repeat("i", 10000), Ticket: strings.Repeat("漢", 10000), Execution: "RUNNING", Terminal: "NONE", Created: fixedNow}},
-		Asks:     []Ask{{ID: "k", Kind: "decision", Question: strings.Repeat("問", 10000) + strings.Repeat("x", 10000), Created: fixedNow}}},
+		Missions: []Mission{{ID: strings.Repeat("i", 10000), Ticket: strings.Repeat("漢", 10000), Execution: "RUNNING", Terminal: "NONE", Created: fixedNow},
+			{ID: "m_emoji", Ticket: strings.Repeat("\u2705\u2614\u231a\u26a1\u2b50\U0001f600", 2000), Execution: "IDLE", Terminal: "NONE", Created: fixedNow}},
+		Asks: []Ask{{ID: "k", Kind: "decision", Question: strings.Repeat("問", 10000) + strings.Repeat("x", 10000), Created: fixedNow}}},
 		JobCap: 1}
 	for _, w := range []int{80, 41, 40, 21, 20} {
 		for p := Pane(0); p < paneCount; p++ {
