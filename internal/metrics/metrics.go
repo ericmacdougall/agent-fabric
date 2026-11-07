@@ -85,7 +85,23 @@ var liveEffectStates = []string{"QUARANTINED", "RECONCILING", "UNKNOWN"}
 // them) then wait for the collection to end: at most Timeout plus one
 // second, the client deadline (review N3 on 4e3f8b1). Keep Timeout short.
 func Collect(ctx context.Context, pool *pgxpool.Pool, o Options) (*Snapshot, error) {
-	timeout := o.Timeout
+	var s *Snapshot
+	err := ReadOnly(ctx, pool, o.Timeout, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		s, err = collect(ctx, tx, o)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("metrics: %w", err)
+	}
+	return s, nil
+}
+
+// ReadOnly runs f in one read-only repeatable-read transaction whose
+// statement_timeout and lock_timeout are both timeout (DefaultTimeout when
+// 0, at least 1 ms), under a client deadline of timeout plus one second.
+// The TUI reads through it too.
+func ReadOnly(ctx context.Context, pool *pgxpool.Pool, timeout time.Duration, f func(context.Context, pgx.Tx) error) error {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
@@ -98,15 +114,25 @@ func Collect(ctx context.Context, pool *pgxpool.Pool, o Options) (*Snapshot, err
 	defer cancel()
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly, IsoLevel: pgx.RepeatableRead})
 	if err != nil {
-		return nil, fmt.Errorf("metrics: begin: %w", err)
+		return fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback(context.Background()) //nolint:errcheck // read-only
 	ms := strconv.FormatInt(timeout.Milliseconds(), 10)
 	for _, q := range []string{"SET LOCAL statement_timeout = " + ms, "SET LOCAL lock_timeout = " + ms} {
 		if _, err := tx.Exec(ctx, q); err != nil {
-			return nil, fmt.Errorf("metrics: %w", err)
+			return err
 		}
 	}
+	if err := f(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+func collect(ctx context.Context, tx pgx.Tx, o Options) (*Snapshot, error) {
 	c := &collector{ctx: ctx, tx: tx}
 	s := &Snapshot{}
 	add := func(f Family) { s.Families = append(s.Families, f) }
@@ -190,10 +216,7 @@ func Collect(ctx context.Context, pool *pgxpool.Pool, o Options) (*Snapshot, err
 	add(gauge("fabric_asks_open_oldest_age_seconds", "Age of the oldest open ask (0: none).", float64(oldestAsk)))
 
 	if c.err != nil {
-		return nil, fmt.Errorf("metrics: %w", c.err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("metrics: commit: %w", err)
+		return nil, c.err
 	}
 	return s, nil
 }
