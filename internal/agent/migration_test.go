@@ -15,7 +15,8 @@ func TestMigration0022Commutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sql := string(b)
+	// Judge the statements, not the commentary.
+	sql := regexp.MustCompile(`(?m)^\s*--.*$`).ReplaceAllString(string(b), "")
 	for _, re := range []string{`(?i)effect_`, `(?i)\bGRANT\b`, `(?i)\bREVOKE\b`, `(?i)\bCREATE\s+ROLE\b`, `(?i)\bALTER\s+(TABLE|ROLE|DEFAULT)`, `(?i)\bDROP\b`, `(?i)fabric_is_scheduler`} {
 		if regexp.MustCompile(re).MatchString(sql) {
 			t.Errorf("0022 matches %s: it no longer provably commutes with the effects migrations", re)
