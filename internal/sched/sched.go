@@ -524,15 +524,26 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	if _, err := s.st.Execute(ctx, "fabd", domain.CommandID("ack:"+string(attempt)), domain.Command{Kind: domain.CmdAckStart, Mission: mission, Attempt: attempt, Fence: fence}); err != nil {
 		return err
 	}
+	if s.afterAck != nil {
+		s.afterAck()
+	}
+	if !s.gated() {
+		// goodqa#15082 T7: final admission is mandatory in every deployment.
+		// Ungated, the same lease and intent checks run without a grant row.
+		reason, err := s.st.CheckDispatchFresh(ctx, attempt, fence)
+		switch {
+		case err != nil:
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "dispatch not authorized: "+err.Error())
+		case reason != "":
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "dispatch denied: "+reason)
+		}
+	}
 	if s.gated() {
 		// C5: the final grant, after ACK and before any runner byte. A
 		// denial is definite (nothing started), so the attempt is abandoned.
 		need := make([]string, len(s.cfg.Holds))
 		for i, h := range s.cfg.Holds {
 			need[i] = h.Resource
-		}
-		if s.afterAck != nil {
-			s.afterAck()
 		}
 		gr, err := s.st.AuthorizeDispatch(ctx, attempt, fence, need)
 		switch {

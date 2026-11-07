@@ -93,14 +93,7 @@ func (s *Store) AuthorizeDispatch(ctx context.Context, attempt domain.AttemptID,
 	for _, h := range hs {
 		byResource[h.resource] = h
 	}
-	switch {
-	case domain.AttemptState(state) != domain.AttemptRunning:
-		g.Reason = fmt.Sprintf("attempt is %s, not RUNNING", state)
-	case leaseUntil == nil || !leaseUntil.After(at):
-		g.Reason = "attempt lease expired"
-	case revision != intentRevision:
-		g.Reason = fmt.Sprintf("intent revised: attempt at revision %d, mission at %d", revision, intentRevision)
-	}
+	g.Reason = staleReason(state, leaseUntil, at, revision, intentRevision)
 	if g.Reason == "" {
 		ids := []string{}
 		for _, r := range need {
@@ -132,6 +125,45 @@ func (s *Store) AuthorizeDispatch(ctx context.Context, attempt domain.AttemptID,
 		return Grant{}, err
 	}
 	return g, tx.Commit(ctx)
+}
+
+// staleReason is the admission check shared by the gated grant and the
+// ungated freshness check: "" means the attempt may still start.
+func staleReason(state string, leaseUntil *time.Time, at time.Time, revision, intentRevision int64) string {
+	switch {
+	case domain.AttemptState(state) != domain.AttemptRunning:
+		return fmt.Sprintf("attempt is %s, not RUNNING", state)
+	case leaseUntil == nil || !leaseUntil.After(at):
+		return "attempt lease expired"
+	case revision != intentRevision:
+		return fmt.Sprintf("intent revised: attempt at revision %d, mission at %d", revision, intentRevision)
+	}
+	return ""
+}
+
+// CheckDispatchFresh is the final admission when the dispatch gate is off
+// (goodqa#15082 T7): the same fence, RUNNING, lease and intent-revision
+// checks as AuthorizeDispatch, against the database clock, with no
+// reservations and nothing stored. A non-empty reason is a definite denial.
+func (s *Store) CheckDispatchFresh(ctx context.Context, attempt domain.AttemptID, fence int64) (string, error) {
+	var state string
+	var cur, revision, intentRevision int64
+	var leaseUntil *time.Time
+	var at time.Time
+	err := s.pool.QueryRow(ctx, `SELECT a.fence, a.revision, a.state, a.lease_until,
+			COALESCE((m.state->'version'->>'intent_revision')::bigint, 0), clock_timestamp()
+		FROM attempts a JOIN missions m ON m.id = a.mission_id WHERE a.id = $1`,
+		string(attempt)).Scan(&cur, &revision, &state, &leaseUntil, &intentRevision, &at)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("%w: attempt %s", domain.ErrNotFound, attempt)
+	}
+	if err != nil {
+		return "", err
+	}
+	if cur != fence {
+		return "", fmt.Errorf("%w: attempt %s is at fence %d, not %d", domain.ErrStaleFence, attempt, cur, fence)
+	}
+	return staleReason(state, leaseUntil, at, revision, intentRevision), nil
 }
 
 func loadGrant(ctx context.Context, q pgx.Tx, attempt domain.AttemptID) (Grant, bool, error) {
