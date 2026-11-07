@@ -290,6 +290,21 @@ at all. An operator-only role for these commands is follow-up work.
 - macOS cannot see the environment of Apple platform binaries; attribution
   uses an inherited descriptor as a second signal, and a platform binary that
   calls `setsid` and closes inherited descriptors is still invisible.
+- A macOS worker runs as fabd's own user, so the Seatbelt profile is the
+  whole boundary (goodqa#15161):
+  - every read under `$HOME` is denied except the run's directory and
+    worktree, and the secret paths stay denied even inside those;
+  - reading other processes' arguments or environment (process info and
+    `kern.procargs2`) is denied;
+  - network is denied except outbound TCP to 443 and the database port of
+    `FABRIC_DSN`, plus the DNS resolver socket. Seatbelt filters by port,
+    not host, so any host on those ports is reachable; that is
+    port-scoped, not mediated, egress;
+  - a provider installed under `$HOME` is unreadable to a worker, so
+    install it outside `$HOME`.
+  The negative controls `home_reads_default_denied` and
+  `network_limited_to_allowed_ports` prove this on the host before an
+  untrusted provider runs.
 - The grant is an in-process struct, not a signed envelope; there is no
   separate host agent yet; the worker still carries a runner database DSN
   (asks and effects).

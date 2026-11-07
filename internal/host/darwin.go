@@ -5,6 +5,7 @@ package host
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,7 @@ type Darwin struct {
 	SandboxExec string   // path to sandbox-exec; "" disables Seatbelt (controls then fail, by design)
 	ExtraRW     []string // extra writable paths; empty by default (review C2)
 	AllowP1     bool     // only the negative-control runner sets this
+	TCPPorts    []int    // outbound TCP ports a worker may connect to; empty means 443 only
 
 	mu   sync.Mutex
 	cmds map[string]*exec.Cmd
@@ -64,11 +66,45 @@ func (d *Darwin) profile(g Grant) string {
 			fmt.Fprintf(&b, "\n  (subpath %q)", real(p))
 		}
 	}
-	b.WriteString(")\n(deny file-read*")
+	b.WriteString(")\n")
+	// goodqa#15161 (Kimi K3): a worker runs as fabd's own uid, so a deny
+	// list under HOME always misses something (.docker, .pgpass,
+	// ~/.config/fabric). Deny every read under HOME, then allow back only
+	// the run's own directories; the later rule wins in Seatbelt.
+	if home != "" {
+		fmt.Fprintf(&b, "(deny file-read* (subpath %q))\n", real(home))
+		b.WriteString("(allow file-read*")
+		for _, p := range []string{g.RunDir, g.Worktree} {
+			if p != "" {
+				fmt.Fprintf(&b, "\n  (subpath %q)", real(p))
+			}
+		}
+		b.WriteString(")\n")
+	}
+	// The secret paths stay denied even if a run directory sits inside one.
+	b.WriteString("(deny file-read*")
 	for _, p := range denyRead(home) {
 		fmt.Fprintf(&b, "\n  (subpath %q)\n  (literal %q)", real(p), real(p))
 	}
 	b.WriteString(")\n")
+	// Red-team F4: no reading other processes' arguments or environment
+	// (fabd's FABRIC_DSN); the run's own processes stay visible to each other.
+	// kern.procargs2 is a sysctl, not a process-info operation.
+	b.WriteString("(deny process-info*)\n(allow process-info* (target same-sandbox))\n" +
+		"(deny sysctl-read (sysctl-name-prefix \"kern.procargs\"))\n")
+	// K3: no network but outbound TCP to the allowed ports and the DNS
+	// resolver socket. Seatbelt cannot filter by host, so this is port
+	// scoped: no loopback service on another port, no unix socket (an
+	// ssh-agent, docker, gpg-agent), no listening.
+	ports := d.TCPPorts
+	if len(ports) == 0 {
+		ports = []int{443}
+	}
+	b.WriteString("(deny network*)\n(allow network-outbound")
+	for _, p := range ports {
+		fmt.Fprintf(&b, "\n  (remote tcp \"*:%d\")", p)
+	}
+	b.WriteString("\n  (literal \"/private/var/run/mDNSResponder\"))\n")
 	return b.String()
 }
 
@@ -286,9 +322,10 @@ func (d *Darwin) runControl(g Grant, script string) (string, error) {
 
 // NegativeControls proves on this Mac that (1) a group signal misses a
 // setsid grandchild, (2) the inventory reap gets it, (3) Seatbelt denies a
-// write outside the allowed set, (4) secret paths are unreadable, (5) the
-// user's Claude configuration is unwritable, (6) the environment is the
-// allow-list, not the host's.
+// write outside the allowed set, (4) secret paths are unreadable, (5) an
+// unlisted file under HOME is unreadable, (6) a loopback service on a port
+// that is not allowed is unreachable, (7) the user's Claude configuration
+// is unwritable, (8) the environment is the allow-list, not the host's.
 func (d *Darwin) NegativeControls(scratch string) ([]ControlResult, error) {
 	var out []ControlResult
 	add := func(name string, ok bool, detail string) { out = append(out, ControlResult{name, ok, detail}) }
@@ -338,6 +375,41 @@ func (d *Darwin) NegativeControls(scratch string) ([]ControlResult, error) {
 		return out, err
 	}
 	add("secret_paths_unreadable", strings.Contains(res, "ssh=denied") && strings.Contains(res, "claudejson=denied"), res)
+
+	// goodqa#15161: an unlisted file under HOME is unreadable too.
+	unlisted := filepath.Join(os.Getenv("HOME"), fmt.Sprintf(".fab-nc-read-%d", time.Now().UnixNano()))
+	if err := os.WriteFile(unlisted, []byte("x"), 0o600); err != nil {
+		return out, err
+	}
+	res, err = d.runControl(g, fmt.Sprintf(`cat %q >/dev/null 2>&1 && echo home=readable || echo home=denied`, unlisted))
+	os.Remove(unlisted)
+	if err != nil {
+		return out, err
+	}
+	add("home_reads_default_denied", strings.Contains(res, "home=denied"), res)
+
+	// goodqa#15161: a loopback service on a port that is not allowed is
+	// unreachable.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return out, err
+	}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Write([]byte("HTTP/1.0 200 OK\r\n\r\nreached")) //nolint:errcheck
+			c.Close()
+		}
+	}()
+	res, err = d.runControl(g, fmt.Sprintf(`/usr/bin/curl -s --max-time 3 http://%s/ | grep -q reached && echo net=reached || echo net=denied`, ln.Addr()))
+	ln.Close()
+	if err != nil {
+		return out, err
+	}
+	add("network_limited_to_allowed_ports", strings.Contains(res, "net=denied"), res)
 
 	res, err = d.runControl(g, `(echo x >> "$HOME/.claude/settings.json.fab-nc") 2>/dev/null && echo claude=writable || echo claude=denied; (mkdir -p "$HOME/Library/Caches/fab-nc") 2>/dev/null && echo cache=writable || echo cache=denied`)
 	if err != nil {
