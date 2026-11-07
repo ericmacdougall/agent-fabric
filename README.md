@@ -250,6 +250,13 @@ The native spend ceilings are constants in the binary, so a rollback also
 restores the previous binary's ceilings (before goodqa#15086 the month
 ceiling was USD 100, not USD 20).
 
+## Review gates and design rationale
+
+- [docs/review-gates.md](docs/review-gates.md): every point where Fabric, or the process that changes it, refuses to proceed without proof. Each gate gives the threat, the invariant, where it is enforced, why it is deterministic, the test that fails if it breaks, and its limits. Also the comparison with published practice and the known gaps.
+- [docs/threat-model.md](docs/threat-model.md): assets, actors, trust boundaries and STRIDE coverage mapped to the gates.
+- [docs/gate-angles.md](docs/gate-angles.md): gate types Fabric does not cover yet, with who does them today and a design sketch for each.
+- [docs/sota/](docs/sota/README.md): per-component notes on current practice and how Fabric compares.
+
 ## License
 
 Apache-2.0. See `LICENSE` for the full text and `NOTICE` for attribution.
