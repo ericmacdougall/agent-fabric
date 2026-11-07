@@ -26,6 +26,14 @@ func NewKeyRing(argv []string, ttl time.Duration) (func(context.Context) (string
 	return src, ring, nil
 }
 
+// SetMonthSource replaces the month cap's month source and returns the
+// restore (goodqa#15124).
+func SetMonthSource(f func(context.Context, *store.Store) (string, error)) func() {
+	prev := monthSource
+	monthSource = f
+	return func() { monthSource = prev }
+}
+
 // DisablePrecheck turns off native's own provider checks and returns the
 // restore (goodqa#15087 AC-2 defense in depth).
 func DisablePrecheck() func() {

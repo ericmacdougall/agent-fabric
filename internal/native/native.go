@@ -238,8 +238,11 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 
 	// The month cap is keyed on database time, never the host clock, so a
 	// skewed or faked host clock cannot open a fresh month (goodqa#15124).
-	// Read before the attempt starts, so a failure leaves nothing to reconcile.
-	month, err := st.DBMonth(ctx)
+	// Read before a new attempt starts, so a failure there leaves nothing to
+	// reconcile; a resume that fails here lapses to UNKNOWN like any other
+	// early error. The month is fixed for the run: a run that spans a month
+	// boundary charges the month it started in (inspection finding 6).
+	month, err := monthSource(ctx, st)
 	if err != nil {
 		return nil, fmt.Errorf("native: month key: %w", err)
 	}
@@ -453,3 +456,8 @@ func (g Grant) pin() string {
 	}{g.ShellAllow, g.OracleHooks, g.Caps, g.WallSeconds, g.MaxTurns, g.MaxTotalTokens})
 	return string(b)
 }
+
+// monthSource names the month the month cap is keyed on: database time,
+// never the host clock (goodqa#15124). A test replaces it to prove Run
+// keys the cap on what it returns.
+var monthSource = func(ctx context.Context, st *store.Store) (string, error) { return st.DBMonth(ctx) }

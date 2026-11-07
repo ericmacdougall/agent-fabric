@@ -3,50 +3,71 @@ package native_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"fabric/internal/agent"
 	"fabric/internal/native"
 	"fabric/internal/provider/anthropic/fakeapi"
+	"fabric/internal/store"
 	"fabric/internal/storetest"
 )
 
-// goodqa#15124 (red-team B5): the month spend cap is keyed on database
-// time. Every month reservation of a run names the resource for the DB's
-// UTC month and no other month resource exists. A host clock that differs
-// from DB time (the controlled broken variant keys on a skewed host clock)
-// fails this.
-func TestMonthKeyIsDBTime(t *testing.T) {
-	ctx := context.Background()
-	e := newEnv(t, fakeapi.Step{Events: fakeapi.Text("finished", 50, 5)})
-	st := storetest.Open(t)
-	if _, err := native.Run(ctx, st, e.g, opts(true)); err != nil {
-		t.Fatal(err)
-	}
-	m, err := st.DBMonth(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := agent.SpendResource("month", m)
-	rows, err := st.Pool().Query(ctx, `SELECT resource FROM reservations WHERE starts_with(resource, 'spend.month.')`)
+// monthResources lists the distinct month spend resources of the store.
+func monthResources(t *testing.T, st *store.Store) []string {
+	t.Helper()
+	rows, err := st.Pool().Query(context.Background(), `SELECT DISTINCT resource FROM reservations WHERE starts_with(resource, 'spend.month.')`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	n := 0
+	var out []string
 	for rows.Next() {
 		var r string
 		if err := rows.Scan(&r); err != nil {
 			t.Fatal(err)
 		}
-		n++
-		if r != want {
-			t.Fatalf("month reservation on %s, want %s (DB month %s)", r, want, m)
-		}
+		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if n == 0 {
-		t.Fatal("the run made no month reservation")
-	}
+	return out
+}
+
+// goodqa#15124 (red-team B5; inspection finding 1): Run keys the month cap
+// on its month source and never on the host clock. The source is replaced
+// with a month that no host clock gives (the host month shifted by 40
+// months), so code that reads time.Now, the pre-fix line included, keys a
+// different resource and fails. The default source is the DB month (the
+// second case, against Store.DBMonth).
+func TestMonthKeyIsDBTime(t *testing.T) {
+	ctx := context.Background()
+	t.Run("the month source decides, not the host clock", func(t *testing.T) {
+		skewed := time.Now().UTC().AddDate(0, 40, 0).Format("200601")
+		defer native.SetMonthSource(func(context.Context, *store.Store) (string, error) { return skewed, nil })()
+		e := newEnv(t, fakeapi.Step{Events: fakeapi.Text("finished", 50, 5)})
+		st := storetest.Open(t)
+		if _, err := native.Run(ctx, st, e.g, opts(true)); err != nil {
+			t.Fatal(err)
+		}
+		want := agent.SpendResource("month", skewed)
+		if got := monthResources(t, st); len(got) != 1 || got[0] != want {
+			t.Fatalf("month reservations on %v, want only %s (month %s from the source)", got, want, skewed)
+		}
+	})
+	t.Run("the default source is the DB month", func(t *testing.T) {
+		e := newEnv(t, fakeapi.Step{Events: fakeapi.Text("finished", 50, 5)})
+		st := storetest.Open(t)
+		if _, err := native.Run(ctx, st, e.g, opts(true)); err != nil {
+			t.Fatal(err)
+		}
+		m, err := st.DBMonth(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := agent.SpendResource("month", m)
+		if got := monthResources(t, st); len(got) != 1 || got[0] != want {
+			t.Fatalf("month reservations on %v, want only %s (DB month %s)", got, want, m)
+		}
+	})
 }

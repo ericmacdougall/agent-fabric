@@ -593,6 +593,13 @@ func (s *Store) closeReservation(ctx context.Context, id, to string, rcpt *Usage
 		if due {
 			return CloseResult{}, fmt.Errorf("%w: reservation %s expired before settlement", domain.ErrInvalidTransition, id)
 		}
+	case ResReleased:
+		// goodqa#15123: a spend hold may cover a request that was billed
+		// without a receipt, and RELEASED is not spent. It settles or
+		// expires; no caller releases it.
+		if strings.HasPrefix(v.Resource, "spend.") {
+			return CloseResult{}, fmt.Errorf("%w: reservation %s is a spend hold; it settles or expires, never releases", domain.ErrInvalidTransition, id)
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE reservations SET state = $2, closed_at = $3 WHERE id = $1`, id, to, decidedAt); err != nil {
 		return CloseResult{}, err
@@ -646,6 +653,6 @@ func (s *Store) Reservations(ctx context.Context, attempt domain.AttemptID) ([]R
 // open a fresh month (goodqa#15124).
 func (s *Store) DBMonth(ctx context.Context) (string, error) {
 	var m string
-	err := s.pool.QueryRow(ctx, `SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYYMM')`).Scan(&m)
+	err := s.pool.QueryRow(ctx, `SELECT pg_catalog.to_char(pg_catalog.now() AT TIME ZONE 'UTC', 'YYYYMM')`).Scan(&m)
 	return m, err
 }
