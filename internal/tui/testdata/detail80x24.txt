@@ -1,5 +1,5 @@
 fab tui  00:10:00Z                                                              
-v-test s24 | missions 2/3 active | attempts 1 live 1 stale | asks 2
+v-test s25 | missions 2/3 active | attempts 1 live 1 stale | asks 2
 effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
 > Mission m_1  RUNNING/NONE  age 10m  spent $0.25/$5.00                         
   Ticket: goodqa#1 build the thing                                              

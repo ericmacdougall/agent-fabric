@@ -3,10 +3,10 @@
 fabric_build_info{version="v1.2.3-test"} 1
 # HELP fabric_schema_migrations_applied Migrations recorded in fabric_schema.
 # TYPE fabric_schema_migrations_applied gauge
-fabric_schema_migrations_applied 24
+fabric_schema_migrations_applied 25
 # HELP fabric_schema_level Numeric prefix of the latest applied migration.
 # TYPE fabric_schema_level gauge
-fabric_schema_level 24
+fabric_schema_level 25
 # HELP fabric_missions Missions by execution and terminal state.
 # TYPE fabric_missions gauge
 fabric_missions{execution="IDLE",terminal="NONE"} 1
