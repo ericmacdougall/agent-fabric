@@ -228,6 +228,14 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		return nil, err
 	}
 
+	// The month cap is keyed on database time, never the host clock, so a
+	// skewed or faked host clock cannot open a fresh month (goodqa#15124).
+	// Read before the attempt starts, so a failure leaves nothing to reconcile.
+	month, err := st.DBMonth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("native: month key: %w", err)
+	}
+
 	fence := plan.fence
 	if plan.c != caseResume {
 		if fence, err = startNative(ctx, st, g, plan.c == caseNew, lockPath); err != nil {
@@ -249,7 +257,6 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		&tools.Shell{C: conf, Allow: allow, Timeout: 30 * time.Second, MaxOutput: 32 << 10},
 	}
 
-	month := time.Now().UTC().Format("200601")
 	led := &agent.Ledger{St: st, Attempt: domain.AttemptID(g.Attempt), Fence: fence, TTL: time.Duration(g.WallSeconds+600) * time.Second,
 		Caps: []agent.Cap{
 			{Resource: agent.SpendResource("month", month), Total: g.Caps.Month},

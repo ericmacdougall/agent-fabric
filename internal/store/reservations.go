@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -466,11 +467,20 @@ func (s *Store) ExpireReservations(ctx context.Context, limit int) (int, error) 
 // (or of one that does not exist) are closed, EXPIRED when due and
 // RELEASED otherwise. An attempt left UNKNOWN keeps its holds until it is
 // reconciled: capacity errs toward under-admission.
+//
+// A spend hold (resource spend.*) is never RELEASED (goodqa#15123): an
+// ended attempt with an open spend hold may have been billed for a request
+// whose receipt never landed, and RELEASED is not spent. It stays HELD,
+// still counted against capacity, until it is due and is then EXPIRED,
+// which the spend ledger charges at the held amount. Not-due spend holds
+// are left out of the query so they cannot fill the limit and starve the
+// rows after them.
 func (s *Store) ExpireEndedReservations(ctx context.Context, limit int) (int, error) {
 	rows, err := s.pool.Query(ctx, `SELECT r.id FROM reservations r
 		LEFT JOIN attempts a ON a.id = r.attempt_id
 		WHERE r.state = 'HELD' AND (a.id IS NULL OR a.state NOT IN
 		      ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING'))
+		  AND NOT (starts_with(r.resource, 'spend.') AND r.expires_at > now())
 		ORDER BY r.attempt_id, r.resource LIMIT $1`, limit)
 	if err != nil {
 		return 0, err
@@ -492,8 +502,8 @@ func (s *Store) ExpireEndedReservations(ctx context.Context, limit int) (int, er
 	var errs []error
 	for _, id := range ids {
 		res, err := s.closeReservation(ctx, id, ResExpired, nil)
-		if err == nil && !res.Changed && res.Reservation.State == ResHeld {
-			res, err = s.closeReservation(ctx, id, ResReleased, nil) // ended before it was due
+		if err == nil && !res.Changed && res.Reservation.State == ResHeld && !strings.HasPrefix(res.Reservation.Resource, "spend.") {
+			res, err = s.closeReservation(ctx, id, ResReleased, nil) // ended before it was due; never a spend hold
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("reservation %s: %w", id, err)) // T3: keep sweeping
@@ -629,4 +639,13 @@ func (s *Store) Reservations(ctx context.Context, attempt domain.AttemptID) ([]R
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// DBMonth is the current month in UTC by database time, as YYYYMM. The
+// month spend cap is keyed on it, so a skewed or faked host clock cannot
+// open a fresh month (goodqa#15124).
+func (s *Store) DBMonth(ctx context.Context) (string, error) {
+	var m string
+	err := s.pool.QueryRow(ctx, `SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYYMM')`).Scan(&m)
+	return m, err
 }
