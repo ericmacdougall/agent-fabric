@@ -33,10 +33,17 @@ production readiness.
   with `fab effect abandon --reason --evidence`, only if it was never
   dispatched, audited in the same table. State moves follow an allow-list of the broker's
   own steps. A dispatcher holds the effect's advisory lock from before the
-  DISPATCHED commit until its outcome is recorded; a dispatch whose
-  dispatcher is gone (lock free, attempt no longer live) is listed by
-  `fab effect unresolved` and read back by `fab effect reconcile`. A late
-  outcome for a row that moved on is reported (`ErrSettleLost`), not dropped.
+  DISPATCHED commit until its outcome is recorded, with Precondition plus
+  transport under a deadline (60 s, or the attempt's lease end if sooner);
+  at most half the pool's connections dispatch at once. A dispatch is stale
+  only when its lock is free, its attempt is no longer live and it is older
+  than twice that deadline; stale dispatches are listed by
+  `fab effect unresolved` and read back by `fab effect reconcile`. An
+  outcome whose connection died is recorded once on a fresh connection; a
+  late outcome for a row that moved on is reported (`ErrSettleLost`), not
+  dropped. Deploy one broker version per database with one transport
+  timeout; a transaction-mode connection pooler (PgBouncer) is unsupported,
+  since the lock is session-scoped.
   Limits: the app role is the reconciler, so a RECONCILING effect settles to
   whatever readback the app reports; a DISPATCHED settle needs a receipt
   naming its dispatch number and outcome, which the app role can still forge

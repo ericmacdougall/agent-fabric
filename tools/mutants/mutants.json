@@ -1586,12 +1586,8 @@
   "expect": "TestStaleReceiptDoesNotSettleLaterDispatch",
   "edits": [
    [
-    " AND dispatches = $6`,",
-    "`,"
-   ],
-   [
-    "string(Dispatched), dispatch); err",
-    "string(Dispatched)); err"
+    "WHERE id = $1 AND state = $5 AND dispatches = $6`,",
+    "WHERE id = $1 AND state = $5 AND $6::int >= 0`,"
    ]
   ]
  },
@@ -3309,8 +3305,8 @@
   "expect": "TestStaleDispatchedRecovers",
   "edits": [
    [
-    "(state IN ($1, $2) OR (state = $5 AND `+staleAttempt+`\n",
-    "(state IN ($1, $2) OR ($5 = '' AND `+staleAttempt+`\n"
+    "(state = $5 AND updated_at < now() - $6::interval AND `",
+    "($5 = '' AND updated_at < now() - $6::interval AND `"
    ]
   ]
  },
@@ -3393,6 +3389,84 @@
    [
     "\tif tag.RowsAffected() != 1 {\n\t\t// Review U1",
     "\tif tag.RowsAffected() > 1 {\n\t\t// Review U1"
+   ]
+  ]
+ },
+ {
+  "id": "M263_stale_mark_no_age",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestDispatcherSessionLossKeepsOutcome",
+  "edits": [
+   [
+    "WHERE id = $1 AND state = $4 AND updated_at < now() - $5::interval AND `+staleAttempt,",
+    "WHERE id = $1 AND state = $4 AND $5::interval IS NOT NULL AND `+staleAttempt,"
+   ]
+  ]
+ },
+ {
+  "id": "M264_unresolved_no_age",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestDispatcherSessionLossKeepsOutcome",
+  "edits": [
+   [
+    "(state = $5 AND updated_at < now() - $6::interval AND `",
+    "(state = $5 AND $6::interval IS NOT NULL AND `"
+   ]
+  ]
+ },
+ {
+  "id": "M265_no_resettle",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestDispatcherSessionLossKeepsOutcome",
+  "edits": [
+   [
+    "!errors.Is(err, ErrSettleLost) && connLost(c, err) {",
+    "!errors.Is(err, ErrSettleLost) && false && connLost(c, err) {"
+   ]
+  ]
+ },
+ {
+  "id": "M266_dispatch_unbounded",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestSlowDispatchesDoNotStarvePool",
+  "edits": [
+   [
+    "\tn := int(st.Pool().Config().MaxConns) / 2\n",
+    "\tn := int(st.Pool().Config().MaxConns) * 4\n"
+   ]
+  ]
+ },
+ {
+  "id": "M267_no_slot_limit",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestSlowDispatchesDoNotStarvePool",
+  "edits": [
+   [
+    "\tselect {\n\tcase b.slots <- struct{}{}:\n\tcase <-ctx.Done():\n\t\treturn Effect{}, ctx.Err()\n\t}\n\tdefer func() { <-b.slots }()\n",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M268_no_transport_deadline",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestTransportTimeoutSettlesUnknown",
+  "edits": [
+   [
+    "\trc, terr := exec.Dispatch(tctx, Submission",
+    "\trc, terr := exec.Dispatch(ctx, Submission"
    ]
   ]
  }

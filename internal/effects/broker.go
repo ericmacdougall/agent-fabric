@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -145,6 +146,11 @@ type Broker struct {
 	// because the run had ended (ErrSettleRunEnded).
 	settleRefused atomic.Int64
 	settleLost    atomic.Int64
+	// slots caps dispatches holding a connection; transportTimeout bounds
+	// Precondition plus transport (main on 25fb014).
+	slots            chan struct{}
+	transportTimeout time.Duration
+	staleAfter       time.Duration
 
 	// Crash cutpoints for tests: after the dispatch row commits but before
 	// transport, and after transport but before the receipt commits.
@@ -152,7 +158,16 @@ type Broker struct {
 	afterTransport      func(Effect, Receipt)
 }
 
-func New(st *store.Store) *Broker { return &Broker{st: st, pool: st.Pool()} }
+func New(st *store.Store) *Broker {
+	// A dispatch holds one connection for its transport (the effect lock);
+	// at most half the pool, so reconcile and commands always have the rest.
+	n := int(st.Pool().Config().MaxConns) / 2
+	if n < 1 {
+		n = 1
+	}
+	return &Broker{st: st, pool: st.Pool(), slots: make(chan struct{}, n),
+		transportTimeout: DefaultTransportTimeout, staleAfter: 2 * DefaultTransportTimeout}
+}
 
 // effectID derives a stable row id from the business key.
 func effectID(idem string) string {
@@ -278,6 +293,12 @@ func (b *Broker) Dispatch(ctx context.Context, exec Executor, id string) (Effect
 	// reconciler treats the dispatch as stale only once this process (or its
 	// connection) is gone. One connection does it all, so a dispatch never
 	// waits on the pool while holding one.
+	select {
+	case b.slots <- struct{}{}:
+	case <-ctx.Done():
+		return Effect{}, ctx.Err()
+	}
+	defer func() { <-b.slots }()
 	c, err := b.pool.Acquire(ctx)
 	if err != nil {
 		return Effect{}, err
@@ -300,6 +321,9 @@ func (b *Broker) Dispatch(ctx context.Context, exec Executor, id string) (Effect
 	return b.Load(ctx, id)
 }
 
+// interval renders d for a $n::interval parameter.
+func interval(d time.Duration) string { return fmt.Sprintf("%d milliseconds", d.Milliseconds()) }
+
 // effectLockNS is the first key of the per-effect advisory lock
 // (pg_advisory_lock(effectLockNS, hashtext(effect id))). A hash collision
 // only makes an unrelated effect look in flight, which is the safe side.
@@ -317,6 +341,16 @@ func lockRelease(c *pgxpool.Conn, id string) func() {
 		}
 		c.Release()
 	}
+}
+
+// connLost reports whether err means the connection itself is gone
+// (terminated backend, network), not a refusal by the database.
+func connLost(c *pgxpool.Conn, err error) bool {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) {
+		return strings.HasPrefix(pe.Code, "57P") || strings.HasPrefix(pe.Code, "08")
+	}
+	return c.Conn().IsClosed() || !errors.Is(err, context.Canceled)
 }
 
 // dispatchOn is Dispatch on one connection that holds the effect lock; the
@@ -357,7 +391,22 @@ func (b *Broker) dispatchOn(ctx context.Context, c *pgxpool.Conn, exec Executor,
 	if err := liveFence(ctx, tx, e.Mission, e.Attempt, e.Fence); err != nil {
 		return err
 	}
-	ok, detail, err := exec.Precondition(ctx, e)
+	// Precondition and transport run under a deadline below the attempt's
+	// lease, so a hung remote cannot hold the lock and connection; a timed-out
+	// transport settles UNKNOWN for readback.
+	var leaseLeft *float64
+	if err := tx.QueryRow(ctx, `SELECT extract(epoch FROM lease_until - now())::float8 FROM attempts WHERE id = $1`, string(e.Attempt)).Scan(&leaseLeft); err != nil {
+		return err
+	}
+	limit := b.transportTimeout
+	if leaseLeft != nil {
+		if l := time.Duration(*leaseLeft * float64(time.Second)); l < limit {
+			limit = l
+		}
+	}
+	tctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	ok, detail, err := exec.Precondition(tctx, e)
 	if err != nil {
 		return err
 	}
@@ -389,14 +438,30 @@ func (b *Broker) dispatchOn(ctx context.Context, c *pgxpool.Conn, exec Executor,
 	if b.afterDispatchCommit != nil {
 		b.afterDispatchCommit(e)
 	}
-	rc, terr := exec.Dispatch(ctx, Submission{Effect: e, RemoteKey: e.IdemKey})
+	rc, terr := exec.Dispatch(tctx, Submission{Effect: e, RemoteKey: e.IdemKey})
 	if terr != nil {
 		rc = Receipt{Outcome: OutcomeUnknown, Detail: "transport: " + terr.Error()}
 	}
 	if b.afterTransport != nil {
 		b.afterTransport(e, rc)
 	}
-	return b.settle(ctx, c, id, e.Dispatches, rc)
+	err = b.settle(ctx, c, id, e.Dispatches, rc)
+	if err != nil && !errors.Is(err, ErrSettleRunEnded) && !errors.Is(err, ErrSettleLost) && connLost(c, err) {
+		// Review V1: the session (and lock) died under the transport. The
+		// outcome is still recorded once on a fresh connection; the row
+		// cannot be stale yet (staleAfter exceeds the transport deadline).
+		fresh, aerr := b.pool.Acquire(context.WithoutCancel(ctx))
+		if aerr != nil {
+			b.settleLost.Add(1)
+			return fmt.Errorf("%w: effect %s dispatch %d outcome %s: %v", ErrSettleLost, id, e.Dispatches, rc.Outcome, err)
+		}
+		defer fresh.Release()
+		if err = b.settle(context.WithoutCancel(ctx), fresh, id, e.Dispatches, rc); err != nil && !errors.Is(err, ErrSettleRunEnded) && !errors.Is(err, ErrSettleLost) {
+			b.settleLost.Add(1)
+			return fmt.Errorf("%w: effect %s dispatch %d outcome %s: %v", ErrSettleLost, id, e.Dispatches, rc.Outcome, err)
+		}
+	}
+	return err
 }
 
 // settle records a transport receipt only on the dispatch it came from: a
@@ -499,8 +564,8 @@ func (b *Broker) markStaleDispatched(ctx context.Context, id string) error {
 	}
 	defer lockRelease(c, id)()
 	_, err = c.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now()
-		WHERE id = $1 AND state = $4 AND `+staleAttempt,
-		id, string(Unknown), "stale dispatch: its dispatcher ended before the outcome was recorded", string(Dispatched))
+		WHERE id = $1 AND state = $4 AND updated_at < now() - $5::interval AND `+staleAttempt,
+		id, string(Unknown), "stale dispatch: its dispatcher ended before the outcome was recorded", string(Dispatched), interval(b.staleAfter))
 	return err
 }
 
@@ -570,11 +635,13 @@ func (b *Broker) Unresolved(ctx context.Context, age time.Duration, limit int) (
 	// Review T1: a DISPATCHED effect whose attempt is no longer live is
 	// unresolved too; Reconcile moves it to UNKNOWN and reads it back.
 	// Review U1: and whose dispatcher no longer holds the effect lock.
-	rows, err := b.pool.Query(ctx, `SELECT id FROM effects WHERE (state IN ($1, $2) OR (state = $5 AND `+staleAttempt+`
+	// Review V1: and that is older than staleAfter (its transport deadline
+	// has passed even if the dispatcher's session, and so its lock, died).
+	rows, err := b.pool.Query(ctx, `SELECT id FROM effects WHERE (state IN ($1, $2) OR (state = $5 AND updated_at < now() - $6::interval AND `+staleAttempt+`
 		AND NOT EXISTS (SELECT 1 FROM pg_locks l WHERE l.locktype = 'advisory' AND l.granted
 			AND l.classid = `+fmt.Sprint(effectLockNS)+` AND l.objid = hashtext(effects.id)::oid AND l.objsubid = 2)))
 		AND updated_at < now() - $3::interval ORDER BY updated_at LIMIT $4`,
-		string(Unknown), string(Reconciling), fmt.Sprintf("%d milliseconds", age.Milliseconds()), limit, string(Dispatched))
+		string(Unknown), string(Reconciling), interval(age), limit, string(Dispatched), interval(b.staleAfter))
 	if err != nil {
 		return nil, err
 	}
@@ -597,6 +664,25 @@ func (b *Broker) SettleRefused() int64 { return b.settleRefused.Load() }
 // SettleLost is how many dispatch outcomes arrived after their row had
 // moved on (ErrSettleLost).
 func (b *Broker) SettleLost() int64 { return b.settleLost.Load() }
+
+// DispatchLimit is how many dispatches may hold a connection at once.
+func (b *Broker) DispatchLimit() int { return cap(b.slots) }
+
+// SetTransportTimeout caps one Precondition plus transport (default
+// DefaultTransportTimeout); the attempt's lease end caps it further.
+//
+// A DISPATCHED effect is stale only once its lock is free and it is older
+// than staleAfter = 2 x the timeout (review V1 on 25fb014): the lock dies
+// with the dispatcher's session (failover, network drop), but its transport
+// is still bounded by this deadline. Every broker on a database must use
+// the same timeout.
+func (b *Broker) SetTransportTimeout(d time.Duration) {
+	b.transportTimeout = d
+	b.staleAfter = 2 * d
+}
+
+// DefaultTransportTimeout bounds a transport whose attempt has no lease end.
+const DefaultTransportTimeout = 60 * time.Second
 
 // ResolveQuarantined is the operator exit for a QUARANTINED effect (review
 // N2 on aecf3fa): an app-role actor who has established the outcome by

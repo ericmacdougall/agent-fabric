@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"fabric/internal/domain"
 	"fabric/internal/store"
@@ -658,6 +659,10 @@ func TestStaleDispatchedRecovers(t *testing.T) {
 	if fake.Count() != 3 {
 		t.Fatalf("remote writes %d, want 3", fake.Count())
 	}
+	// Past the reconciler's deadline (TestDispatcherSessionLossKeepsOutcome
+	// covers the deadline itself), so here only attempt liveness protects.
+	ab.SetTransportTimeout(100 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 	// While the attempt is live the dispatcher may still settle it.
 	if _, err := ab.Reconcile(ctx, fake, e.ID); !errors.Is(err, ErrNotReconcilable) {
 		t.Errorf("reconcile of a live attempt's DISPATCHED effect: %v, want ErrNotReconcilable", err)
@@ -747,6 +752,9 @@ func TestInFlightDispatchNotReconciled(t *testing.T) {
 	if _, err := st.Pool().Exec(ctx, "UPDATE attempts SET state = 'UNKNOWN' WHERE id = 'r_1'"); err != nil {
 		t.Fatal(err)
 	}
+	// Past the reconciler's deadline, so only the dispatcher's lock protects it.
+	ab.SetTransportTimeout(50 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 	ids, err := ab.Unresolved(ctx, 0, 10)
 	if err != nil || len(ids) != 1 || ids[0] != f.ID {
 		t.Errorf("unresolved: %v %v, want only the UNKNOWN %s, not the in-flight %s", ids, err, f.ID, e.ID)
@@ -760,5 +768,131 @@ func TestInFlightDispatchNotReconciled(t *testing.T) {
 	}
 	if got, _ := ab.Load(ctx, e.ID); got.State != Confirmed || fake.Count() != 2 {
 		t.Fatalf("after the transport landed: %s remote=%d, want CONFIRMED 2", got.State, fake.Count())
+	}
+}
+
+// slowSend parks every transport until release closes or its context ends.
+type slowSend struct {
+	*Fake
+	entered chan string
+	release chan struct{}
+}
+
+func (s slowSend) Dispatch(ctx context.Context, sub Submission) (Receipt, error) {
+	s.entered <- sub.Effect.ID
+	select {
+	case <-s.release:
+		return s.Fake.Dispatch(ctx, sub)
+	case <-ctx.Done():
+		return Receipt{}, ctx.Err()
+	}
+}
+
+// Main on 25fb014: a dispatch holds a connection for its transport, so
+// in-flight dispatches are capped below the pool size; N+1 slow sends leave
+// the reconcile and command paths free.
+func TestSlowDispatchesDoNotStarvePool(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	n := b.DispatchLimit()
+	if n < 1 || n >= int(st.Pool().Config().MaxConns) {
+		t.Fatalf("dispatch limit %d, want 1..%d", n, st.Pool().Config().MaxConns-1)
+	}
+	ss := slowSend{Fake: fake, entered: make(chan string, n+1), release: make(chan struct{})}
+	done := make(chan error, n+1)
+	var ids []string
+	for i := 0; i <= n; i++ {
+		e, err := b.Submit(ctx, fake, uspec(fmt.Sprintf("slow%d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, e.ID)
+		go func(id string) { _, err := b.Dispatch(ctx, ss, id); done <- err }(e.ID)
+	}
+	for i := 0; i < n; i++ {
+		<-ss.entered
+	}
+	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var one int
+	if err := st.Pool().QueryRow(qctx, "SELECT 1").Scan(&one); err != nil {
+		t.Fatalf("command path blocked by slow dispatches: %v", err)
+	}
+	if _, err := b.Unresolved(qctx, 0, 10); err != nil {
+		t.Fatalf("unresolved blocked: %v", err)
+	}
+	if _, err := b.Reconcile(qctx, fake, ids[0]); !errors.Is(err, ErrNotReconcilable) && !errors.Is(err, ErrNotDispatchable) {
+		t.Fatalf("reconcile blocked or wrong: %v", err)
+	}
+	select {
+	case id := <-ss.entered:
+		t.Fatalf("dispatch %s entered transport beyond the limit %d", id, n)
+	default:
+	}
+	close(ss.release)
+	for i := 0; i <= n; i++ {
+		if err := <-done; err != nil {
+			t.Errorf("dispatch: %v", err)
+		}
+	}
+	if fake.Count() != n+1 {
+		t.Fatalf("remote writes %d, want %d", fake.Count(), n+1)
+	}
+}
+
+// Main on 25fb014: the transport runs under a deadline below the lease; a
+// hung remote settles UNKNOWN for readback instead of holding the lock.
+func TestTransportTimeoutSettlesUnknown(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	b.SetTransportTimeout(200 * time.Millisecond)
+	ss := slowSend{Fake: fake, entered: make(chan string, 1), release: make(chan struct{})}
+	e, err := b.Submit(ctx, fake, uspec("hang"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	got, err := b.Dispatch(ctx, ss, e.ID)
+	if err != nil || got.State != Unknown || time.Since(start) > 3*time.Second {
+		t.Fatalf("hung transport: %s %v after %s, want UNKNOWN promptly", got.State, err, time.Since(start))
+	}
+}
+
+// Review V1 on 25fb014: the dispatcher's session dies mid-transport (the
+// lock dies with it). The effect is not stale before the transport deadline,
+// and the outcome is recorded on a fresh connection.
+func TestDispatcherSessionLossKeepsOutcome(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	runnerBroker(t, ctx, st)
+	ab := appBroker(t, ctx, st)
+	e, err := b.Submit(ctx, fake, uspec("v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := parkedSend{Fake: fake, entered: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { _, err := b.Dispatch(ctx, ps, e.ID); done <- err }()
+	<-ps.entered
+	var killed bool
+	if err := st.Pool().QueryRow(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory'
+		AND classid = 4011 AND objid = hashtext($1)::oid AND objsubid = 2`, e.ID).Scan(&killed); err != nil || !killed {
+		t.Fatalf("terminate the dispatcher session: %v %v", killed, err)
+	}
+	if _, err := st.Pool().Exec(ctx, "UPDATE attempts SET state = 'UNKNOWN' WHERE id = 'r_1'"); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := ab.Unresolved(ctx, 0, 10); len(ids) != 0 {
+		t.Errorf("unresolved lists a dispatch inside its transport deadline: %v", ids)
+	}
+	if _, err := ab.Reconcile(ctx, fake, e.ID); !errors.Is(err, ErrNotReconcilable) {
+		t.Errorf("reconcile inside the transport deadline: %v, want ErrNotReconcilable", err)
+	}
+	close(ps.release)
+	if err := <-done; err != nil {
+		t.Fatalf("dispatch after its session died: %v", err)
+	}
+	if got, _ := ab.Load(ctx, e.ID); got.State != Confirmed || fake.Count() != 1 {
+		t.Fatalf("after session loss: %s remote=%d, want CONFIRMED 1", got.State, fake.Count())
 	}
 }
