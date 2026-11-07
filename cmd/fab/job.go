@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"fabric/internal/domain"
 	"fabric/internal/host"
@@ -164,6 +165,11 @@ func resolveRung(path, rung string) (string, string, string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", "", "", err
+	}
+	// goodqa#15178: invalid UTF-8 decodes to U+FFFD, so two different
+	// tables could share a digest and a model name could be mangled.
+	if !utf8.Valid(b) {
+		return "", "", "", fmt.Errorf("tier table %s is not valid UTF-8", path)
 	}
 	var t struct {
 		Rungs map[string]struct {

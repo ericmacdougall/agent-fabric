@@ -34,6 +34,21 @@ func TestTierTableSHAMultiline(t *testing.T) {
 		}
 		seen[sha] = name
 	}
+	// goodqa#15178: encoding/json turns invalid bytes into U+FFFD, so two
+	// tables differing only there would share a digest. Such a table is
+	// refused, in the body or in a model name.
+	for name, body := range map[string]string{
+		"invalid in note":  "{\"note\":\"a\xffb\",\"rungs\":{\"r1\":{\"effort\":\"medium\",\"models\":{\"claude\":\"m\"}}}}",
+		"invalid in model": "{\"rungs\":{\"r1\":{\"effort\":\"medium\",\"models\":{\"claude\":\"m\xfe\"}}}}",
+	} {
+		p := filepath.Join(t.TempDir(), "tiers.json")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, sha, err := resolveRung(p, "r1"); err == nil {
+			t.Fatalf("%s: accepted with sha %q, want a refusal", name, sha)
+		}
+	}
 	// A table the old code digested correctly keeps its digest:
 	// 8d5bc40398291c81 is what 6bd41c8 gave for the one-line table.
 	if got, err := domainSHA([]byte(tables["one line"])); err != nil || got != "8d5bc40398291c81" {
