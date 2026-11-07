@@ -1776,5 +1776,96 @@
     "\tif s != nil {\n\t\tif _, err := s.st.ExpireReservations"
    ]
   ]
+ },
+ {
+  "id": "M136_prelaunch_not_deferred",
+  "invariant": "prelaunch_backoff",
+  "pkg": "./internal/sched",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestPrelaunchBudgetParksMission",
+  "edits": [
+   [
+    "\t\t\tif cmd.Prelaunch {\n\t\t\t\t// Red-team F1: nothing ran",
+    "\t\t\tif cmd.Prelaunch && cmd.Reason == \"never\" {\n\t\t\t\t// Red-team F1: nothing ran"
+   ]
+  ]
+ },
+ {
+  "id": "M137_prelaunch_never_parks",
+  "invariant": "prelaunch_backoff",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestPrelaunchBackoffAndPark",
+  "edits": [
+   [
+    "if n >= domain.PrelaunchBudget {",
+    "if n < 0 {"
+   ]
+  ]
+ },
+ {
+  "id": "M138_dispatch_ignores_not_before",
+  "invariant": "prelaunch_backoff",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestSaturatedGateDoesNotHotLoop",
+  "edits": [
+   [
+    "\t\t  AND (m.not_before IS NULL OR m.not_before <= now())\n",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M139_unknown_kind_written_to",
+  "invariant": "prelaunch_backoff",
+  "pkg": "./internal/sched",
+  "file": "internal/store/store.go",
+  "expect": "TestUnknownEventKindMissionGetsNoWrites",
+  "edits": [
+   [
+    "AND NOT (kind = ANY($2)) LIMIT 1`",
+    "AND kind = '' AND $2::text[] IS NOT NULL LIMIT 1`"
+   ]
+  ]
+ },
+ {
+  "id": "M140_parked_counted_as_work",
+  "invariant": "prelaunch_backoff",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestUnknownEventKindMissionGetsNoWrites",
+  "edits": [
+   [
+    "\t\t\t\ts.park(id, err)\n\t\t\t\tcontinue\n",
+    "\t\t\t\ts.park(id, err)\n\t\t\t\tn++\n\t\t\t\tcontinue\n"
+   ]
+  ]
+ },
+ {
+  "id": "M141_launch_keeps_failure_count",
+  "invariant": "prelaunch_backoff",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestLaunchedFinishResetsPrelaunchCount",
+  "edits": [
+   [
+    "\t\tif !e.Prelaunch {\n\t\t\ts.PrelaunchFailures, s.DeferMS = 0, 0",
+    "\t\tif e.Prelaunch {\n\t\t\ts.PrelaunchFailures, s.DeferMS = 0, 0"
+   ]
+  ]
+ },
+ {
+  "id": "M142_backoff_uncapped",
+  "invariant": "prelaunch_backoff",
+  "pkg": "./internal/reducer",
+  "file": "internal/domain/state.go",
+  "expect": "TestLaunchedFinishResetsPrelaunchCount",
+  "edits": [
+   [
+    "\tif b > PrelaunchMaxMS {\n\t\tb = PrelaunchMaxMS\n\t}\n",
+    ""
+   ]
+  ]
  }
 ]

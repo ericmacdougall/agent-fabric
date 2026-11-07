@@ -319,6 +319,19 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		return Response{}, err
 	}
 
+	// Red-team F1: a log holding an event kind this build cannot read is not
+	// written to. Execute decides from the snapshot, which cannot show what
+	// this build does not know, so appending would build on an unread past.
+	// Nothing is stored; the caller parks the mission.
+	var foreign string
+	switch err := tx.QueryRow(ctx, `SELECT kind FROM events WHERE mission_id = $1 AND NOT (kind = ANY($2)) LIMIT 1`,
+		string(cmd.Mission), domain.KnownEventKinds()).Scan(&foreign); {
+	case err == nil:
+		return Response{}, fmt.Errorf("%w: mission %s holds %q; this build does not write to it", domain.ErrUnsupportedEvent, cmd.Mission, foreign)
+	case !errors.Is(err, pgx.ErrNoRows):
+		return Response{}, err
+	}
+
 	// Review F1: an ask wake needs an answered ask of this mission. Checked
 	// after the replay lookup (a stored wake already passed it) and never
 	// stored, so a wake forged before the answer cannot poison the fixed key.
@@ -415,9 +428,11 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		}
 		if _, err := tx.Exec(ctx, `UPDATE missions SET seq = $2, intent_revision = $3, attempt_fence = $4,
 			candidate_generation = $5, execution = $6, candidate = $7, delivery = $8, terminal = $9,
-			state = $10, updated_at = now() WHERE id = $1`,
+			state = $10, updated_at = now(),
+			not_before = CASE WHEN $11::bigint > 0 THEN now() + $11::bigint * interval '1 millisecond' ELSE not_before END
+			WHERE id = $1`,
 			string(m.ID), m.Seq, m.Version.IntentRevision, m.Version.AttemptFence, m.Version.CandidateGeneration,
-			string(m.Execution), string(m.Candidate), string(m.Delivery), string(m.Terminal), snapshot); err != nil {
+			string(m.Execution), string(m.Candidate), string(m.Delivery), string(m.Terminal), snapshot, deferredMS(events)); err != nil {
 			return Response{}, err
 		}
 	}
@@ -771,3 +786,13 @@ func IsUniqueViolation(err error) bool {
 
 // quoteIdent is used by tests to build database names safely.
 func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
+
+// deferredMS is the backoff of a DISPATCH_DEFERRED among events, or 0.
+func deferredMS(events []domain.Event) int64 {
+	for _, e := range events {
+		if e.Kind == domain.EvDispatchDeferred {
+			return e.BackoffMS
+		}
+	}
+	return 0
+}

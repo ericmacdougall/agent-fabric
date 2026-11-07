@@ -171,8 +171,27 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 			}
 		case "abandoned":
 			e.AttemptTo = domain.AttemptFailedDefinite
+			if cmd.Prelaunch {
+				// Red-team F1: nothing ran, so nothing changed that would make
+				// the next attempt succeed. Back off; after a run of them, park.
+				e.Prelaunch = true
+				n := m.PrelaunchFailures + 1
+				if n >= domain.PrelaunchBudget {
+					p := ev(domain.EvMissionParked)
+					p.Count = n
+					p.Reason = fmt.Sprintf("%d consecutive attempts abandoned before launch; last: %s", n, cmd.Reason)
+					return []domain.Event{e, p}, nil
+				}
+				d := ev(domain.EvDispatchDeferred)
+				d.Count = n
+				d.BackoffMS = domain.PrelaunchBackoffMS(n)
+				return []domain.Event{e, d}, nil
+			}
 		default:
 			return nil, fmt.Errorf("%w: unknown outcome %q", domain.ErrInvalidTransition, cmd.Outcome)
+		}
+		if cmd.Prelaunch {
+			return nil, fmt.Errorf("%w: prelaunch is only an abandonment", domain.ErrInvalidTransition)
 		}
 		return []domain.Event{e}, nil
 
@@ -483,6 +502,14 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 	switch e.Kind {
 	case domain.EvMissionAdmitted:
 		s.Execution = domain.ExecAdmitted
+		s.PrelaunchFailures, s.DeferMS, s.ParkedReason = 0, 0, "" // re-admission is the operator's reset
+	case domain.EvDispatchDeferred:
+		s.PrelaunchFailures, s.DeferMS = e.Count, e.BackoffMS
+	case domain.EvMissionParked:
+		s.PrelaunchFailures, s.DeferMS, s.ParkedReason = e.Count, 0, e.Reason
+		if s.LiveAttempts() == 0 && s.UnresolvedAttempts() == 0 {
+			s.Execution = domain.ExecBlocked // frees the slot; re-entry is an admission
+		}
 	case domain.EvIntentRevised:
 		s.Version.IntentRevision = e.Revision
 	case domain.EvAcceptanceRevoked:
@@ -514,6 +541,9 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		a := s.Attempts[e.Attempt]
 		a.State = e.AttemptTo
 		s.Attempts[e.Attempt] = a
+		if !e.Prelaunch {
+			s.PrelaunchFailures, s.DeferMS = 0, 0 // a runner ran: the run of failures is over
+		}
 		switch e.Outcome {
 		case "wait":
 			if s.Execution.HoldsSlot() {

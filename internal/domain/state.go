@@ -176,6 +176,12 @@ type Mission struct {
 	Effects             map[EffectID]Effect   `json:"effects,omitempty"`
 	Accepted            *Acceptance           `json:"accepted,omitempty"`
 	DeliveredGeneration *int64                `json:"delivered_generation,omitempty"`
+
+	// Red-team F1: consecutive attempts abandoned before their runner started,
+	// the backoff now in force, and why the mission was parked.
+	PrelaunchFailures int    `json:"prelaunch_failures,omitempty"`
+	DeferMS           int64  `json:"defer_ms,omitempty"`
+	ParkedReason      string `json:"parked_reason,omitempty"`
 }
 
 // NewMission is the zero state before any event.
@@ -266,4 +272,24 @@ func (m Mission) UnresolvedAttempts() int {
 		}
 	}
 	return n
+}
+
+// Pre-launch backoff (red-team F1). Deterministic: a pure function of the
+// failure count, so replay reproduces it.
+const (
+	PrelaunchBudget = 6 // consecutive pre-launch failures before the mission is parked
+	PrelaunchBaseMS = 2000
+	PrelaunchMaxMS  = 5 * 60 * 1000
+)
+
+// PrelaunchBackoffMS is the wait after the n-th consecutive pre-launch failure.
+func PrelaunchBackoffMS(n int) int64 {
+	b := int64(PrelaunchBaseMS)
+	for i := 1; i < n && b < PrelaunchMaxMS; i++ {
+		b *= 2
+	}
+	if b > PrelaunchMaxMS {
+		b = PrelaunchMaxMS
+	}
+	return b
 }

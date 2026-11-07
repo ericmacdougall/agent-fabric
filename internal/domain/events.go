@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 )
 
 // CommandKind names what a caller asks the reducer to do.
@@ -45,10 +46,12 @@ type Command struct {
 	Role       string    `json:"role,omitempty"`
 	Receipt    string    `json:"receipt,omitempty"`
 	Outcome    string    `json:"outcome,omitempty"` // FINISH_ATTEMPT: checkpoint|wait|ready_for_review|blocked|abandoned
-	WaitKey    string    `json:"wait_key,omitempty"`
-	Token      string    `json:"token,omitempty"`
-	Effect     EffectID  `json:"effect,omitempty"`
-	Result     string    `json:"result,omitempty"` // RECONCILE_ATTEMPT / RESOLVE_EFFECT
+	// FINISH_ATTEMPT abandoned: the runner was never started (red-team F1).
+	Prelaunch bool     `json:"prelaunch,omitempty"`
+	WaitKey   string   `json:"wait_key,omitempty"`
+	Token     string   `json:"token,omitempty"`
+	Effect    EffectID `json:"effect,omitempty"`
+	Result    string   `json:"result,omitempty"` // RECONCILE_ATTEMPT / RESOLVE_EFFECT
 	// EFFECT_UNKNOWN / RESOLVE_EFFECT: the submission the result is about.
 	Submission int    `json:"submission,omitempty"`
 	Reason     string `json:"reason,omitempty"`
@@ -94,6 +97,10 @@ const (
 	EvMissionReleased   EventKind = "MISSION_RELEASED"
 	EvAcceptanceRevoked EventKind = "ACCEPTANCE_REVOKED"
 	EvClaimRefused      EventKind = "CLAIM_REFUSED" // H3: a ready_for_review claim without current evidence (an alert, R28)
+	// Red-team F1: a pre-launch abandonment backs the mission off, and a run
+	// of them parks it as BLOCKED.
+	EvDispatchDeferred EventKind = "DISPATCH_DEFERRED"
+	EvMissionParked    EventKind = "MISSION_PARKED"
 )
 
 // knownEventKinds is every kind this build's reducer interprets. A new kind
@@ -104,7 +111,17 @@ var knownEventKinds = map[EventKind]bool{
 	EvCandidateSelected: true, EvCandidateAccepted: true, EvDelivered: true, EvWakeRecorded: true,
 	EvWakeAcked: true, EvMissionResumed: true, EvEffectSubmitted: true, EvEffectUnknown: true,
 	EvEffectResubmitted: true, EvEffectResolved: true, EvMissionReleased: true, EvAcceptanceRevoked: true,
-	EvClaimRefused: true,
+	EvClaimRefused: true, EvDispatchDeferred: true, EvMissionParked: true,
+}
+
+// KnownEventKinds lists the kinds this build interprets, sorted.
+func KnownEventKinds() []string {
+	out := make([]string, 0, len(knownEventKinds))
+	for k := range knownEventKinds {
+		out = append(out, string(k))
+	}
+	sort.Strings(out)
+	return out
 }
 
 // KnownEventKind reports whether this build can interpret kind k.
@@ -126,6 +143,9 @@ type Event struct {
 	Role       string       `json:"role,omitempty"`
 	Receipt    string       `json:"receipt,omitempty"`
 	Outcome    string       `json:"outcome,omitempty"`
+	Prelaunch  bool         `json:"prelaunch,omitempty"`  // ATTEMPT_FINISHED: abandoned before the runner started
+	Count      int          `json:"count,omitempty"`      // DISPATCH_DEFERRED / MISSION_PARKED: consecutive pre-launch failures
+	BackoffMS  int64        `json:"backoff_ms,omitempty"` // DISPATCH_DEFERRED
 	WaitKey    string       `json:"wait_key,omitempty"`
 	Token      string       `json:"token,omitempty"`
 	Effect     EffectID     `json:"effect,omitempty"`

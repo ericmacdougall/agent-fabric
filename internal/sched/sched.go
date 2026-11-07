@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -74,6 +75,9 @@ type Scheduler struct {
 	afterRead func()
 	// afterAck is a test cutpoint after ACK_START, before the dispatch grant.
 	afterAck func()
+	// parked are missions whose log this build cannot read (red-team F1).
+	mu     sync.Mutex
+	parked map[domain.MissionID]bool
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired int
 }
@@ -252,9 +256,11 @@ func (s *Scheduler) dispatch(ctx context.Context) (int, error) {
 	rows, err := s.st.Pool().Query(ctx, `SELECT m.id FROM missions m
 		WHERE m.execution = 'ADMITTED' AND m.terminal = 'NONE'
 		  AND NOT EXISTS (SELECT 1 FROM waits w WHERE w.mission_id = m.id)
+		  AND (m.not_before IS NULL OR m.not_before <= now())
+		  AND NOT (m.id = ANY($1))
 		  AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = m.id
 		                  AND a.state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING'))
-		ORDER BY m.priority, m.id LIMIT 10`)
+		ORDER BY m.priority, m.id LIMIT 10`, s.parkedIDs())
 	if err != nil {
 		return 0, err
 	}
@@ -268,12 +274,43 @@ func (s *Scheduler) dispatch(ctx context.Context) (int, error) {
 		ids = append(ids, domain.MissionID(id))
 	}
 	rows.Close()
+	n := 0
 	for _, id := range ids {
 		if err := s.runOnce(ctx, id); err != nil {
+			if errors.Is(err, domain.ErrUnsupportedEvent) {
+				// Red-team F1: this build cannot read the mission's log, and the
+				// store wrote nothing. Park it here (a newer build owns it); it
+				// is not work, so Run backs off instead of spinning.
+				s.park(id, err)
+				continue
+			}
 			return 0, err
 		}
+		n++
 	}
-	return len(ids), nil
+	return n, nil
+}
+
+func (s *Scheduler) park(id domain.MissionID, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.parked == nil {
+		s.parked = map[domain.MissionID]bool{}
+	}
+	if !s.parked[id] {
+		fmt.Fprintf(os.Stderr, "fabd: parked %s: %v\n", id, err)
+	}
+	s.parked[id] = true
+}
+
+func (s *Scheduler) parkedIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []string{}
+	for id := range s.parked {
+		out = append(out, string(id))
+	}
+	return out
 }
 
 // runOnce = StartAttempt -> launch -> parse stream -> FinishAttempt -> Reconcile.
@@ -304,7 +341,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		// C5: hold before any preparation; a refusal launches nothing.
 		if _, err := s.st.Hold(ctx, store.HoldRequest{Key: "hold:" + string(attempt), Attempt: attempt, Fence: fence,
 			Items: s.cfg.Holds, TTL: s.cfg.HoldTTL}); err != nil {
-			return s.finish(ctx, mission, attempt, fence, "abandoned", "", "hold refused: "+err.Error())
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "hold refused: "+err.Error())
 		}
 	}
 
@@ -322,11 +359,11 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	// Nothing is launched yet, so an unverifiable snapshot abandons cleanly.
 	cur, events, err := s.st.VerifiedSnapshot(ctx, mission)
 	if err != nil {
-		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "snapshot not verified: "+err.Error())
+		return s.abandonPrelaunch(ctx, mission, attempt, fence, "snapshot not verified: "+err.Error())
 	}
 	proj, err := projection.Build(cur, events, projection.DefaultCapTokens, "continue the mission; end with the checkpoint schema")
 	if err != nil {
-		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "projection budget fault: "+err.Error())
+		return s.abandonPrelaunch(ctx, mission, attempt, fence, "projection budget fault: "+err.Error())
 	}
 	prompt, _ := json.Marshal(proj)
 	g := host.Grant{Run: attempt, Mission: mission, Fence: fence, Model: s.cfg.Model, Effort: s.cfg.Effort, Rung: s.cfg.Rung,
@@ -336,7 +373,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	l.Prompt = string(prompt)
 	argv, env, err := claude.Argv(g, l)
 	if err != nil {
-		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "launch refused: "+err.Error())
+		return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
 	}
 	env = append(env, "FAB_RUN_DIR="+runDir, "FAB_WORKTREE="+worktree, "FABRIC_DSN="+os.Getenv("FABRIC_DSN"), "FABRIC_HOME="+filepath.Join(runDir, "fabric-home"))
 	// S2: ACK_START commits before any runner bytes, so the pre-launch
@@ -357,11 +394,11 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		gr, err := s.st.AuthorizeDispatch(ctx, attempt, fence, need)
 		switch {
 		case err != nil:
-			return s.finish(ctx, mission, attempt, fence, "abandoned", "", "dispatch not authorized: "+err.Error())
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "dispatch not authorized: "+err.Error())
 		case gr.Replayed:
 			return nil // decided by an earlier call, which owns the launch
 		case !gr.Granted:
-			return s.finish(ctx, mission, attempt, fence, "abandoned", "", "dispatch denied: "+gr.Reason)
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "dispatch denied: "+gr.Reason)
 		}
 	}
 	out, err := os.Create(filepath.Join(runDir, "stream.jsonl"))
@@ -445,8 +482,19 @@ func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attemp
 }
 
 // finish ends the attempt and, when the stream and exit agree, verifies it.
+// abandonPrelaunch ends an attempt whose runner never started. The reducer
+// backs the mission off and, after a run of these, parks it (red-team F1).
+func (s *Scheduler) abandonPrelaunch(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, reason string) error {
+	return s.finishCmd(ctx, domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence,
+		Outcome: "abandoned", Prelaunch: true, Reason: reason})
+}
+
 func (s *Scheduler) finish(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, outcome, waitKey, reason string) error {
-	cmd := domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence, Outcome: outcome, WaitKey: waitKey, Reason: reason}
+	return s.finishCmd(ctx, domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence, Outcome: outcome, WaitKey: waitKey, Reason: reason})
+}
+
+func (s *Scheduler) finishCmd(ctx context.Context, cmd domain.Command) error {
+	mission, attempt, fence, outcome := cmd.Mission, cmd.Attempt, cmd.Fence, cmd.Outcome
 	if s.gated() {
 		defer s.releaseHolds(ctx, attempt)
 	}
