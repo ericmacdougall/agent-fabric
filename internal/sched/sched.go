@@ -175,12 +175,11 @@ func (s *Scheduler) checkRunnerRole(ctx context.Context) error {
 	return nil
 }
 
-// runnerDSN is what a runner and its jobs connect with.
+// runnerDSN is what a runner connects with: only the configured runner
+// login, never the scheduler's own FABRIC_DSN (goodqa#15173, Kimi K1).
+// Empty means the worker gets no database login and its fab calls fail.
 func (s *Scheduler) runnerDSN() string {
-	if s.cfg.RunnerDSN != "" {
-		return s.cfg.RunnerDSN
-	}
-	return os.Getenv("FABRIC_DSN")
+	return s.cfg.RunnerDSN
 }
 
 // SetProber installs the runner readback the UNKNOWN reconciler uses (G1).
@@ -193,7 +192,10 @@ func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 	if s.cfgErr != nil {
 		return false, s.cfgErr // a configuration fault is global: stop before any write
 	}
-	if s.gated() && !s.runnerChecked {
+	// Any runner login is checked before the first launch, gate or no gate
+	// (goodqa#15173): an owner or scheduler login handed to a worker would
+	// give it the scheduler's authority.
+	if s.cfg.RunnerDSN != "" && !s.runnerChecked {
 		if err := s.checkRunnerRole(ctx); err != nil {
 			return false, err
 		}
@@ -550,7 +552,10 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	if err != nil {
 		return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
 	}
-	env = append(env, "FAB_RUN_DIR="+runDir, "FAB_WORKTREE="+worktree, "FABRIC_DSN="+s.runnerDSN(), "FABRIC_HOME="+filepath.Join(runDir, "fabric-home"))
+	env = append(env, "FAB_RUN_DIR="+runDir, "FAB_WORKTREE="+worktree, "FABRIC_HOME="+filepath.Join(runDir, "fabric-home"))
+	if dsn := s.runnerDSN(); dsn != "" {
+		env = append(env, "FABRIC_DSN="+dsn)
+	}
 	// S2: ACK_START commits before any runner bytes, so the pre-launch
 	// ownership boundary is durable first. A failed ACK launches nothing.
 	if _, err := s.st.Execute(ctx, "fabd", domain.CommandID("ack:"+string(attempt)), domain.Command{Kind: domain.CmdAckStart, Mission: mission, Attempt: attempt, Fence: fence}); err != nil {

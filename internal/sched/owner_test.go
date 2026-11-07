@@ -33,6 +33,7 @@ type fakeLauncher struct {
 	mu       sync.Mutex
 	stateAt  []string // the attempt row state at each Start call
 	argvs    [][]string
+	envs     [][]string
 	block    chan struct{}
 }
 
@@ -43,6 +44,7 @@ func (f *fakeLauncher) Start(g host.Grant, argv, env []string, stdout, stderr *o
 	f.mu.Lock()
 	f.stateAt = append(f.stateAt, st)
 	f.argvs = append(f.argvs, append([]string(nil), argv...))
+	f.envs = append(f.envs, append([]string(nil), env...))
 	f.mu.Unlock()
 	return host.Handle{Run: g.Run}, f.startErr
 }

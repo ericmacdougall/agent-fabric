@@ -299,6 +299,9 @@ at all. An operator-only role for these commands is follow-up work.
   database directly until the runner-role restrictions (migration 0017,
   `fab db roles`) pass independent review. Runners must connect as the
   runner role (`FABRIC_RUNNER_DSN`), never as the app or owner role.
+  Fabd hands a worker only that login, checked as a runner role before the
+  first launch whether or not `--hold` is set; without it the worker gets
+  no `FABRIC_DSN` at all, never fabd's own (goodqa#15173).
   Since 0018 a runner may only submit, dispatch, settle and retry effects
   for a running attempt, request jobs for one, and raise open asks; approval,
   effect readback and answers need the app role. These guards bind the
