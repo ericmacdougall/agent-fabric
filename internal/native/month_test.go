@@ -53,30 +53,44 @@ func preSpend(t *testing.T, st *store.Store, resource string, micros int64) {
 // recorded against another month does not block the run (the control).
 func TestMonthCeilingStopsLoop(t *testing.T) {
 	ctx := context.Background()
-	month := time.Now().UTC().Format("200601")
+	thisMonth := func() string { return time.Now().UTC().Format("200601") }
 	for _, tc := range []struct {
-		name     string
-		spentIn  string
-		wantSent bool
-		wantKind string
+		name      string
+		thisMonth bool // spend charged to the month Run will use; otherwise to 199901
+		wantSent  bool
+		wantKind  string
 	}{
-		{"this month near the ceiling", month, false, agent.OutcomeBudgetExhausted},
-		{"same spend last month", "199901", true, agent.OutcomeDone},
+		{"this month near the ceiling", true, false, agent.OutcomeBudgetExhausted},
+		{"same spend in another month", false, true, agent.OutcomeDone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			st := storetest.Open(t)
-			preSpend(t, st, agent.SpendResource("month", tc.spentIn), 19_999_950)
-			e := newEnv(t, fakeapi.Step{Events: fakeapi.Text("finished", 50, 5)})
-			r, err := native.Run(ctx, st, e.g, opts(true))
-			if err != nil {
-				t.Fatalf("run: %v", err)
-			}
-			sent := len(e.srv.Requests()) > 0
-			if sent != tc.wantSent || r.Outcome != tc.wantKind {
-				t.Fatalf("outcome %q, requests %d; want outcome %q, sent=%v", r.Outcome, len(e.srv.Requests()), tc.wantKind, tc.wantSent)
-			}
-			if !tc.wantSent && !strings.Contains(r.Note, "month") {
-				t.Fatalf("budget note does not name the month resource: %q", r.Note)
+			// Run picks the UTC month itself; if the month turns over during
+			// the case, the seed and the run disagree, so the case runs again
+			// once (it cannot turn over twice in a few seconds).
+			for try := 0; try < 2; try++ {
+				month := thisMonth()
+				spentIn := "199901"
+				if tc.thisMonth {
+					spentIn = month
+				}
+				st := storetest.Open(t)
+				preSpend(t, st, agent.SpendResource("month", spentIn), 19_999_950)
+				e := newEnv(t, fakeapi.Step{Events: fakeapi.Text("finished", 50, 5)})
+				r, err := native.Run(ctx, st, e.g, opts(true))
+				if thisMonth() != month && try == 0 {
+					continue
+				}
+				if err != nil {
+					t.Fatalf("run: %v", err)
+				}
+				sent := len(e.srv.Requests()) > 0
+				if sent != tc.wantSent || r.Outcome != tc.wantKind {
+					t.Fatalf("outcome %q, requests %d; want outcome %q, sent=%v", r.Outcome, len(e.srv.Requests()), tc.wantKind, tc.wantSent)
+				}
+				if res := agent.SpendResource("month", month); !tc.wantSent && !strings.Contains(r.Note, res) {
+					t.Fatalf("budget note %q does not name the month resource %s", r.Note, res)
+				}
+				return
 			}
 		})
 	}

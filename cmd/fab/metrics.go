@@ -21,9 +21,14 @@ import (
 // metricsOptions fills what the collector cannot read from the database:
 // the build, this store's dispatch limit and the fixed spend ceilings.
 func metricsOptions(st *store.Store, timeout time.Duration) metrics.Options {
-	return metrics.Options{Timeout: timeout, DispatchLimit: cap(st.DispatchSlots()), Version: buildVersion(),
-		Caps: []metrics.Cap{{Scope: "month", Micros: native.MonthCapMicros}, {Scope: "job", Micros: native.JobCapMicros},
-			{Scope: "live_test", Micros: native.LiveTestCapMicros}}}
+	return metrics.Options{Timeout: timeout, DispatchLimit: cap(st.DispatchSlots()), Version: buildVersion(), Caps: spendCaps()}
+}
+
+// spendCaps is the fixed native spend ceilings as metrics gauges, shared by
+// fab metrics, serve-metrics and the TUI.
+func spendCaps() []metrics.Cap {
+	return []metrics.Cap{{Scope: "month", Micros: native.MonthCapMicros}, {Scope: "job", Micros: native.JobCapMicros},
+		{Scope: "live_test", Micros: native.LiveTestCapMicros}}
 }
 
 // buildVersion is the module version or the VCS revision the binary was
