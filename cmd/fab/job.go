@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -177,13 +178,28 @@ func resolveRung(path, rung string) (string, string, string, error) {
 	if !ok || r.Models["claude"] == "" || r.Effort == "" {
 		return "", "", "", fmt.Errorf("tier table has no claude model for rung %s", rung)
 	}
-	return r.Models["claude"], r.Effort, domainSHA(b), nil
+	sha, err := domainSHA(b)
+	if err != nil {
+		return "", "", "", err
+	}
+	return r.Models["claude"], r.Effort, sha, nil
 }
 
-func domainSHA(b []byte) string {
-	base, _ := domain.EffectBase("tier-table", json.RawMessage(`"`+strings.ReplaceAll(string(b), `"`, `\"`)+`"`))
-	if len(base) > 16 {
-		return base[:16]
+// domainSHA digests the tier-table bytes as a JSON string. encoding/json
+// escapes them; hand-escaping only quotes made a multi-line file invalid
+// JSON and an empty digest, which the grant refuses (goodqa#15172).
+// HTML escaping stays off so a table that the old code digested correctly
+// (no newline, tab or backslash) keeps its digest.
+func domainSHA(b []byte) (string, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(string(b)); err != nil {
+		return "", err
 	}
-	return base
+	base, err := domain.EffectBase("tier-table", json.RawMessage(bytes.TrimRight(buf.Bytes(), "\n")))
+	if err != nil || len(base) < 16 {
+		return "", fmt.Errorf("tier table digest: %v", err)
+	}
+	return base[:16], nil
 }
