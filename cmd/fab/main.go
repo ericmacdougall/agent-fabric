@@ -134,7 +134,7 @@ func usage() {
   expire-leases [--limit N]            bounded lease sweep
   reconcile [--host H]                 one expire + quarantine pass for this host (no fabd); exit 3 while a fabd holds the host
   host controls --scratch DIR          run this host's negative controls
-  __sandbox --rw DIR ... -- argv       (linux) apply Landlock then exec`)
+  __sandbox --env-keep NAMES --rw DIR ... -- argv (linux) apply Landlock, exec with only NAMES`)
 }
 
 func withStore(f func(context.Context, *store.Store) error) error {

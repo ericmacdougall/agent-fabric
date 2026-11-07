@@ -86,17 +86,11 @@ func unitName(run string) string {
 	}, run) + ".service"
 }
 
-// Start launches argv under `systemd-run --user --pipe --wait` so the host
-// owns the worker's stdio, wraps it in `fab __sandbox`, and resolves the
-// unit's cgroup path before returning, so later inventory never needs the bus.
-func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.File) (Handle, error) {
-	if err := g.Validate(); err != nil {
-		return Handle{}, err
-	}
-	if l.Self == "" {
-		return Handle{}, errors.New("linux profile: Self (fab binary) not set")
-	}
-	unit := unitName(string(g.Run))
+// startArgs is the systemd-run argument list of a worker. The environment
+// is exact (goodqa#15087 AC-6): each pair fabric sets is passed with -E,
+// and `fab __sandbox --env-keep` execs the worker with only those names,
+// so nothing the worker user's systemd manager holds reaches it.
+func (l *Linux) startArgs(g Grant, unit string, argv, env []string) ([]string, error) {
 	args := []string{"--user", "--pipe", "--wait", "--collect", "--quiet", "--unit", unit,
 		"--working-directory=" + g.Worktree, "-p", "KillMode=control-group"}
 	for _, p := range []struct{ k, v string }{{"MemoryMax", l.MemoryMax}, {"CPUQuota", l.CPUQuota}, {"TasksMax", l.TasksMax}} {
@@ -105,7 +99,11 @@ func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.F
 		}
 	}
 	// Explicit environment only (DESIGN 3.7): never the host's.
-	for _, e := range append([]string{"FAB_RUN=" + g.Token, "HOME=" + os.Getenv("HOME"), "PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"}, env...) {
+	pairs, names, err := WorkerEnv(append([]string{"FAB_RUN=" + g.Token, "HOME=" + os.Getenv("HOME"), "PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"}, env...))
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range pairs {
 		args = append(args, "-E", e)
 	}
 	rw := []string{g.RunDir, os.TempDir()}
@@ -113,7 +111,7 @@ func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.F
 		rw = append(rw, g.Worktree) // review runs cannot write the worktree
 	}
 	rw = append(rw, l.ExtraRW...)
-	sandbox := []string{l.Self, "__sandbox"}
+	sandbox := []string{l.Self, "__sandbox", "--env-keep", strings.Join(names, ",")}
 	for _, d := range l.ReadOnly {
 		sandbox = append(sandbox, "--ro", d)
 	}
@@ -129,7 +127,24 @@ func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.F
 	sandbox = append(sandbox, "--")
 	args = append(args, "--")
 	args = append(args, sandbox...)
-	args = append(args, argv...)
+	return append(args, argv...), nil
+}
+
+// Start launches argv under `systemd-run --user --pipe --wait` so the host
+// owns the worker's stdio, wraps it in `fab __sandbox`, and resolves the
+// unit's cgroup path before returning, so later inventory never needs the bus.
+func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.File) (Handle, error) {
+	if err := g.Validate(); err != nil {
+		return Handle{}, err
+	}
+	if l.Self == "" {
+		return Handle{}, errors.New("linux profile: Self (fab binary) not set")
+	}
+	unit := unitName(string(g.Run))
+	args, err := l.startArgs(g, unit, argv, env)
+	if err != nil {
+		return Handle{}, err
+	}
 	cmd := l.asWorker("systemd-run", args...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.Stdin = nil

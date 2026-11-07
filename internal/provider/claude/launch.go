@@ -15,7 +15,7 @@ type Launch struct {
 	Binary          string   // path to the claude CLI
 	Prompt          string   // the compact checkpoint
 	SessionID       string   // fabric-minted uuid; "" lets the CLI mint one
-	SettingSources  string   // e.g. "user" during migration, "" for none
+	SettingSources  string   // must be "": no user or project settings source (goodqa#15087 AC-6)
 	SettingsPath    string   // worker profile settings file
 	BriefPath       string   // --append-system-prompt-file
 	SchemaPath      string   // --json-schema; when set, a result without structured_output is abandoned
@@ -24,6 +24,9 @@ type Launch struct {
 	StrictMCP       bool
 	DisableSlash    bool
 	PermissionMode  string
+	HooksDir        string // FABRIC_HOOKS_DIR: the only place a --settings hook may run from
+	WorkerUID       *int   // the worker account; it must not own the hooks
+	ManagedRoot     string // managed-settings directory; "" is the system one
 }
 
 // Argv builds the launch line from the grant and the launch config. It is the
@@ -35,6 +38,17 @@ func Argv(g host.Grant, l Launch) (argv []string, env []string, err error) {
 	}
 	if l.Binary == "" || l.Prompt == "" {
 		return nil, nil, fmt.Errorf("%w: launch needs a binary and a prompt", host.ErrGrantInvalid)
+	}
+	if l.SettingSources != "" {
+		return nil, nil, refuse("setting sources %q: a worker loads no user or project settings", l.SettingSources)
+	}
+	if err := CheckManaged(l.ManagedRoot); err != nil {
+		return nil, nil, err
+	}
+	if l.SettingsPath != "" {
+		if err := CheckSettingsFile(l.SettingsPath, l.HooksDir, l.WorkerUID); err != nil {
+			return nil, nil, err
+		}
 	}
 	mode := l.PermissionMode
 	if mode == "" {
@@ -51,11 +65,7 @@ func Argv(g host.Grant, l Launch) (argv []string, env []string, err error) {
 	if l.SessionID != "" {
 		argv = append(argv, "--session-id", l.SessionID)
 	}
-	if l.SettingSources != "" {
-		argv = append(argv, "--setting-sources", l.SettingSources)
-	} else {
-		argv = append(argv, "--setting-sources", "")
-	}
+	argv = append(argv, "--setting-sources", "")
 	if l.SettingsPath != "" {
 		argv = append(argv, "--settings", l.SettingsPath)
 	}
@@ -94,4 +104,18 @@ func Argv(g host.Grant, l Launch) (argv []string, env []string, err error) {
 		"FAB_FENCE=" + strconv.FormatInt(g.Fence, 10),
 	}
 	return argv, env, nil
+}
+
+// ProductionLaunch is the launch configuration fabd uses for every
+// claude-code worker (cmd/fab job), shared so the AC-6 (f) live check runs
+// exactly the production argv.
+func ProductionLaunch(binary, schemaPath, hooksDir string) Launch {
+	return Launch{
+		Binary:          binary,
+		SchemaPath:      schemaPath,
+		HooksDir:        hooksDir,
+		StrictMCP:       true,
+		DisableSlash:    true,
+		DisallowedTools: []string{"Agent", "Workflow", "AskUserQuestion", "WebFetch", "WebSearch"},
+	}
 }

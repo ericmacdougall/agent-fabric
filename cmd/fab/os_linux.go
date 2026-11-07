@@ -32,18 +32,43 @@ func newLinuxProfile(self string) host.Profile {
 
 func newDarwinProfile(string) host.Profile { return nil }
 
-// sandboxMain: `fab __sandbox [--ro DIR]... [--rw DIR]... [--tcp PORT]... -- argv`.
-// Applies Landlock to this process, then execs argv in place. Fails closed.
+// sandboxMain: `fab __sandbox --env-keep NAMES [--ro DIR]... [--rw DIR]... [--tcp PORT]... -- argv`.
+// Applies Landlock to this process, then execs argv in place with exactly
+// the NAMES of its environment (goodqa#15087 AC-6). Fails closed.
 func sandboxMain(args []string) error {
+	sb, argv, env, err := sandboxPlan(args, os.Environ())
+	if err != nil {
+		return err
+	}
+	if err := host.ApplyLandlock(sb); err != nil {
+		return err
+	}
+	path, err := exec.LookPath(argv[0])
+	if err != nil {
+		return err
+	}
+	return syscall.Exec(path, argv, env)
+}
+
+const sandboxUsage = "usage: __sandbox --env-keep NAMES [--ro DIR] [--rw DIR] [--tcp PORT] ... -- argv"
+
+// sandboxPlan parses the __sandbox arguments and returns the Landlock rules,
+// the worker argv and its exact environment: environ filtered to the
+// --env-keep names. Without --env-keep it refuses, so a launcher that does
+// not name the environment never passes the systemd manager's through.
+func sandboxPlan(args, environ []string) (host.Sandbox, []string, []string, error) {
 	var sb host.Sandbox
+	keep, haveKeep := "", false
 	i := 0
 	for i < len(args) {
 		switch args[i] {
-		case "--ro", "--rw", "--tcp":
+		case "--env-keep", "--ro", "--rw", "--tcp":
 			if i+1 >= len(args) {
-				return errors.New(args[i] + " needs a value")
+				return sb, nil, nil, errors.New(args[i] + " needs a value")
 			}
 			switch args[i] {
+			case "--env-keep":
+				keep, haveKeep = args[i+1], true
 			case "--ro":
 				sb.ReadOnly = append(sb.ReadOnly, args[i+1])
 			case "--rw":
@@ -51,7 +76,7 @@ func sandboxMain(args []string) error {
 			case "--tcp":
 				p, err := strconv.Atoi(args[i+1])
 				if err != nil {
-					return err
+					return sb, nil, nil, err
 				}
 				sb.TCPPorts = append(sb.TCPPorts, p)
 			}
@@ -59,19 +84,19 @@ func sandboxMain(args []string) error {
 		case "--":
 			i++
 			if i >= len(args) {
-				return errors.New("no command after --")
+				return sb, nil, nil, errors.New("no command after --")
 			}
-			if err := host.ApplyLandlock(sb); err != nil {
-				return err
+			if !haveKeep {
+				return sb, nil, nil, errors.New("__sandbox: --env-keep is required (the worker environment must be named)")
 			}
-			path, err := exec.LookPath(args[i])
+			env, err := host.KeepEnv(environ, keep)
 			if err != nil {
-				return err
+				return sb, nil, nil, err
 			}
-			return syscall.Exec(path, args[i:], os.Environ())
+			return sb, args[i:], env, nil
 		default:
-			return errors.New("usage: __sandbox [--ro DIR] [--rw DIR] [--tcp PORT] ... -- argv")
+			return sb, nil, nil, errors.New(sandboxUsage)
 		}
 	}
-	return errors.New("usage: __sandbox [--ro DIR] [--rw DIR] [--tcp PORT] ... -- argv")
+	return sb, nil, nil, errors.New(sandboxUsage)
 }

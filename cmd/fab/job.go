@@ -15,6 +15,7 @@ import (
 	"fabric/internal/host"
 	"fabric/internal/hostid"
 	"fabric/internal/native"
+	"fabric/internal/provider/claude"
 	"fabric/internal/sched"
 	"fabric/internal/store"
 )
@@ -116,13 +117,10 @@ func daemonMain(args []string) error {
 	}
 	cfg := sched.Config{Host: domain.HostID(*hostID), Model: model, Effort: effort, Rung: *rung, TierTableSHA: sha, Profile: *profile,
 		MaxTurns: 40, MaxBudgetUSD: 2, Wall: 45 * time.Minute, WorkRoot: *workRoot, FabBin: selfPath()}
-	cfg.Launch.Binary = *provider
 	cfg.Holds = holds
 	cfg.RunnerDSN = os.Getenv(*runnerDSNEnv)
-	cfg.Launch.SchemaPath = filepath.Join(*workRoot, "checkpoint.schema.json")
-	cfg.Launch.SettingSources = ""
-	cfg.Launch.StrictMCP, cfg.Launch.DisableSlash = true, true
-	cfg.Launch.DisallowedTools = []string{"Agent", "Workflow", "AskUserQuestion", "WebFetch", "WebSearch"}
+	// goodqa#15087 AC-6: the same launch the AC-6 (f) live check runs.
+	cfg.Launch = claude.ProductionLaunch(*provider, filepath.Join(*workRoot, "checkpoint.schema.json"), os.Getenv("FABRIC_HOOKS_DIR"))
 	if err := os.WriteFile(cfg.Launch.SchemaPath, []byte(checkpointSchema), 0o644); err != nil {
 		return err
 	}

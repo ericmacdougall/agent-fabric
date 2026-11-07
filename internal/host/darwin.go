@@ -96,10 +96,10 @@ func (d *Darwin) Start(g Grant, argv []string, env []string, stdout, stderr *os.
 	full := append([]string{d.SandboxExec, "-f", profilePath}, argv...)
 	cmd := exec.Command(full[0], full[1:]...)
 	cmd.Dir = g.Worktree
-	cmd.Env = append([]string{
-		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "USER=" + os.Getenv("USER"),
-		"TMPDIR=" + os.TempDir(), "LANG=en_US.UTF-8", "SHELL=/bin/sh", "FAB_RUN=" + g.Token,
-	}, env...)
+	if cmd.Env, err = darwinEnv(g, env); err != nil {
+		rf.Close()
+		return Handle{}, err
+	}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.ExtraFiles = []*os.File{rf}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -355,4 +355,15 @@ func (d *Darwin) NegativeControls(scratch string) ([]ControlResult, error) {
 	}
 	add("environment_is_allow_listed", strings.TrimSpace(res) == "0", "host variables seen by the worker: "+res)
 	return out, nil
+}
+
+// darwinEnv is a Darwin worker's exact environment (goodqa#15087 AC-6):
+// fabric's pairs only, a later pair replacing an earlier one. exec.Cmd with
+// a non-nil Env passes nothing else.
+func darwinEnv(g Grant, env []string) ([]string, error) {
+	pairs, _, err := WorkerEnv(append([]string{
+		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "USER=" + os.Getenv("USER"),
+		"TMPDIR=" + os.TempDir(), "LANG=en_US.UTF-8", "SHELL=/bin/sh", "FAB_RUN=" + g.Token,
+	}, env...))
+	return pairs, err
 }
