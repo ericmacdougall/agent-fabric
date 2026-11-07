@@ -24,6 +24,7 @@ func gatedSetup(t *testing.T, id domain.MissionID, capacity int64) (*store.Store
 	}
 	cfg.Holds = []store.HoldItem{{Resource: "slot.h_t2", Unit: "slots", Amount: 1}}
 	cfg.HoldTTL = time.Minute
+	cfg.RunnerDSN = "postgres://fabric_runner@runner.invalid/fabric" // never dialled by the fake launcher
 	return st, ln, cfg
 }
 
@@ -79,19 +80,20 @@ func TestDispatchGateDenialsNeverStart(t *testing.T) {
 		ttl      time.Duration
 		cut      func(t *testing.T, st *store.Store, id domain.MissionID) // after ACK, before the grant
 		want     string
+		full     bool // the capacity fills between the N2 pre-check and the hold
 	}{
-		{"hold refused at capacity", 0, time.Minute, nil, "none"},
+		{"hold refused at capacity", 1, time.Minute, nil, "none", true},
 		{"intent revised after admission", 1, time.Minute, func(t *testing.T, st *store.Store, id domain.MissionID) {
 			if _, err := st.Execute(context.Background(), "chat", domain.CommandID("rev-"+string(id)), domain.Command{Kind: domain.CmdReviseIntent, Mission: id, Reason: "scope"}); err != nil {
 				t.Fatal(err)
 			}
-		}, "DENIED: intent revised"},
+		}, "DENIED: intent revised", false},
 		{"hold released after admission", 1, time.Minute, func(t *testing.T, st *store.Store, id domain.MissionID) {
 			rs, _ := st.Reservations(context.Background(), domain.AttemptID("r_"+strings.TrimPrefix(string(id), "m_")+"_1"))
 			if _, err := st.Release(context.Background(), rs[0].ID); err != nil {
 				t.Fatal(err)
 			}
-		}, "DENIED: no held reservation"},
+		}, "DENIED: no held reservation", false},
 		{"hold expired by DB time after admission", 1, store.MinHoldTTL, func(t *testing.T, st *store.Store, id domain.MissionID) {
 			rs, _ := st.Reservations(context.Background(), domain.AttemptID("r_"+strings.TrimPrefix(string(id), "m_")+"_1"))
 			for {
@@ -101,7 +103,7 @@ func TestDispatchGateDenialsNeverStart(t *testing.T) {
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
-		}, "DENIED: reservation for slot.h_t2 expired"},
+		}, "DENIED: reservation for slot.h_t2 expired", false},
 	}
 	for i, c := range cases {
 		id := domain.MissionID("m_gd" + string(rune('1'+i)))
@@ -111,6 +113,13 @@ func TestDispatchGateDenialsNeverStart(t *testing.T) {
 		s := New(st, cfg, ln)
 		if c.cut != nil {
 			s.afterAck = func() { c.cut(t, st, id) }
+		}
+		if c.full {
+			s.afterRead = func() {
+				if err := st.SetCapacity(context.Background(), "slot.h_t2", "slots", 0); err != nil {
+					t.Error(err)
+				}
+			}
 		}
 		if err := s.runOnce(context.Background(), id); err != nil {
 			t.Fatalf("%s: %v", c.name, err)
@@ -169,10 +178,83 @@ func TestTickSweepsReservationsOnlyWhenGated(t *testing.T) {
 	if h := heldNow(t, st); h != 1 {
 		t.Fatalf("an ungated tick swept reservations: held %d", h)
 	}
+	// F5: the runner is still live, so its hold outlives the TTL.
 	if _, err := gated.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if h := heldNow(t, st); h != 0 {
-		t.Fatalf("gated tick left held %d, want 0", h)
+	if h := heldNow(t, st); h != 1 {
+		t.Fatalf("gated tick swept a live attempt's hold: held %d, want 1", h)
+	}
+	// The attempt ends without its release (a crash between the two): the
+	// gated sweep is the backstop.
+	if _, err := st.Execute(context.Background(), "fabd", "fin:r_gs_1", domain.Command{Kind: domain.CmdFinishAttempt, Mission: "m_gs",
+		Attempt: "r_gs_1", Fence: rs[0].Fence, Outcome: "abandoned"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gated.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := st.Reservations(context.Background(), "r_gs_1"); after[0].State == store.ResHeld {
+		t.Fatalf("gated tick left the ended attempt's hold %s", after[0].State)
+	}
+}
+
+// Red-team F5: a gate that cannot keep its holds for a run is refused before
+// it starts anything, rather than silently capped or looping.
+func TestGateConfigValidated(t *testing.T) {
+	st, ln, base := gatedSetup(t, "m_cfg", 1)
+	for _, c := range []struct {
+		name string
+		edit func(*Config)
+		want string
+	}{
+		{"no wall-clock limit", func(c *Config) { c.Wall = 0 }, "wall"},
+		{"wall longer than half the hold cap", func(c *Config) { c.Wall = store.MaxHoldTTL/2 + time.Minute; c.HoldTTL = 0 }, "wall"},
+		{"hold ttl out of range", func(c *Config) { c.HoldTTL = store.MaxHoldTTL + time.Hour }, "hold ttl"},
+		{"runners share the scheduler role", func(c *Config) { c.RunnerDSN = "" }, "runner"},
+	} {
+		cfg := base
+		c.edit(&cfg)
+		s := New(st, cfg, ln)
+		if _, err := s.Tick(context.Background()); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: Tick error %v, want one naming %q", c.name, err, c.want)
+		}
+	}
+	if a, _ := counts(t, st, "m_cfg"); a != 0 {
+		t.Fatalf("%d attempts under an invalid gate config", a)
+	}
+	if _, err := New(st, base, ln).Tick(context.Background()); err != nil {
+		t.Fatalf("control: a valid gate config: %v", err)
+	}
+}
+
+// F5: the gated sweep keeps a live attempt's hold past its TTL.
+func TestGateSweepKeepsLiveAttemptHolds(t *testing.T) {
+	st, ln, cfg := gatedSetup(t, "m_keep", 1)
+	ctx := context.Background()
+	resp, err := st.Execute(ctx, "fabd", "start:r_keep_1", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_keep", Attempt: "r_keep_1", Host: "h_t2", Role: "writer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := st.Hold(ctx, store.HoldRequest{Key: "hold:r_keep_1", Attempt: "r_keep_1", Fence: resp.Events[0].Fence, Items: cfg.Holds, TTL: store.MinHoldTTL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		var past bool
+		if err := st.Pool().QueryRow(ctx, "SELECT clock_timestamp() > $1", rs.Reservations[0].ExpiresAt).Scan(&past); err != nil {
+			t.Fatal(err)
+		}
+		if past {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	s := New(st, cfg, ln)
+	if _, err := s.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if h := heldNow(t, st); h != 1 {
+		t.Fatalf("held %d after the sweep with the attempt live, want 1", h)
 	}
 }

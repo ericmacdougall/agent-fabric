@@ -2088,5 +2088,135 @@
     "\t\t\tif id == \"\" {\n\t\t\t\ts.park(id, err)\n\t\t\t}\n\t\t\tcontinue\n\t\t}\n\t\tn++"
    ]
   ]
+ },
+ {
+  "id": "M160_full_capacity_starts",
+  "invariant": "capacity_wait",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestFullCapacityStartsNoAttempt",
+  "edits": [
+   [
+    "err != nil || full {",
+    "err != nil || full && mission == \"\" {"
+   ]
+  ]
+ },
+ {
+  "id": "M161_capacity_check_off_by_one",
+  "invariant": "capacity_wait",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestFullCapacityStartsNoAttempt",
+  "edits": [
+   [
+    "if h.Amount > c-held {",
+    "if h.Amount > c-held+1 {"
+   ]
+  ]
+ },
+ {
+  "id": "M162_prelaunch_flags_any_actor",
+  "invariant": "scheduler_reserved",
+  "pkg": "./internal/store",
+  "file": "internal/store/asks.go",
+  "expect": "TestPrelaunchFlagsReservedToFabd",
+  "edits": [
+   [
+    "(cmd.Prelaunch || cmd.CapacityWait) && actor != SchedulerActor",
+    "(cmd.Prelaunch || cmd.CapacityWait) && actor == \"\""
+   ]
+  ]
+ },
+ {
+  "id": "M163_reserved_trigger_session_user",
+  "invariant": "scheduler_reserved",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0015_scheduler_reserved_events.sql",
+  "expect": "TestPrelaunchEventsRefusedForNonOwnerRole",
+  "edits": [
+   [
+    "NOT pg_has_role(current_user,",
+    "NOT pg_has_role(session_user,"
+   ]
+  ]
+ },
+ {
+  "id": "M164_sweep_takes_live_holds",
+  "invariant": "hold_lifetime",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldLivesAsLongAsItsAttempt",
+  "edits": [
+   [
+    "AND (a.id IS NULL OR a.state NOT IN",
+    "AND (a.id IS NOT NULL OR a.state NOT IN"
+   ]
+  ]
+ },
+ {
+  "id": "M165_sweep_skips_undue_ended",
+  "invariant": "hold_lifetime",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldLivesAsLongAsItsAttempt",
+  "edits": [
+   [
+    "!res.Changed && res.Reservation.State == ResHeld {",
+    "!res.Changed && res.Reservation.State == ResSettled {"
+   ]
+  ]
+ },
+ {
+  "id": "M166_gate_allows_zero_wall",
+  "invariant": "gate_config",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestGateConfigValidated",
+  "edits": [
+   [
+    "case c.Wall <= 0:",
+    "case c.Wall < 0:"
+   ]
+  ]
+ },
+ {
+  "id": "M167_gate_allows_shared_role",
+  "invariant": "gate_config",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestGateConfigValidated",
+  "edits": [
+   [
+    "case c.RunnerDSN == \"\":",
+    "case c.RunnerDSN == \"-\":"
+   ]
+  ]
+ },
+ {
+  "id": "M168_tick_ignores_config_error",
+  "invariant": "gate_config",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestGateConfigValidated",
+  "edits": [
+   [
+    "if s.cfgErr != nil {",
+    "if s.cfgErr != nil && s.cfg.Wall < 0 {"
+   ]
+  ]
+ },
+ {
+  "id": "M169_gated_tick_uses_ttl_sweep",
+  "invariant": "hold_lifetime",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestGateSweepKeepsLiveAttemptHolds",
+  "edits": [
+   [
+    "s.st.ExpireEndedReservations(ctx, 50)",
+    "s.st.ExpireReservations(ctx, 50)"
+   ]
+  ]
  }
 ]

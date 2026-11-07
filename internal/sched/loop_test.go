@@ -23,7 +23,8 @@ func counts(t *testing.T, st *store.Store, id domain.MissionID) (attempts, event
 	return
 }
 
-// Gate on, resource full: one attempt per backoff window, not one per Tick.
+// Gate on, resource full: no attempt at all while it stays full (N2); before
+// N2 it was one per backoff window, and before F1 one per Tick.
 func TestSaturatedGateDoesNotHotLoop(t *testing.T) {
 	st, ln, cfg := gatedSetup(t, "m_hl1", 0)
 	s := New(st, cfg, ln)
@@ -33,8 +34,8 @@ func TestSaturatedGateDoesNotHotLoop(t *testing.T) {
 		}
 	}
 	a, e := counts(t, st, "m_hl1")
-	if a != 1 || ln.starts != 0 {
-		t.Fatalf("20 ticks with the resource full: %d attempts, %d events, %d starts; want 1 attempt, 0 starts", a, e, ln.starts)
+	if a != 0 || ln.starts != 0 {
+		t.Fatalf("20 ticks with the resource full: %d attempts, %d events, %d starts; want 0 attempts, 0 starts", a, e, ln.starts)
 	}
 	// Work is judged on dispatch: the outbox may still be handing over
 	// earlier events on any tick.

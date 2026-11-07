@@ -453,6 +453,50 @@ func (s *Store) ExpireReservations(ctx context.Context, limit int) (int, error) 
 	return n, nil
 }
 
+// ExpireEndedReservations is the dispatch gate's sweep (red-team F5): a
+// hold lives as long as its attempt may have a runner. Holds of a live or
+// unresolved attempt are kept past expires_at; holds of an ended attempt
+// (or of one that does not exist) are closed, EXPIRED when due and
+// RELEASED otherwise. An attempt left UNKNOWN keeps its holds until it is
+// reconciled: capacity errs toward under-admission.
+func (s *Store) ExpireEndedReservations(ctx context.Context, limit int) (int, error) {
+	rows, err := s.pool.Query(ctx, `SELECT r.id FROM reservations r
+		LEFT JOIN attempts a ON a.id = r.attempt_id
+		WHERE r.state = 'HELD' AND (a.id IS NULL OR a.state NOT IN
+		      ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING'))
+		ORDER BY r.attempt_id, r.resource LIMIT $1`, limit)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, id := range ids {
+		res, err := s.closeReservation(ctx, id, ResExpired, nil)
+		if err == nil && !res.Changed && res.Reservation.State == ResHeld {
+			res, err = s.closeReservation(ctx, id, ResReleased, nil) // ended before it was due
+		}
+		if err != nil {
+			return n, err
+		}
+		if res.Changed {
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (s *Store) closeReservation(ctx context.Context, id, to string, rcpt *UsageReceipt) (CloseResult, error) {
 	var attempt, resource string
 	// Unlocked read only to learn which rows to lock, in order.

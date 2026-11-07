@@ -622,3 +622,43 @@ func TestReservationBackstops(t *testing.T) {
 		t.Fatalf("held %d after a refused resurrection", h)
 	}
 }
+
+// Red-team F5 on f54d526: a hold outlives its TTL while its attempt is live
+// or unresolved (a runner may be running), and is closed by the sweep once
+// the attempt has ended, due or not.
+func TestHoldLivesAsLongAsItsAttempt(t *testing.T) {
+	st, ctx := openTest(t)
+	capacity(t, st, ctx, "ra", 10)
+	f := liveAttempt(t, st, ctx, "m_hl", "r_hl")
+	if _, err := hold(st, ctx, "hl-1", "r_hl", f, time.Second, item("ra", 3)); err != nil {
+		t.Fatal(err)
+	}
+	f2 := liveAttempt(t, st, ctx, "m_hl2", "r_hl2")
+	if _, err := hold(st, ctx, "hl-2", "r_hl2", f2, time.Minute, item("ra", 2)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	if n, err := st.ExpireEndedReservations(ctx, 10); err != nil || n != 0 {
+		t.Fatalf("the sweep closed %d holds of live attempts (%v)", n, err)
+	}
+	if h := held(t, st, ctx, "ra"); h != 5 {
+		t.Fatalf("held %d with both attempts live, want 5", h)
+	}
+	for _, x := range []struct {
+		m domain.MissionID
+		a domain.AttemptID
+		f int64
+	}{{"m_hl", "r_hl", f}, {"m_hl2", "r_hl2", f2}} {
+		ok(t, st, ctx, "fabd", "fin-"+string(x.a), domain.Command{Kind: domain.CmdFinishAttempt, Mission: x.m,
+			Attempt: x.a, Fence: x.f, Outcome: "abandoned"})
+	}
+	if n, err := st.ExpireEndedReservations(ctx, 10); err != nil || n != 2 {
+		t.Fatalf("the sweep closed %d holds of ended attempts (%v), want 2 (one due, one not)", n, err)
+	}
+	if h := held(t, st, ctx, "ra"); h != 0 {
+		t.Fatalf("held %d after both attempts ended, want 0", h)
+	}
+	if c := count(t, st, ctx, `SELECT count(*) FROM reservations WHERE state = 'EXPIRED'`); c != 1 {
+		t.Fatalf("%d EXPIRED, want 1 (the due one; the other is RELEASED)", c)
+	}
+}

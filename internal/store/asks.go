@@ -36,6 +36,17 @@ func isAskToken(token string) bool { return strings.HasPrefix(token, askTokenPre
 // acknowledge them; no other actor may WAKE or ACK_WAKE an ask: token.
 // FABRIC_ACTOR can name any actor, so Execute also requires the ask to be
 // answered for the mission before an ask wake is decided.
+// SchedulerActor is the only actor that may mark an abandonment as
+// pre-launch or as a capacity wait (red-team N3); 0015 backs it by role.
+const SchedulerActor domain.ActorID = "fabd"
+
+func checkSchedulerReserved(actor domain.ActorID, cmd domain.Command) error {
+	if (cmd.Prelaunch || cmd.CapacityWait) && actor != SchedulerActor {
+		return fmt.Errorf("%w: pre-launch and capacity-wait finishes are reserved to actor %s", domain.ErrInvalidTransition, SchedulerActor)
+	}
+	return nil
+}
+
 func checkAskReserved(actor domain.ActorID, commandID domain.CommandID, cmd domain.Command) error {
 	wakeKind := cmd.Kind == domain.CmdWake || cmd.Kind == domain.CmdAckWake
 	askTok := wakeKind && isAskToken(cmd.Token)

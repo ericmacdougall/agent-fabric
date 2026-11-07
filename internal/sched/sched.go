@@ -62,7 +62,10 @@ type Config struct {
 	// GRANTED decision taken after ACK_START; holds are released at finish
 	// and swept at expiry.
 	Holds   []store.HoldItem
-	HoldTTL time.Duration // default 2 x Wall, at most store.MaxHoldTTL
+	HoldTTL time.Duration // default 2 x Wall; must lie in store.MinHoldTTL..MaxHoldTTL
+	// RunnerDSN is the database a runner and its jobs connect with: a role
+	// without the scheduler's privileges (0015). Required when gated.
+	RunnerDSN string
 }
 
 // Scheduler owns one host's dispatch loop.
@@ -82,6 +85,7 @@ type Scheduler struct {
 	// (red-team F1, D1): an unreadable log stays parked until restart.
 	mu     sync.Mutex
 	parked map[domain.MissionID]time.Time
+	cfgErr error // gateErr at New; Tick refuses to run with it
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired int
 }
@@ -96,16 +100,45 @@ func New(st *store.Store, cfg Config, ln Launcher) *Scheduler {
 	if len(cfg.Holds) > 0 && cfg.HoldTTL <= 0 {
 		cfg.HoldTTL = 2 * cfg.Wall
 	}
-	if cfg.HoldTTL > store.MaxHoldTTL {
-		cfg.HoldTTL = store.MaxHoldTTL
+	return &Scheduler{st: st, cfg: cfg, ln: ln, cfgErr: cfg.gateErr()}
+}
+
+// gateErr refuses a gate that cannot keep its holds for a run (red-team F5):
+// no wall-clock limit, a limit the hold cap cannot cover twice, a hold TTL
+// out of range, or runners that would share the scheduler's database role
+// (N3). Nothing is silently capped.
+func (c Config) gateErr() error {
+	if len(c.Holds) == 0 {
+		return nil
 	}
-	return &Scheduler{st: st, cfg: cfg, ln: ln}
+	switch {
+	case c.Wall <= 0:
+		return fmt.Errorf("sched: the dispatch gate needs a wall-clock limit (Wall > 0)")
+	case 2*c.Wall > store.MaxHoldTTL:
+		return fmt.Errorf("sched: wall %s is over half the hold cap %s", c.Wall, store.MaxHoldTTL)
+	case c.HoldTTL < store.MinHoldTTL || c.HoldTTL > store.MaxHoldTTL:
+		return fmt.Errorf("sched: hold ttl %s outside %s..%s", c.HoldTTL, store.MinHoldTTL, store.MaxHoldTTL)
+	case c.RunnerDSN == "":
+		return fmt.Errorf("sched: the dispatch gate needs a separate runner database role (RunnerDSN)")
+	}
+	return nil
+}
+
+// runnerDSN is what a runner and its jobs connect with.
+func (s *Scheduler) runnerDSN() string {
+	if s.cfg.RunnerDSN != "" {
+		return s.cfg.RunnerDSN
+	}
+	return os.Getenv("FABRIC_DSN")
 }
 
 func (s *Scheduler) gated() bool { return len(s.cfg.Holds) > 0 }
 
 // Tick runs one pass of every sweep and reports whether it did any work.
 func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
+	if s.cfgErr != nil {
+		return false, s.cfgErr // a configuration fault is global: stop before any write
+	}
 	worked := false
 	if n, err := s.consumeOutbox(ctx); err != nil {
 		return false, err
@@ -118,7 +151,7 @@ func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 	}
 	s.Expired += len(exp)
 	if s.gated() {
-		if _, err := s.st.ExpireReservations(ctx, 50); err != nil {
+		if _, err := s.st.ExpireEndedReservations(ctx, 50); err != nil {
 			fmt.Fprintln(os.Stderr, "fabd: reservation sweep:", err)
 		}
 	}
@@ -286,6 +319,9 @@ func (s *Scheduler) dispatch(ctx context.Context) (int, error) {
 	n := 0
 	for _, id := range ids {
 		if err := s.runOnce(ctx, id); err != nil {
+			if errors.Is(err, errCapacityFull) {
+				continue // waiting, not failing: no attempt, no park, not work
+			}
 			// Red-team F1 and D1: a per-mission error never stops the loop.
 			// The mission is parked in this process (an unreadable log until
 			// restart, anything else for parkRetry); it is not work, so Run
@@ -296,6 +332,27 @@ func (s *Scheduler) dispatch(ctx context.Context) (int, error) {
 		n++
 	}
 	return n, nil
+}
+
+// errCapacityFull: a configured resource has no room, so nothing started.
+var errCapacityFull = errors.New("capacity full")
+
+// capacityFull reports whether any configured hold cannot fit right now.
+// A missing resource is not "full": the hold refuses it as a real fault.
+func (s *Scheduler) capacityFull(ctx context.Context) (bool, error) {
+	for _, h := range s.cfg.Holds {
+		c, held, err := s.st.Capacity(ctx, h.Resource)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if h.Amount > c-held {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // parkRetry is how long a mission whose sweep step failed is left alone.
@@ -337,6 +394,17 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	if s.beforeRun != nil {
 		if err := s.beforeRun(mission); err != nil {
 			return err
+		}
+	}
+	if s.gated() {
+		// Red-team N2: a resource known to be full starts nothing. The
+		// mission waits without an attempt and is retried on the next tick
+		// (a release pings the wake channel).
+		if full, err := s.capacityFull(ctx); err != nil || full {
+			if err != nil {
+				return err
+			}
+			return errCapacityFull
 		}
 	}
 	m, err := s.st.Mission(ctx, mission)
@@ -400,7 +468,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	if err != nil {
 		return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
 	}
-	env = append(env, "FAB_RUN_DIR="+runDir, "FAB_WORKTREE="+worktree, "FABRIC_DSN="+os.Getenv("FABRIC_DSN"), "FABRIC_HOME="+filepath.Join(runDir, "fabric-home"))
+	env = append(env, "FAB_RUN_DIR="+runDir, "FAB_WORKTREE="+worktree, "FABRIC_DSN="+s.runnerDSN(), "FABRIC_HOME="+filepath.Join(runDir, "fabric-home"))
 	// S2: ACK_START commits before any runner bytes, so the pre-launch
 	// ownership boundary is durable first. A failed ACK launches nothing.
 	if _, err := s.st.Execute(ctx, "fabd", domain.CommandID("ack:"+string(attempt)), domain.Command{Kind: domain.CmdAckStart, Mission: mission, Attempt: attempt, Fence: fence}); err != nil {
@@ -553,12 +621,18 @@ func (s *Scheduler) releaseHolds(ctx context.Context, attempt domain.AttemptID) 
 		fmt.Fprintln(os.Stderr, "fabd: release holds:", err)
 		return
 	}
+	released := false
 	for _, r := range rs {
 		if r.State == store.ResHeld {
-			if _, err := s.st.Release(ctx, r.ID); err != nil {
+			if res, err := s.st.Release(ctx, r.ID); err != nil {
 				fmt.Fprintln(os.Stderr, "fabd: release", r.ID+":", err)
+			} else if res.Changed {
+				released = true
 			}
 		}
+	}
+	if released {
+		Notify(ctx, s.st) // N2: missions waiting for this capacity can try now
 	}
 }
 
@@ -636,7 +710,7 @@ func (s *Scheduler) startRequestedJobs(ctx context.Context) (int, error) {
 		}
 		unit := "fab-job-" + r.id
 		watch := append([]string{s.cfg.FabBin, "job", "watch", "--id", r.id, "--rundir", r.rundir, "--"}, r.argv...)
-		launchErr := s.ln.StartJob(unit, watch, []string{"FABRIC_DSN=" + os.Getenv("FABRIC_DSN"), "FABRIC_HOME=" + filepath.Join(r.rundir, "fabric-home")})
+		launchErr := s.ln.StartJob(unit, watch, []string{"FABRIC_DSN=" + s.runnerDSN(), "FABRIC_HOME=" + filepath.Join(r.rundir, "fabric-home")})
 		if launchErr != nil {
 			s.st.Pool().Exec(ctx, "UPDATE jobs SET state = 'FAILED_TO_START', log_tail = $2 WHERE id = $1 AND state = 'REQUESTED'", r.id, launchErr.Error()) //nolint:errcheck
 			continue

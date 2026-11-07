@@ -259,6 +259,9 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	if err := checkAskReserved(actor, commandID, cmd); err != nil {
 		return Response{}, err
 	}
+	if err := checkSchedulerReserved(actor, cmd); err != nil {
+		return Response{}, err
+	}
 	canon := cmd.CanonicalRequest()
 	sum := sha256.Sum256(canon)
 	hash := hex.EncodeToString(sum[:])

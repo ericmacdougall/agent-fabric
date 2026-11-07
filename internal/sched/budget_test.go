@@ -40,8 +40,18 @@ func TestCapacityWaitNeverParks(t *testing.T) {
 	st, ln, cfg := gatedSetup(t, "m_cw", 0)
 	ctx := context.Background()
 	s := New(st, cfg, ln)
+	// Each tick loses the race N2 leaves open: capacity is free at the
+	// pre-check and gone by the hold.
+	s.afterRead = func() {
+		if err := st.SetCapacity(ctx, "slot.h_t2", "slots", 0); err != nil {
+			t.Error(err)
+		}
+	}
 	n := 3 * domain.PrelaunchBudget
 	for i := 0; i < n; i++ {
+		if err := st.SetCapacity(ctx, "slot.h_t2", "slots", 1); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := s.Tick(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -86,5 +96,61 @@ func TestReadmissionClearsNotBefore(t *testing.T) {
 	var cleared bool
 	if err := st.Pool().QueryRow(ctx, "SELECT not_before IS NULL FROM missions WHERE id = 'm_ra'").Scan(&cleared); err != nil || !cleared {
 		t.Fatalf("re-admission left not_before set (%v)", err)
+	}
+}
+
+// Red-team N2 on 42c7bd2: a resource known to be full starts nothing. The
+// mission costs no attempt while it waits, and dispatches once there is room.
+func TestFullCapacityStartsNoAttempt(t *testing.T) {
+	st, ln, cfg := gatedSetup(t, "m_full", 0)
+	ctx := context.Background()
+	s := New(st, cfg, ln)
+	for i := 0; i < 20; i++ {
+		if _, err := s.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Pool().Exec(ctx, "UPDATE missions SET not_before = NULL WHERE id = 'm_full'"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a, _ := counts(t, st, "m_full"); a != 0 {
+		t.Fatalf("%d attempts while the resource was full; want 0", a)
+	}
+	if err := st.SetCapacity(ctx, "slot.h_t2", "slots", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ln.starts != 1 {
+		t.Fatalf("%d starts once capacity was free; want 1", ln.starts)
+	}
+}
+
+// N2: losing the pre-check-to-hold race costs one attempt per wait, not
+// one per backoff window.
+func TestCapacityWaitCostsAtMostOneAttempt(t *testing.T) {
+	st, ln, cfg := gatedSetup(t, "m_one", 1)
+	ctx := context.Background()
+	s := New(st, cfg, ln)
+	raced := false
+	s.afterRead = func() {
+		if !raced {
+			raced = true
+			if err := st.SetCapacity(ctx, "slot.h_t2", "slots", 0); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	for i := 0; i < 20; i++ {
+		if _, err := s.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.Pool().Exec(ctx, "UPDATE missions SET not_before = NULL WHERE id = 'm_one'"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a, _ := counts(t, st, "m_one"); a != 1 || ln.starts != 0 {
+		t.Fatalf("%d attempts, %d starts over one capacity wait; want 1, 0", a, ln.starts)
 	}
 }
