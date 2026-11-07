@@ -82,7 +82,7 @@ func planStart(ctx context.Context, st *store.Store, g Grant) (startPlan, error)
 		return startPlan{}, err
 	}
 	switch {
-	case domain.Provider(provider) != domain.ProviderAnthropicAPI:
+	case domain.Provider(provider) != domain.ProviderAnthropicAPI && !skipPrecheck:
 		return startPlan{}, refuse("mission %s is %s; the native runner runs anthropic-api missions only", g.Mission, provider)
 	case terminal != string(domain.TermNone):
 		return startPlan{}, refuse("mission %s has ended (%s)", g.Mission, terminal)
@@ -136,6 +136,12 @@ func planExisting(g Grant, mission, state, path, lockPath, host string, fence in
 
 // heartbeatFault, when set by a test, replaces one heartbeat's result.
 var heartbeatFault func() error
+
+// skipPrecheck, set only by TestNativePathDefenseInDepth, turns off the
+// native runner's own provider checks (the start rule and the catalog
+// ensure), so the test proves the reducer and the database still refuse a
+// native start on a claude-code mission. Always false in production.
+var skipPrecheck bool
 
 // heartbeat keeps the attempt's lease alive every Lease/3 while the loop
 // runs (goodqa#15087). A refused heartbeat (stale fence, attempt no longer

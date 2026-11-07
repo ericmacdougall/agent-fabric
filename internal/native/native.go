@@ -288,10 +288,13 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 func startNative(ctx context.Context, st *store.Store, g Grant, admit bool, lockPath string) (int64, error) {
 	// The native runner creates anthropic-api missions only (goodqa#15087,
 	// main WAL w5a7fb2daf13); an existing mission of another provider is
-	// refused here.
-	if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: domain.MissionID(g.Mission), Name: "native " + g.Mission, Ticket: g.Ticket, Priority: 100,
-		Source: "ticket:" + g.Ticket, Provider: domain.ProviderAnthropicAPI}); err != nil {
-		return 0, err
+	// refused here. (skipPrecheck: test only; the reducer and the database
+	// must then refuse on their own.)
+	if !skipPrecheck {
+		if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: domain.MissionID(g.Mission), Name: "native " + g.Mission, Ticket: g.Ticket, Priority: 100,
+			Source: "ticket:" + g.Ticket, Provider: domain.ProviderAnthropicAPI}); err != nil {
+			return 0, err
+		}
 	}
 	key := func(s string) domain.CommandID { return domain.CommandID("native-" + shortID(g.Attempt) + "-" + s) }
 	if admit {

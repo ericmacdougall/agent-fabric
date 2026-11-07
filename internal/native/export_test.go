@@ -13,6 +13,13 @@ func SetFinishSeams(after func(store.Response, error) error, clock settle.Clock)
 	return func() { afterFinishExec, settleClock = prevAfter, prevClock }
 }
 
+// DisablePrecheck turns off native's own provider checks and returns the
+// restore (goodqa#15087 AC-2 defense in depth).
+func DisablePrecheck() func() {
+	skipPrecheck = true
+	return func() { skipPrecheck = false }
+}
+
 // SetHeartbeatFault installs the heartbeat test seam and returns its
 // restore (goodqa#15087 AC-7).
 func SetHeartbeatFault(f func() error) func() {
