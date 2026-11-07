@@ -650,9 +650,21 @@ func pgInterval(d time.Duration) string {
 // Heartbeat extends a live attempt's lease. A wrong fence is ErrStaleFence; an
 // attempt that is no longer live is ErrInvalidTransition.
 func (s *Store) Heartbeat(ctx context.Context, attempt domain.AttemptID, fence int64) error {
+	return s.heartbeat(ctx, attempt, fence, false)
+}
+
+// HeartbeatLive extends the lease only while it has not lapsed by database
+// time (goodqa#15087 V1): a resumed native run whose lease already expired
+// is refused and left to reconcile, never revived.
+func (s *Store) HeartbeatLive(ctx context.Context, attempt domain.AttemptID, fence int64) error {
+	return s.heartbeat(ctx, attempt, fence, true)
+}
+
+func (s *Store) heartbeat(ctx context.Context, attempt domain.AttemptID, fence int64, requireLive bool) error {
 	tag, err := s.pool.Exec(ctx, `UPDATE attempts SET lease_until = now() + $3::interval
-		WHERE id = $1 AND fence = $2 AND state IN ('LEASED', 'PREPARING', 'RUNNING')`,
-		string(attempt), fence, pgInterval(s.Lease))
+		WHERE id = $1 AND fence = $2 AND state IN ('LEASED', 'PREPARING', 'RUNNING')
+		  AND (NOT $4 OR (lease_until IS NOT NULL AND lease_until >= now()))`,
+		string(attempt), fence, pgInterval(s.Lease), requireLive)
 	if err != nil {
 		return err
 	}
@@ -670,6 +682,9 @@ func (s *Store) Heartbeat(ctx context.Context, attempt domain.AttemptID, fence i
 	}
 	if curFence != fence {
 		return fmt.Errorf("%w: heartbeat fence %d, attempt holds %d", domain.ErrStaleFence, fence, curFence)
+	}
+	if requireLive && (state == "LEASED" || state == "PREPARING" || state == "RUNNING") {
+		return fmt.Errorf("%w: lease of %s has lapsed", domain.ErrInvalidTransition, attempt)
 	}
 	return fmt.Errorf("%w: heartbeat while %s", domain.ErrInvalidTransition, state)
 }

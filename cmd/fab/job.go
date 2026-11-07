@@ -13,6 +13,7 @@ import (
 
 	"fabric/internal/domain"
 	"fabric/internal/host"
+	"fabric/internal/hostid"
 	"fabric/internal/sched"
 	"fabric/internal/store"
 )
@@ -149,18 +150,9 @@ func daemonMain(args []string) error {
 const checkpointSchema = `{"type":"object","required":["end"],"properties":{"next":{"type":"string","maxLength":200},
 "end":{"type":"object","required":["kind"],"properties":{"kind":{"enum":["checkpoint","wait","ready_for_review","blocked"]},"event":{"type":"string"},"reason":{"type":"string","maxLength":200}}}}}`
 
-func hostname() string {
-	h, _ := os.Hostname()
-	if i := strings.IndexByte(h, '.'); i > 0 {
-		h = h[:i]
-	}
-	return strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
-			return r
-		}
-		return '-'
-	}, strings.ToLower(h))
-}
+// hostname is the shared default host name (goodqa#15087: fabd and the
+// native runner name a host the same way).
+func hostname() string { return hostid.Name() }
 
 // resolveRung reads the tier table file and returns (model, effort, sha256 of the file).
 func resolveRung(path, rung string) (string, string, string, error) {
