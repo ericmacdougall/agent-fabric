@@ -16,7 +16,13 @@ import (
 // executors receive the key, they never compute it.
 //
 // Size is bounded: a request larger than MaxRequestBytes is refused (R25).
-func CanonicalJSON(raw []byte) ([]byte, error) {
+func CanonicalJSON(raw []byte) ([]byte, error) { return canonicalJSON(raw, true) }
+
+// canonicalJSON with strict false keeps every number verbatim, as the
+// canonicaliser did before red-team F3. The command hash uses it, so a
+// command accepted before F3 (an exponent in its request) still replays
+// under its old hash; the effect intake stays strict.
+func canonicalJSON(raw []byte, strict bool) ([]byte, error) {
 	if len(raw) > MaxRequestBytes {
 		return nil, fmt.Errorf("%w: request larger than %d bytes", ErrInvalidTransition, MaxRequestBytes)
 	}
@@ -32,7 +38,7 @@ func CanonicalJSON(raw []byte) ([]byte, error) {
 	if dec.More() {
 		return nil, fmt.Errorf("%w: trailing data after the JSON request", ErrInvalidTransition)
 	}
-	if n := nonCanonicalNumber(v); n != "" {
+	if n := nonCanonicalNumber(v); strict && n != "" {
 		// Red-team F3: storage (jsonb) re-renders such a number (1e2 as 100,
 		// -0 as 0), so a hash of the literal would never match the stored row.
 		return nil, fmt.Errorf("%w: number %s is not in canonical form (no exponent, no negative zero)", ErrInvalidTransition, n)

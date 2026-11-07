@@ -175,6 +175,15 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 				// Red-team F1: nothing ran, so nothing changed that would make
 				// the next attempt succeed. Back off; after a run of them, park.
 				e.Prelaunch = true
+				if cmd.CapacityWait {
+					// Red-team D2: a full resource is backpressure. Back off
+					// (capped) on its own streak; it never counts toward parking.
+					d := ev(domain.EvDispatchDeferred)
+					d.Wait = true
+					d.Count = m.CapacityWaits + 1
+					d.BackoffMS = domain.PrelaunchBackoffMS(d.Count)
+					return []domain.Event{e, d}, nil
+				}
 				n := m.PrelaunchFailures + 1
 				if n >= domain.PrelaunchBudget {
 					p := ev(domain.EvMissionParked)
@@ -190,7 +199,7 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		default:
 			return nil, fmt.Errorf("%w: unknown outcome %q", domain.ErrInvalidTransition, cmd.Outcome)
 		}
-		if cmd.Prelaunch {
+		if cmd.Prelaunch || cmd.CapacityWait {
 			return nil, fmt.Errorf("%w: prelaunch is only an abandonment", domain.ErrInvalidTransition)
 		}
 		return []domain.Event{e}, nil
@@ -502,9 +511,13 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 	switch e.Kind {
 	case domain.EvMissionAdmitted:
 		s.Execution = domain.ExecAdmitted
-		s.PrelaunchFailures, s.DeferMS, s.ParkedReason = 0, 0, "" // re-admission is the operator's reset
+		s.PrelaunchFailures, s.CapacityWaits, s.DeferMS, s.ParkedReason = 0, 0, 0, "" // re-admission is the operator's reset
 	case domain.EvDispatchDeferred:
-		s.PrelaunchFailures, s.DeferMS = e.Count, e.BackoffMS
+		if e.Wait {
+			s.CapacityWaits, s.DeferMS = e.Count, e.BackoffMS
+		} else {
+			s.PrelaunchFailures, s.DeferMS = e.Count, e.BackoffMS
+		}
 	case domain.EvMissionParked:
 		s.PrelaunchFailures, s.DeferMS, s.ParkedReason = e.Count, 0, e.Reason
 		if s.LiveAttempts() == 0 && s.UnresolvedAttempts() == 0 {
@@ -542,7 +555,7 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		a.State = e.AttemptTo
 		s.Attempts[e.Attempt] = a
 		if !e.Prelaunch {
-			s.PrelaunchFailures, s.DeferMS = 0, 0 // a runner ran: the run of failures is over
+			s.PrelaunchFailures, s.CapacityWaits, s.DeferMS = 0, 0, 0 // a runner ran: the run of failures is over
 		}
 		switch e.Outcome {
 		case "wait":

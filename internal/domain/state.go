@@ -180,6 +180,7 @@ type Mission struct {
 	// Red-team F1: consecutive attempts abandoned before their runner started,
 	// the backoff now in force, and why the mission was parked.
 	PrelaunchFailures int    `json:"prelaunch_failures,omitempty"`
+	CapacityWaits     int    `json:"capacity_waits,omitempty"` // consecutive capacity waits: backoff only, never parked (D2)
 	DeferMS           int64  `json:"defer_ms,omitempty"`
 	ParkedReason      string `json:"parked_reason,omitempty"`
 }

@@ -75,9 +75,10 @@ type Scheduler struct {
 	afterRead func()
 	// afterAck is a test cutpoint after ACK_START, before the dispatch grant.
 	afterAck func()
-	// parked are missions whose log this build cannot read (red-team F1).
+	// parked are missions a sweep step failed on, with when to try again
+	// (red-team F1, D1): an unreadable log stays parked until restart.
 	mu     sync.Mutex
-	parked map[domain.MissionID]bool
+	parked map[domain.MissionID]time.Time
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired int
 }
@@ -220,7 +221,8 @@ func (s *Scheduler) bump(ctx context.Context, name string) {
 // wakeExitedJobs turns each exited, un-woken job into a WAKE command with a
 // deterministic key, so a repeated sweep replays instead of waking twice.
 func (s *Scheduler) wakeExitedJobs(ctx context.Context) (int, error) {
-	rows, err := s.st.Pool().Query(ctx, `SELECT id, mission_id FROM jobs WHERE state = 'EXITED' AND NOT woken ORDER BY ended_at LIMIT 50`)
+	rows, err := s.st.Pool().Query(ctx, `SELECT id, mission_id FROM jobs WHERE state = 'EXITED' AND NOT woken
+		AND NOT (mission_id = ANY($1)) ORDER BY ended_at LIMIT 50`, s.parkedIDs())
 	if err != nil {
 		return 0, err
 	}
@@ -238,10 +240,14 @@ func (s *Scheduler) wakeExitedJobs(ctx context.Context) (int, error) {
 	for _, x := range jobs {
 		_, err := s.st.Execute(ctx, "fabd", domain.CommandID("wake:job:"+x.id), domain.Command{Kind: domain.CmdWake, Mission: domain.MissionID(x.mission), Token: "job:" + x.id})
 		if err != nil && !errors.As(err, new(*store.Refusal)) {
-			return 0, err
+			// Red-team D1: park this one mission and carry on. The job stays
+			// un-woken, so it is retried once the park lapses.
+			s.park(domain.MissionID(x.mission), err)
+			continue
 		}
 		if _, err := s.st.Pool().Exec(ctx, "UPDATE jobs SET woken = true WHERE id = $1", x.id); err != nil {
-			return 0, err
+			s.park(domain.MissionID(x.mission), err)
+			continue
 		}
 		s.JobsWoken++
 	}
@@ -277,37 +283,47 @@ func (s *Scheduler) dispatch(ctx context.Context) (int, error) {
 	n := 0
 	for _, id := range ids {
 		if err := s.runOnce(ctx, id); err != nil {
-			if errors.Is(err, domain.ErrUnsupportedEvent) {
-				// Red-team F1: this build cannot read the mission's log, and the
-				// store wrote nothing. Park it here (a newer build owns it); it
-				// is not work, so Run backs off instead of spinning.
-				s.park(id, err)
-				continue
-			}
-			return 0, err
+			// Red-team F1 and D1: a per-mission error never stops the loop.
+			// The mission is parked in this process (an unreadable log until
+			// restart, anything else for parkRetry); it is not work, so Run
+			// backs off instead of spinning.
+			s.park(id, err)
+			continue
 		}
 		n++
 	}
 	return n, nil
 }
 
+// parkRetry is how long a mission whose sweep step failed is left alone.
+const parkRetry = time.Minute
+
 func (s *Scheduler) park(id domain.MissionID, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.parked == nil {
-		s.parked = map[domain.MissionID]bool{}
+		s.parked = map[domain.MissionID]time.Time{}
 	}
-	if !s.parked[id] {
+	until := time.Now().Add(parkRetry)
+	if errors.Is(err, domain.ErrUnsupportedEvent) {
+		until = time.Now().Add(100 * 365 * 24 * time.Hour) // a newer build owns it: until this process restarts
+	}
+	if _, was := s.parked[id]; !was {
 		fmt.Fprintf(os.Stderr, "fabd: parked %s: %v\n", id, err)
 	}
-	s.parked[id] = true
+	s.parked[id] = until
 }
 
 func (s *Scheduler) parkedIDs() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []string{}
-	for id := range s.parked {
+	now := time.Now()
+	for id, until := range s.parked {
+		if now.After(until) {
+			delete(s.parked, id) // the park lapsed: try the mission again
+			continue
+		}
 		out = append(out, string(id))
 	}
 	return out
@@ -341,7 +357,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		// C5: hold before any preparation; a refusal launches nothing.
 		if _, err := s.st.Hold(ctx, store.HoldRequest{Key: "hold:" + string(attempt), Attempt: attempt, Fence: fence,
 			Items: s.cfg.Holds, TTL: s.cfg.HoldTTL}); err != nil {
-			return s.abandonPrelaunch(ctx, mission, attempt, fence, "hold refused: "+err.Error())
+			return s.abandonPrelaunchWait(ctx, mission, attempt, fence, "hold refused: "+err.Error(), errors.Is(err, domain.ErrOverCapacity))
 		}
 	}
 
@@ -485,8 +501,14 @@ func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attemp
 // abandonPrelaunch ends an attempt whose runner never started. The reducer
 // backs the mission off and, after a run of these, parks it (red-team F1).
 func (s *Scheduler) abandonPrelaunch(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, reason string) error {
+	return s.abandonPrelaunchWait(ctx, mission, attempt, fence, reason, false)
+}
+
+// abandonPrelaunchWait with wait set marks the cause as a full resource:
+// the mission backs off but the attempt does not count toward parking (D2).
+func (s *Scheduler) abandonPrelaunchWait(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, reason string, wait bool) error {
 	return s.finishCmd(ctx, domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence,
-		Outcome: "abandoned", Prelaunch: true, Reason: reason})
+		Outcome: "abandoned", Prelaunch: true, CapacityWait: wait, Reason: reason})
 }
 
 func (s *Scheduler) finish(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, outcome, waitKey, reason string) error {

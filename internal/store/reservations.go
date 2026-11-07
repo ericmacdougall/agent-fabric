@@ -243,6 +243,12 @@ func (s *Store) Hold(ctx context.Context, req HoldRequest) (HoldResult, error) {
 	if err != nil {
 		return HoldResult{}, err
 	}
+	// 0014 allows this fill only in the transaction whose xid inserted the
+	// row (xmin). Keep the INSERT and this UPDATE in the same (sub)transaction:
+	// an INSERT inside a savepoint followed by a fill after RELEASE is refused
+	// (23001), because xmin is then the subtransaction's xid. The receipt is a
+	// replay record, not proof of a hold: AuthorizeDispatch checks the HELD
+	// reservations themselves.
 	if _, err := tx.Exec(ctx, `UPDATE hold_commands SET response_bytes = $2 WHERE key = $1`, req.Key, raw); err != nil {
 		return HoldResult{}, err
 	}

@@ -167,9 +167,12 @@ func (b *Broker) Submit(ctx context.Context, exec Executor, spec IntentSpec) (Ef
 	existing, err := b.loadTx(ctx, tx, "idem_key", spec.IdemKey)
 	if err == nil {
 		if existing.RequestSHA != base || existing.Mission != spec.Mission || existing.Attempt != spec.Attempt ||
-			existing.Fence != spec.Fence || existing.Kind != spec.Kind || existing.Subject != spec.Subject ||
-			existing.neededApproval() != spec.NeedsApproval {
+			existing.Fence != spec.Fence || existing.Kind != spec.Kind || existing.Subject != spec.Subject {
 			return Effect{}, fmt.Errorf("%w: effect key %s", domain.ErrIdempotencyConflict, spec.IdemKey)
+		}
+		if existing.neededApproval() != spec.NeedsApproval {
+			return Effect{}, fmt.Errorf("%w: effect key %s was submitted with needs-approval %t, this replay says %t",
+				domain.ErrIdempotencyConflict, spec.IdemKey, existing.neededApproval(), spec.NeedsApproval)
 		}
 		existing.Replayed = true
 		return existing, tx.Commit(ctx)

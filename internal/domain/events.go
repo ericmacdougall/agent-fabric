@@ -47,11 +47,13 @@ type Command struct {
 	Receipt    string    `json:"receipt,omitempty"`
 	Outcome    string    `json:"outcome,omitempty"` // FINISH_ATTEMPT: checkpoint|wait|ready_for_review|blocked|abandoned
 	// FINISH_ATTEMPT abandoned: the runner was never started (red-team F1).
-	Prelaunch bool     `json:"prelaunch,omitempty"`
-	WaitKey   string   `json:"wait_key,omitempty"`
-	Token     string   `json:"token,omitempty"`
-	Effect    EffectID `json:"effect,omitempty"`
-	Result    string   `json:"result,omitempty"` // RECONCILE_ATTEMPT / RESOLVE_EFFECT
+	Prelaunch bool `json:"prelaunch,omitempty"`
+	// With Prelaunch: the cause is a full resource, a wait not a failure (red-team D2).
+	CapacityWait bool     `json:"capacity_wait,omitempty"`
+	WaitKey      string   `json:"wait_key,omitempty"`
+	Token        string   `json:"token,omitempty"`
+	Effect       EffectID `json:"effect,omitempty"`
+	Result       string   `json:"result,omitempty"` // RECONCILE_ATTEMPT / RESOLVE_EFFECT
 	// EFFECT_UNKNOWN / RESOLVE_EFFECT: the submission the result is about.
 	Submission int    `json:"submission,omitempty"`
 	Reason     string `json:"reason,omitempty"`
@@ -146,6 +148,7 @@ type Event struct {
 	Prelaunch  bool         `json:"prelaunch,omitempty"`  // ATTEMPT_FINISHED: abandoned before the runner started
 	Count      int          `json:"count,omitempty"`      // DISPATCH_DEFERRED / MISSION_PARKED: consecutive pre-launch failures
 	BackoffMS  int64        `json:"backoff_ms,omitempty"` // DISPATCH_DEFERRED
+	Wait       bool         `json:"wait,omitempty"`       // DISPATCH_DEFERRED: a capacity wait, never counted toward parking
 	WaitKey    string       `json:"wait_key,omitempty"`
 	Token      string       `json:"token,omitempty"`
 	Effect     EffectID     `json:"effect,omitempty"`
@@ -169,7 +172,7 @@ type Event struct {
 // with each command row (migration 0011) so the database can verify the hash.
 func (c Command) CanonicalRequest() []byte {
 	if len(c.Request) > 0 {
-		if canon, err := CanonicalJSON(c.Request); err == nil {
+		if canon, err := canonicalJSON(c.Request, false); err == nil {
 			c.Request = canon
 		}
 	}

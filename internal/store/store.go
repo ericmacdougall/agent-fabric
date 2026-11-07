@@ -429,7 +429,8 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		if _, err := tx.Exec(ctx, `UPDATE missions SET seq = $2, intent_revision = $3, attempt_fence = $4,
 			candidate_generation = $5, execution = $6, candidate = $7, delivery = $8, terminal = $9,
 			state = $10, updated_at = now(),
-			not_before = CASE WHEN $11::bigint > 0 THEN now() + $11::bigint * interval '1 millisecond' ELSE not_before END
+			not_before = CASE WHEN $11::bigint > 0 THEN now() + $11::bigint * interval '1 millisecond'
+				WHEN $11::bigint < 0 THEN NULL ELSE not_before END
 			WHERE id = $1`,
 			string(m.ID), m.Seq, m.Version.IntentRevision, m.Version.AttemptFence, m.Version.CandidateGeneration,
 			string(m.Execution), string(m.Candidate), string(m.Delivery), string(m.Terminal), snapshot, deferredMS(events)); err != nil {
@@ -787,11 +788,15 @@ func IsUniqueViolation(err error) bool {
 // quoteIdent is used by tests to build database names safely.
 func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
-// deferredMS is the backoff of a DISPATCH_DEFERRED among events, or 0.
+// deferredMS is the backoff of a DISPATCH_DEFERRED among events, -1 when
+// the mission is (re-)admitted (the backoff is cleared), or 0 (unchanged).
 func deferredMS(events []domain.Event) int64 {
 	for _, e := range events {
-		if e.Kind == domain.EvDispatchDeferred {
+		switch e.Kind {
+		case domain.EvDispatchDeferred:
 			return e.BackoffMS
+		case domain.EvMissionAdmitted:
+			return -1
 		}
 	}
 	return 0

@@ -1984,5 +1984,83 @@
     "(strings.HasPrefix(n, \"--\") && strings.Trim(n[1:], \"0.\") == \"\")"
    ]
   ]
+ },
+ {
+  "id": "M152_wake_error_stops_loop",
+  "invariant": "loop_isolation",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestPerMissionErrorDoesNotStopTheLoop",
+  "edits": [
+   [
+    "\t\t\ts.park(domain.MissionID(x.mission), err)\n\t\t\tcontinue\n\t\t}\n\t\tif _, err := s.st.Pool().Exec(ctx, \"UPDATE jobs SET woken",
+    "\t\t\treturn 0, err\n\t\t}\n\t\tif _, err := s.st.Pool().Exec(ctx, \"UPDATE jobs SET woken"
+   ]
+  ]
+ },
+ {
+  "id": "M153_dispatch_error_stops_loop",
+  "invariant": "loop_isolation",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestDispatchErrorParksOnlyThatMission",
+  "edits": [
+   [
+    "\t\t\ts.park(id, err)\n\t\t\tcontinue\n\t\t}\n\t\tn++",
+    "\t\t\tif !errors.Is(err, domain.ErrUnsupportedEvent) {\n\t\t\t\treturn 0, err\n\t\t\t}\n\t\t\ts.park(id, err)\n\t\t\tcontinue\n\t\t}\n\t\tn++"
+   ]
+  ]
+ },
+ {
+  "id": "M154_capacity_wait_counts",
+  "invariant": "capacity_wait",
+  "pkg": "./internal/sched",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestCapacityWaitNeverParks",
+  "edits": [
+   [
+    "\t\t\t\tif cmd.CapacityWait {",
+    "\t\t\t\tif cmd.CapacityWait && cmd.Reason == \"\" {"
+   ]
+  ]
+ },
+ {
+  "id": "M155_over_capacity_not_wait",
+  "invariant": "capacity_wait",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestCapacityWaitNeverParks",
+  "edits": [
+   [
+    "errors.Is(err, domain.ErrOverCapacity))",
+    "errors.Is(err, domain.ErrStaleFence))"
+   ]
+  ]
+ },
+ {
+  "id": "M156_readmit_keeps_not_before",
+  "invariant": "backoff",
+  "pkg": "./internal/sched",
+  "file": "internal/store/store.go",
+  "expect": "TestReadmissionClearsNotBefore",
+  "edits": [
+   [
+    "\t\tcase domain.EvMissionAdmitted:\n\t\t\treturn -1",
+    "\t\tcase domain.EvMissionAdmitted:\n\t\t\treturn 0"
+   ]
+  ]
+ },
+ {
+  "id": "M157_command_hash_strict",
+  "invariant": "command_hash",
+  "pkg": "./internal/domain",
+  "file": "internal/domain/events.go",
+  "expect": "TestCommandHashIgnoresKeyOrderWithExponent",
+  "edits": [
+   [
+    "canonicalJSON(c.Request, false)",
+    "canonicalJSON(c.Request, true)"
+   ]
+  ]
  }
 ]
