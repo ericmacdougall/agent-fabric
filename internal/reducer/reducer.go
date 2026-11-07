@@ -71,10 +71,6 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if _, dup := m.Attempts[cmd.Attempt]; dup {
 			return nil, fmt.Errorf("%w: attempt %s", domain.ErrDuplicate, cmd.Attempt)
 		}
-		if m.ParkedReason != "" {
-			// A park waiting on another live attempt (Kimi rev 7, pending park).
-			return nil, fmt.Errorf("%w: parked (%s); re-admit to retry", domain.ErrInvalidTransition, m.ParkedReason)
-		}
 		if m.UnresolvedAttempts() > 0 {
 			return nil, fmt.Errorf("%w: an attempt is unresolved", domain.ErrUnknownUnresolved)
 		}
@@ -630,12 +626,11 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		if e.Kind == domain.EvAttemptReconciled && e.AttemptTo == domain.AttemptQuarantined && s.Execution.HoldsSlot() {
 			s.Execution = domain.ExecPaused
 		}
-		completePendingPark(&s)
 	case domain.EvAttemptFinished:
 		a := s.Attempts[e.Attempt]
 		a.State = e.AttemptTo
 		s.Attempts[e.Attempt] = a
-		if !e.Prelaunch && s.ParkedReason == "" {
+		if !e.Prelaunch {
 			s.PrelaunchFailures, s.CapacityWaits, s.DeferMS = 0, 0, 0 // a runner ran: the run of failures is over
 		}
 		switch e.Outcome {
@@ -657,7 +652,6 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 				s.Execution = domain.ExecAdmitted
 			}
 		}
-		completePendingPark(&s)
 	case domain.EvEvidenceRecorded:
 		if s.Evidence == nil {
 			s.Evidence = map[string]domain.Evidence{}
@@ -751,15 +745,4 @@ func Replay(id domain.MissionID, events []domain.Event) (domain.Mission, error) 
 		m = Apply(m, e)
 	}
 	return m, nil
-}
-
-// completePendingPark finishes a MISSION_PARKED that waited for other live or
-// unresolved attempts (Kimi rev 7, checked against this tree): once none is
-// left the mission is BLOCKED, whatever the last attempt's outcome, and only
-// a re-admission resets it.
-func completePendingPark(s *domain.Mission) {
-	if s.ParkedReason != "" && s.LiveAttempts() == 0 && s.UnresolvedAttempts() == 0 && s.Terminal == domain.TermNone {
-		s.Execution = domain.ExecBlocked
-		s.WaitKey = ""
-	}
 }
