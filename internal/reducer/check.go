@@ -26,6 +26,7 @@ const (
 	InvSlotHeld          = "live_or_unresolved_holds_slot"   // review H8
 	InvAcceptReviewed    = "accept_only_after_review"        // review H9
 	InvDoneLiveTested    = "done_needs_live_test"            // AC-6, R6
+	InvDoneSettled       = "done_needs_settled_effects"      // review M1
 )
 
 // Violation is one failed invariant with enough context to reproduce it.
@@ -89,7 +90,7 @@ func Check(before, after domain.Mission, cmd domain.Command, events []domain.Eve
 		if a, ok := before.Attempts[cmd.Attempt]; ok && cmd.Fence != a.Fence {
 			// A terminal mission refuses everything before any fence check;
 			// it is still refused with no change.
-			refused := errors.Is(err, domain.ErrStaleFence) || (before.Terminal != domain.TermNone && err != nil)
+			refused := errors.Is(err, domain.ErrStaleFence) || (before.Terminal != domain.TermNone && errors.Is(err, domain.ErrInvalidTransition))
 			if len(events) != 0 || !sameState(before, after) || !refused {
 				return Violation{InvStaleFence, fmt.Sprintf("fence %d against attempt fence %d was not refused as stale (err=%v, events=%d)", cmd.Fence, a.Fence, err, len(events))}
 			}
@@ -164,6 +165,10 @@ func Check(before, after domain.Mission, cmd domain.Command, events []domain.Eve
 		if before.Delivery != domain.DelivLiveVerified || lt == nil || acc == nil || before.DeliveredGeneration == nil ||
 			lt.Head != acc.Head || lt.Generation != before.Version.CandidateGeneration || *before.DeliveredGeneration != lt.Generation {
 			return Violation{InvDoneLiveTested, fmt.Sprintf("done from delivery %s, live test %+v, accepted %+v", before.Delivery, lt, acc)}
+		}
+		// I8b: and with every effect settled.
+		if n := before.UnsettledEffects(); n > 0 {
+			return Violation{InvDoneSettled, fmt.Sprintf("done with %d unsettled effects", n)}
 		}
 	}
 

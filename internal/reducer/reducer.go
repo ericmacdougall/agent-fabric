@@ -487,6 +487,9 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if m.UnresolvedAttempts() > 0 {
 			return nil, fmt.Errorf("%w: done while an attempt is unresolved", domain.ErrUnknownUnresolved)
 		}
+		if n := m.UnsettledEffects(); n > 0 {
+			return nil, fmt.Errorf("%w: done while %d effect(s) are unsettled; settle or reconcile them first", domain.ErrUnknownUnresolved, n)
+		}
 		e := ev(domain.EvMissionSucceeded)
 		e.Generation = lt.Generation
 		e.Head = lt.Head
@@ -581,6 +584,13 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		s.Version.IntentRevision = e.Revision
 	case domain.EvAcceptanceRevoked:
 		s.Accepted = nil
+		// Review M2: the delivery and live test rested on the revoked
+		// acceptance; a re-acceptance needs its own.
+		s.LiveTest = nil
+		s.DeliveredGeneration = nil
+		if s.Delivery == domain.DelivDelivered || s.Delivery == domain.DelivLiveVerified {
+			s.Delivery = domain.DelivNotReady
+		}
 		if s.Candidate == domain.CandAccepted {
 			s.Candidate = domain.CandUnverified
 		}

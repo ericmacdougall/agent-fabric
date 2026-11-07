@@ -461,7 +461,9 @@ func TestEventSeqGapFreeAndRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Delivery != domain.DelivDelivered || m.Accepted != nil || m.Version.IntentRevision != 1 {
+	// The revised intent revoked the acceptance and, since review M2 on
+	// fc8e035, the delivery that rested on it.
+	if m.Delivery != domain.DelivNotReady || m.DeliveredGeneration != nil || m.Accepted != nil || m.Version.IntentRevision != 1 {
 		t.Fatalf("rebuilt state: delivery=%s accepted=%v version=%+v", m.Delivery, m.Accepted, m.Version)
 	}
 	if _, err := st.Rebuild(ctx, "m_2"); err != nil {

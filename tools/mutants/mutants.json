@@ -2728,5 +2728,31 @@
     "\t\tif cmd.Host == \"\" || cmd.Receipt == \"\" {"
    ]
   ]
+ },
+ {
+  "id": "M208_done_ignores_effects",
+  "invariant": "done",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestDoneRefusedWhileEffectUnsettled",
+  "edits": [
+   [
+    "\t\tif n := m.UnsettledEffects(); n > 0 {",
+    "\t\tif n := m.UnsettledEffects(); n > 99 {"
+   ]
+  ]
+ },
+ {
+  "id": "M209_revoke_keeps_live_test",
+  "invariant": "done",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestRevisedIntentClearsLiveTest",
+  "edits": [
+   [
+    "\t\ts.Accepted = nil\n\t\t// Review M2: the delivery and live test rested on the revoked\n\t\t// acceptance; a re-acceptance needs its own.\n\t\ts.LiveTest = nil\n\t\ts.DeliveredGeneration = nil\n",
+    "\t\ts.Accepted = nil\n"
+   ]
+  ]
  }
 ]

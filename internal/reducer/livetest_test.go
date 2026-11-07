@@ -102,3 +102,45 @@ func TestDoneRefusedWhileAttemptLive(t *testing.T) {
 		t.Fatalf("done with a live attempt: %v, want ErrAttemptLive", err)
 	}
 }
+
+// Review M1 on fc8e035: done with an unsettled effect would strand it, since
+// a terminal mission refuses the RESOLVE_EFFECT that settles it.
+func TestDoneRefusedWhileEffectUnsettled(t *testing.T) {
+	f, id, a, fence := startedMission(t)
+	ev := mustStep(t, f, domain.Command{Kind: domain.CmdSubmitEffect, Mission: id, Attempt: a, Fence: fence, EffectKind: "ticket_comment",
+		Request: []byte(`{"ticket": 14922, "body": "x"}`)})
+	eid := ev[0].Effect
+	mustStep(t, f, domain.Command{Kind: domain.CmdEffectUnknown, Mission: id, Effect: eid, Submission: 1})
+	reviewed(t, f, id, a, fence, "rcpt")
+	mustStep(t, f, domain.Command{Kind: domain.CmdAccept, Mission: id, Attempt: a})
+	gen := f.missions[id].Version.CandidateGeneration
+	mustStep(t, f, domain.Command{Kind: domain.CmdDeliver, Mission: id, Attempt: a, Generation: gen})
+	mustStep(t, f, liveTest(id, gen, "sha_a"))
+	done := domain.Command{Kind: domain.CmdCompleteMission, Mission: id}
+	if _, err := f.step(t, done); !errors.Is(err, domain.ErrUnknownUnresolved) {
+		t.Fatalf("done with an UNKNOWN effect: %v, want ErrUnknownUnresolved", err)
+	}
+	// Control: once the effect is settled, done goes through.
+	mustStep(t, f, domain.Command{Kind: domain.CmdResolveEffect, Mission: id, Effect: eid, Submission: 1, Result: "CONFIRMED"})
+	mustStep(t, f, done)
+}
+
+// Review M2 on fc8e035: a revised intent revokes the acceptance, and with it
+// the delivery and live test it rested on; a re-acceptance at the same head
+// needs a new delivery and a new live test.
+func TestRevisedIntentClearsLiveTest(t *testing.T) {
+	f, id, gen := deliveredMission(t)
+	mustStep(t, f, liveTest(id, gen, "sha_a"))
+	mustStep(t, f, domain.Command{Kind: domain.CmdReviseIntent, Mission: id, Reason: "new scope"})
+	m := f.missions[id]
+	if m.LiveTest != nil || m.Delivery == domain.DelivLiveVerified || m.Delivery == domain.DelivDelivered || m.DeliveredGeneration != nil {
+		t.Fatalf("after a revised intent: live test %+v, delivery %s, delivered %v", m.LiveTest, m.Delivery, m.DeliveredGeneration)
+	}
+	ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "writer"})
+	mustStep(t, f, domain.Command{Kind: domain.CmdAckStart, Mission: id, Attempt: "r_2", Fence: ev[0].Fence})
+	reviewed(t, f, id, "r_2", ev[0].Fence, "rcpt_2")
+	mustStep(t, f, domain.Command{Kind: domain.CmdAccept, Mission: id, Attempt: "r_2"})
+	if _, err := f.step(t, domain.Command{Kind: domain.CmdCompleteMission, Mission: id}); !errors.Is(err, domain.ErrLiveTestMissing) {
+		t.Fatalf("done after re-acceptance on the old live test: %v, want ErrLiveTestMissing", err)
+	}
+}

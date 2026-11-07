@@ -275,6 +275,21 @@ func (m Mission) Occurrences(base string) int {
 }
 
 // UnresolvedAttempts counts attempts whose outcome is not yet known.
+// UnsettledEffects counts effects whose outcome is not settled: dispatched,
+// UNKNOWN or quarantined (review M1: a terminal mission could never settle
+// them).
+func (m Mission) UnsettledEffects() int {
+	n := 0
+	for _, f := range m.Effects {
+		switch f.State {
+		case EffectConfirmed, EffectFailedDefinite, EffectNotApplied:
+		default:
+			n++
+		}
+	}
+	return n
+}
+
 func (m Mission) UnresolvedAttempts() int {
 	n := 0
 	for _, a := range m.Attempts {
