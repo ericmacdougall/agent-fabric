@@ -3,7 +3,7 @@
 Scope: agent-fabric at commit `bc5a6d3`. This is a model of what the system defends, against
 whom, and where the defence is. Every mitigation points to a gate in
 [review-gates.md](review-gates.md) (R1 to R25, D1 to D8) and every open hole to a gap there
-(G-1 to G-24). A mitigation with no gate reference is not claimed.
+(G-1 to G-30). A mitigation with no gate reference is not claimed.
 
 The model is STRIDE-shaped (Spoofing, Tampering, Repudiation, Information disclosure,
 Denial of service, Elevation of privilege). It does not replace the gate document; it
@@ -37,7 +37,7 @@ shows coverage and the blind spots.
 
 ## Trust boundaries
 
-1. **Worker to Fabric state.** A worker has at most the runner database role. Boundary controls: R4 fences, R18 roles and triggers, R14g, R17.
+1. **Worker to Fabric state.** A worker has at most the runner database role. Boundary controls: R4 fences, R18 roles and triggers, R14g, R17. Integrity is enforced by these; availability is open (G-25: a runner session can pin locks, lock tables and lift its own timeouts).
 2. **Model to tools.** The model's output is never executed directly; tool calls pass the allow-list and the oracle (R23).
 3. **Fabric to the outside world.** Only the effect broker writes outward (R14); the worker's own network access is limited only on Linux by TCP port rules (R17, G-4).
 4. **Operator to Fabric.** Attribution by string, not authentication (R20, G-5).

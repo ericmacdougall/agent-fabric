@@ -28,7 +28,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 No `ahead` verdicts.
 
 ## Upgrades, ranked
-| rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
+| rank | upgrade | value | effort | gate or risk addressed | ticket |
 |---|---|---|---|---|---|
 | 1 | Pass the fence in executor requests where the remote has a precondition field (push: expected head already; ticket system: a version or etag) and record a remote rejection as a stale-fence observation | Closes the in-flight zombie window for remotes that support compare-and-set | M | Stale write after lease loss | goodqa#15134 |
 | 2 | Kill or freeze the sandbox when `ExpireLeases` fires, with a test that the process is gone before the attempt can be relaunched | Limits unfenced non-broker writes | M | Zombie worker | TBD |

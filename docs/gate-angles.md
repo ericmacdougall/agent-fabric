@@ -1,7 +1,7 @@
 # Gate angles: threats a Postgres-backed agent control plane should gate, and where Fabric stands
 Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 
-This note lists gate angles beyond the ones Fabric already implements (see review-gates.md, R1..R25). For each angle it states the threat, who addresses it today, what Fabric does at bc5a6d3, a design for a Postgres-backed control plane, and a priority. Priorities weigh likelihood times impact for Fabric as it is now: a single-host, shadow-stage system whose workers are coding agents that edit repositories, run shell commands and request effects (ticket comments, publish) through a broker. Source tags: H = primary page read, M = primary abstract or partial read, L = secondary or search summary. L-tagged claims are marked "unverified" and no number from them is relied on. Fabric claims cite file:line at bc5a6d3; where no code was found the text says "not found". Nothing here is a ticket yet.
+This note lists gate angles beyond the ones Fabric already implements (see review-gates.md, R1..R25). For each angle it states the threat, who addresses it today, what Fabric does at bc5a6d3, a design for a Postgres-backed control plane, and a priority. Priorities weigh likelihood times impact for Fabric as it is now: a single-host, shadow-stage system whose workers are coding agents that edit repositories, run shell commands and request effects (ticket comments, publish) through a broker. Source tags: H = primary page read, M = primary abstract or partial read, L = secondary or search summary. L-tagged claims are marked "unverified" and no number from them is relied on. Fabric claims cite file:line at bc5a6d3; where no code was found the text says "not found". Tickets exist only where the Ticket map at the end says so.
 
 ## Summary
 
@@ -60,7 +60,7 @@ Reference frameworks: OWASP Top 10 for LLM Applications 2025 [genai.owasp.org/ll
 
 **Priority.** P0 for the Rule-of-Two profile and a rule on third-party lineage for outbound kinds: workers read untrusted repository and web text and can request publish, and the rule is deterministic. P2 for fine-grained flow labels.
 
-**Ticket:** TBD
+**Ticket:** goodqa#15144
 
 ## 2. Independent verifier or judge on effects
 **Threat.** The agent's claim of success or safety is wrong or inflated. Anthropic lists "marking features done without verification" as a long-running-harness failure ([post](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents), accessed 2026-11-07, H). A reported Replit database deletion is from a secondary source and unverified.
@@ -153,7 +153,7 @@ Reference frameworks: OWASP Top 10 for LLM Applications 2025 [genai.owasp.org/ll
 
 **Priority.** P0: the month cap is the only fleet-wide stop, a retry loop could consume it within hours, and the change is small.
 
-**Ticket:** TBD
+**Ticket:** goodqa#15141
 
 ## 7. Signed provenance and attestation
 **Threat.** A reader cannot tell which model, prompt and tools produced a commit. The Amazon Q extension incident (an overbroad token let an attacker push a data-wiping prompt into release 1.84.0) shows the supply-chain side ([bulletin](https://aws.amazon.com/security/security-bulletins/AWS-2025-015/), accessed 2026-11-07, H).
@@ -218,7 +218,7 @@ Reference frameworks: OWASP Top 10 for LLM Applications 2025 [genai.owasp.org/ll
 
 **Priority.** P0 for canaries plus an egress allowlist (cheap, catches real exfiltration); P1 for payload scanning.
 
-**Ticket:** TBD
+**Ticket:** goodqa#15142
 
 ## 11. Dependency and supply-chain gates on agent-installed packages
 **Threat.** Models invent package names that attackers can register. Spracklen et al. tested 16 models over 576,000 samples: hallucinated packages averaged at least 5.2% for commercial and 21.7% for open-source models, with 205,474 unique invented names ([arXiv 2406.10279](https://arxiv.org/abs/2406.10279), accessed 2026-11-07, M, abstract). Repeatability figures from news summaries are unverified.
@@ -344,7 +344,7 @@ Reference frameworks: OWASP Top 10 for LLM Applications 2025 [genai.owasp.org/ll
 
 ## Additions and corrections after the first independent review
 
-Added angles (each is a gate type the field lists and Fabric does not have; no design is claimed yet; ticket: TBD):
+Added angles (each is a gate type the field lists and Fabric does not have; no design is claimed yet; priorities are in brackets; not yet ticketed except where a number is given):
 
 - **Poisoned repository or tool content as a data-poisoning route** (OWASP LLM04:2025): content the agent reads can steer later missions. Related to the taint-tracking angle; no control today.
 - **Worker artifacts run later by trusted tooling** (OWASP LLM05:2025 improper output handling): Makefile and package scripts, `.envrc`, editor and CI configs written by a worker are executed by an operator or CI job. No gate inspects them.
@@ -368,6 +368,15 @@ Corrections to statements above, checked against the code at bc5a6d3:
 
 ## Ticket map
 
-Tickets filed for the high-priority missing gates (priority P0 in the table) and the first-ranked item of each component note:
+Tickets filed for four of the angles (prompt-injection taint tracking, cross-mission breakers, secret egress DLP, short-lived credentials) and the first-ranked item of each component note. The other P0 angles in the table are not yet ticketed:
 prompt-injection and taint tracking goodqa#15144; cross-mission rate and spend breakers goodqa#15141; secret egress DLP goodqa#15142;
 per-mission short-lived credentials goodqa#15143. Other angles are `Ticket: TBD` until picked up; the per-component upgrade tickets are listed in each note.
+
+Further angles added after the second review (none is mitigated; priorities are in brackets):
+
+- **Disk and inode exhaustion** of the run directory, worktree and `stream.jsonl`: cgroups bound memory, CPU and tasks, not disk [P1].
+- **Database storage exhaustion and ask-queue flooding by runner-role INSERTs**: the runner's INSERT guard checks shape and state, with no per-mission count or size limit (code reading only, not run); extends goodqa#15125 [P1].
+- **Secrets and personal data at rest**: prompts, transcripts and tool output are stored in the database and so appear in `pg_dump` backups; no retention or deletion policy is stated [P1].
+- **Integrity of the `claude` CLI binary** the `claude -p` path runs (path resolution, version pinning) [P2].
+- **Prior-art bracket for the earlier additions:** poisoned repository content [P1], worker artifacts run by trusted tooling [P0, because a worker's output is executed by an operator or CI], prompt and transcript leakage [P2], sandbagging [P2], inter-attempt message poisoning [P2], hook-script integrity [P1], cost harvesting [P2], disclosure policy [P2], source-track integrity [P2].
+- **Out of scope on purpose:** provider and third-party risk (NIST GOVERN), OWASP LLM08 vector and embedding weaknesses (Fabric has no retrieval store), and LLM09 misinformation, which maps to the independent-verifier angle and to review-gates.md G-15.

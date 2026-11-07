@@ -35,7 +35,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 No `ahead` verdicts: for each Fabric strength the cited peer pages are silent on the point, so it is `parity (peer not documented)` at most.
 
 ## Upgrades, ranked
-| rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
+| rank | upgrade | value | effort | gate or risk addressed | ticket |
 |---|---|---|---|---|---|
 | 1 | Effect-class policy table (kind, subject pattern) deciding approval, so approval is not a caller option | Caller cannot skip approval for high-impact classes | S | OWASP LLM06 human approval | goodqa#15135 |
 | 2 | Approver must differ from requester and mission creator, enforced by trigger | Two-party control | S | Self-approval | TBD |

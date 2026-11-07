@@ -31,7 +31,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 No `ahead` verdicts: each strength Fabric has is also present in at least one peer's documentation or the peer pages are silent.
 
 ## Upgrades, ranked
-| rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
+| rank | upgrade | value | effort | gate or risk addressed | ticket |
 |---|---|---|---|---|---|
 | 1 | Event schema version field, upcasters for old kinds, and a minimum-reader-version recorded in the database so an older binary refuses to start rather than refusing per command | Safe rolling upgrade and rollback | M | Mixed-version writes; parked missions after rollback | goodqa#15133 |
 | 2 | Per-mission event count and byte alarms, plus a checkpoint event with `Digest` that replay can start from | Bounded replay cost, early warning | M | Unbounded log growth | TBD |

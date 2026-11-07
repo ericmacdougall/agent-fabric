@@ -18,7 +18,7 @@ gate types Fabric lacks are in [gate-angles.md](../gate-angles.md).
 | Sandboxing per OS | [sandboxing.md](sandboxing.md) | No egress policy; Linux same-UID gap; no Windows |
 | Credential handling | [credentials.md](credentials.md) | Runner DSN in the worker environment; no per-run credential expiry |
 | Native agent loop | [native-loop.md](native-loop.md) | No verifier before success; context management not found |
-| Cost control | [cost-control.md](cost-control.md) | Not reconciled with the provider's bill |
+| Cost control | [cost-control.md](cost-control.md) | Caps bypassable under goodqa#15123 and goodqa#15124; not reconciled with the provider's bill |
 | Observability and audit | [observability-audit.md](observability-audit.md) | No hash chain or export; no tracing |
 | Operator UX | [operator-ux.md](operator-ux.md) | Operator identity is self-asserted |
 | Multi-machine scheduling | [multi-machine.md](multi-machine.md) | Single host |

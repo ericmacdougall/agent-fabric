@@ -30,7 +30,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 | Per-turn cost and request ids | Persisted per turn (`loop.go:373-380`) | parity (peer not documented) | Useful for audit; no export format. |
 
 ## Upgrades, ranked
-| rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
+| rank | upgrade | value | effort | gate or risk addressed | ticket |
 |---|---|---|---|---|---|
 | 1 | Hash-chain audit rows (previous hash, row hash) and publish a periodic signed checkpoint to a separate store | high | med | owner or superuser can rewrite history undetected | goodqa#15139 |
 | 2 | Dedicated audit-writer role; revoke DML on audit tables from `app`; event trigger or alert on `ALTER TABLE ... DISABLE TRIGGER` | high | low-med | trigger-bypass by owner | TBD |

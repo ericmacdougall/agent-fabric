@@ -36,7 +36,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 | Documented weak settings | this document only | behind | Claude Code publishes a list; Fabric has none yet. |
 
 ## Upgrades, ranked
-| rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
+| rank | upgrade | value | effort | gate or risk addressed | ticket |
 |---|---|---|---|---|---|
 | 1 | Egress proxy with default-deny domain allowlist and metadata-address block; macOS Seatbelt network rule pointing at a loopback proxy | high | high | exfiltration of any readable secret | goodqa#15137 |
 | 2 | Record a dedicated-account run with all 10 controls passing, and make it the gate for writer lanes | high | low | containment false today | TBD |

@@ -36,7 +36,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 | Tool-result size handling | Truncated at 64 KiB with a fixed marker (`loop.go:493-495`); read/grep/shell have separate output caps (`native.go:216-221`) | parity | No steering hint to narrow the query. |
 
 ## Upgrades, ranked
-| rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
+| rank | upgrade | value | effort | gate or risk addressed | ticket |
 |---|---|---|---|---|---|
 | 1 | Stuck detector and per-tool breaker over stored turns (name, canonical input, result digest), thresholds per task, distinct terminal reason | med-high | low | spend burned in repeating loops | goodqa#15140 |
 | 2 | Explicit cache breakpoints plus per-turn cache-hit metric and a test that fails if the tool array serialization changes | high | low-med | cost per long attempt | TBD |
