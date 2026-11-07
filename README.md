@@ -242,6 +242,13 @@ Go 1.22, `pgx/v5` and `x/sys` only.
 5. Restart, then smoke test: `fab version` and `fab metrics` (exit 0, and
    `fabric_schema_level` is the newest migration).
 
+`fab daemon` (fabd) is deliberately not installed as a service on a Linux
+live host. It stays that way until the worker sandbox passes re-review (see
+Known limits). Live checks run a bounded daemon by hand against the
+recorded fake worker and stop it afterwards. A mission whose attempt
+was quarantined during such a check keeps its slot until an operator
+checks the host and runs `fab release` or `fab unpause`.
+
 Rollback: stop everything using the database, reinstall the previous
 binary, and restore the dump, either into the same database with
 `pg_restore --clean --if-exists -d <db> <dump>` or into a fresh database
