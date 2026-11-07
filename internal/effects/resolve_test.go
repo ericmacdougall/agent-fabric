@@ -44,8 +44,16 @@ func TestResolveQuarantinedEffect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Pool().Exec(ctx, "UPDATE effects SET state = 'QUARANTINED' WHERE id = $1", e.ID); err != nil {
-		t.Fatal(err)
+	// Fixture: the broker's path to QUARANTINED (a readback conflict).
+	for _, q := range []string{
+		"UPDATE effects SET state = 'DISPATCHED', dispatches = dispatches + 1 WHERE id = $1",
+		"UPDATE effects SET state = 'UNKNOWN' WHERE id = $1",
+		"UPDATE effects SET state = 'RECONCILING' WHERE id = $1",
+		"UPDATE effects SET state = 'QUARANTINED' WHERE id = $1",
+	} {
+		if _, err := st.Pool().Exec(ctx, q, e.ID); err != nil {
+			t.Fatalf("fixture %q: %v", q, err)
+		}
 	}
 	if _, err := rb.ResolveQuarantined(ctx, e.ID, ResolvedNotApplied, "read back", "rcpt_rb", "runner"); code(err) != "42501" {
 		t.Errorf("runner resolved a quarantined effect: %v, want 42501", err)
@@ -137,9 +145,9 @@ func TestAppRoleCannotBypassEffectOutcomes(t *testing.T) {
 		if state != "INTENT" {
 			// Fixture setup as the owner, through the states the broker uses.
 			for _, s := range map[string][]string{
-				"QUARANTINED":     {"DISPATCHED", "UNKNOWN", "QUARANTINED"},
+				"QUARANTINED":     {"DISPATCHED", "UNKNOWN", "RECONCILING", "QUARANTINED"},
 				"CONFIRMED":       {"DISPATCHED", "CONFIRMED"},
-				"NOT_APPLIED":     {"DISPATCHED", "UNKNOWN", "NOT_APPLIED"},
+				"NOT_APPLIED":     {"DISPATCHED", "UNKNOWN", "RECONCILING", "NOT_APPLIED"},
 				"FAILED_DEFINITE": {"DISPATCHED", "FAILED_DEFINITE"},
 			}[state] {
 				if _, err := st.Pool().Exec(ctx, "UPDATE effects SET state = $2, dispatches = dispatches + CASE WHEN $2 = 'DISPATCHED' THEN 1 ELSE 0 END WHERE id = $1", e.ID, s); err != nil {
@@ -407,9 +415,9 @@ func TestEffectColumnsImmutable(t *testing.T) {
 			t.Errorf("app role: %s accepted", c.name)
 		}
 	}
-	// Allowed: diagnostics on any row.
-	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET last_error = 'note', updated_at = now() WHERE id = $1", ok.ID); err != nil {
-		t.Errorf("last_error note refused: %v", err)
+	// Allowed: a diagnostic note while the outcome is open.
+	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET last_error = 'note', updated_at = now() WHERE id = $1", unk.ID); err != nil {
+		t.Errorf("last_error note on an open effect refused: %v", err)
 	}
 }
 
@@ -479,5 +487,102 @@ func TestFenceBelongsToMission(t *testing.T) {
 	}
 	if fake.Count() != 0 {
 		t.Fatalf("remote writes: %d", fake.Count())
+	}
+}
+
+// Review S1-S6 on 4ae0565: state moves are an allow-list too, mirroring the
+// broker, so a pair it does not name is refused for every role.
+func TestEffectTransitionsAllowListed(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	runnerBroker(t, ctx, st)
+	ab := appBroker(t, ctx, st)
+	fake.LoseAfter = true
+	unk, _ := b.Submit(ctx, fake, uspec("s1u"))
+	if unk, _ = b.Dispatch(ctx, fake, unk.ID); unk.State != Unknown {
+		t.Fatalf("setup unknown: %s", unk.State)
+	}
+	fake.LoseAfter = false
+	in, _ := b.Submit(ctx, fake, uspec("s3i"))
+	ap := uspec("s2a")
+	ap.NeedsApproval = true
+	apr, _ := b.Submit(ctx, fake, ap)
+	ok, _ := b.Submit(ctx, fake, uspec("s6c"))
+	if ok, _ = b.Dispatch(ctx, fake, ok.ID); ok.State != Confirmed {
+		t.Fatalf("setup confirmed: %s", ok.State)
+	}
+	// An approved effect that failed definitely must retry to APPROVED.
+	apf := uspec("s2f")
+	apf.NeedsApproval = true
+	af, _ := b.Submit(ctx, fake, apf)
+	if err := b.Approve(ctx, af.ID, af.RequestSHA, "eric"); err != nil {
+		t.Fatal(err)
+	}
+	fake.Reject = true
+	if af, _ = b.Dispatch(ctx, fake, af.ID); af.State != FailedDefinite {
+		t.Fatalf("setup approved-failed: %s", af.State)
+	}
+	fake.Reject = false
+	for _, c := range []struct{ name, to, id string }{
+		{"S1 unknown re-armed", "INTENT", unk.ID},
+		{"unknown settled without readback", "CONFIRMED", unk.ID},
+		{"unknown not-applied without readback", "NOT_APPLIED", unk.ID},
+		{"S2 approval skipped", "INTENT", apr.ID},
+		{"S3 never-sent confirmed", "CONFIRMED", in.ID},
+		{"S5 never-sent quarantined", "QUARANTINED", in.ID},
+		{"approved retry dropped its approval", "INTENT", af.ID},
+	} {
+		if _, err := ab.pool.Exec(ctx, "UPDATE effects SET state = $2 WHERE id = $1", c.id, c.to); err == nil {
+			t.Errorf("app role: %s (-> %s) accepted", c.name, c.to)
+		}
+	}
+	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET last_error = 'rewritten' WHERE id = $1", ok.ID); err == nil {
+		t.Error("S6: last_error rewritten on a settled effect")
+	}
+	// The broker's own moves still pass: readback, retry to APPROVED.
+	if got, err := ab.Reconcile(ctx, fake, unk.ID); err != nil || got.State != Confirmed {
+		t.Errorf("reconcile of the unknown effect: %+v %v", got, err)
+	}
+	if got, err := ab.Retry(ctx, af.ID); err != nil || got.State != Approved {
+		t.Errorf("retry of an approved failure: %+v %v", got, err)
+	}
+	// S4: an in-flight effect cannot be re-armed either.
+	tx, err := ab.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck
+	if _, err := tx.Exec(ctx, "UPDATE effects SET state = 'DISPATCHED', dispatches = dispatches + 1 WHERE id = $1", in.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE effects SET state = 'INTENT' WHERE id = $1", in.ID); err == nil {
+		t.Error("S4: DISPATCHED re-armed to INTENT")
+	}
+}
+
+// Review S2: Dispatch itself refuses an effect that carries an approval but
+// is not APPROVED (the second layer, exercised with the guard off).
+func TestDispatchRefusesUnapprovedIntentWithApproval(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	e, _ := b.Submit(ctx, fake, uspec("s2g"))
+	tx, err := st.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"ALTER TABLE effects DISABLE TRIGGER effects_zz_outcome_guard",
+		"UPDATE effects SET approval_sha = request_sha, approved_by = 'x' WHERE id = '" + e.ID + "'",
+		"ALTER TABLE effects ENABLE TRIGGER effects_zz_outcome_guard"} {
+		if _, err := tx.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Dispatch(ctx, fake, e.ID); !errors.Is(err, ErrApprovalRequired) {
+		t.Fatalf("dispatch of an INTENT carrying an approval: %v, want ErrApprovalRequired", err)
+	}
+	if fake.Count() != 0 {
+		t.Fatalf("remote writes %d", fake.Count())
 	}
 }

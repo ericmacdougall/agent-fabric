@@ -283,6 +283,11 @@ func (b *Broker) Dispatch(ctx context.Context, exec Executor, id string) (Effect
 	}
 	switch e.State {
 	case Intent:
+		if e.ApprovalSHA != "" {
+			// Review S2: an effect that carries an approval dispatches only
+			// as APPROVED (the 0020 guard holds the state machine).
+			return Effect{}, fmt.Errorf("%w: effect %s carries an approval but is INTENT", ErrApprovalRequired, id)
+		}
 	case Approved:
 		if e.ApprovalSHA != e.RequestSHA {
 			return Effect{}, fmt.Errorf("%w: effect %s", ErrApprovalMismatch, id)

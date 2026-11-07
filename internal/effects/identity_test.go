@@ -109,6 +109,7 @@ func TestStaleReceiptDoesNotSettleLaterDispatch(t *testing.T) {
 		// The row is recovered, read back NOT_APPLIED, retried and dispatched again.
 		for _, q := range []string{
 			"UPDATE effects SET state = 'UNKNOWN' WHERE id = $1",
+			"UPDATE effects SET state = 'RECONCILING' WHERE id = $1",
 			"UPDATE effects SET state = 'NOT_APPLIED' WHERE id = $1",
 			"UPDATE effects SET state = 'INTENT' WHERE id = $1",
 			"UPDATE effects SET state = 'DISPATCHED', dispatches = dispatches + 1 WHERE id = $1",

@@ -71,15 +71,15 @@ func TestDoneCountsBrokerEffects(t *testing.T) {
 	// owner through the broker's own steps (0020 guards the rest).
 	path := map[string][]string{
 		"INTENT":            {},
-		"APPROVAL_REQUIRED": {"APPROVAL_REQUIRED"},
+		"APPROVAL_REQUIRED": {},
 		"APPROVED":          {"APPROVED"},
 		"DISPATCHED":        {"DISPATCHED"},
 		"UNKNOWN":           {"DISPATCHED", "UNKNOWN"},
 		"RECONCILING":       {"DISPATCHED", "UNKNOWN", "RECONCILING"},
-		"QUARANTINED":       {"DISPATCHED", "UNKNOWN", "QUARANTINED"},
+		"QUARANTINED":       {"DISPATCHED", "UNKNOWN", "RECONCILING", "QUARANTINED"},
 		"CONFIRMED":         {"DISPATCHED", "CONFIRMED"},
 		"FAILED_DEFINITE":   {"DISPATCHED", "FAILED_DEFINITE"},
-		"NOT_APPLIED":       {"DISPATCHED", "UNKNOWN", "NOT_APPLIED"},
+		"NOT_APPLIED":       {"DISPATCHED", "UNKNOWN", "RECONCILING", "NOT_APPLIED"},
 	}
 	run := func(states ...string) error {
 		t.Helper()
@@ -89,12 +89,18 @@ func TestDoneCountsBrokerEffects(t *testing.T) {
 		deployLT(t, st, ctx, func(f int64) {
 			for i, state := range states {
 				id := fmt.Sprintf("e_n1_%d", i)
+				born := "INTENT"
+				if state == "APPROVAL_REQUIRED" || state == "APPROVED" {
+					born = "APPROVAL_REQUIRED"
+				}
 				if _, err := st.pool.Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state)
-					VALUES ($1, 'm_lt', 'r_lt_1', $2, 'ticket_comment', $1, $1, '{}', 'sha', 'INTENT')`, id, f); err != nil {
+					VALUES ($1, 'm_lt', 'r_lt_1', $2, 'ticket_comment', $1, $1, '{}', 'sha', $3)`, id, f, born); err != nil {
 					t.Fatal(err)
 				}
 				for _, s := range path[state] {
-					if _, err := st.pool.Exec(ctx, "UPDATE effects SET state = $2, dispatches = dispatches + CASE WHEN $2 = 'DISPATCHED' THEN 1 ELSE 0 END WHERE id = $1", id, s); err != nil {
+					if _, err := st.pool.Exec(ctx, `UPDATE effects SET state = $2, dispatches = dispatches + CASE WHEN $2 = 'DISPATCHED' THEN 1 ELSE 0 END,
+						approval_sha = CASE WHEN $2 = 'APPROVED' THEN request_sha ELSE approval_sha END,
+						approved_by = CASE WHEN $2 = 'APPROVED' THEN 'eric' ELSE approved_by END WHERE id = $1`, id, s); err != nil {
 						t.Fatalf("fixture %s -> %s: %v", id, s, err)
 					}
 				}

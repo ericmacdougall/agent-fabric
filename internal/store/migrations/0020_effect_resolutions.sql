@@ -48,16 +48,16 @@ CREATE TRIGGER effect_resolutions_append_only BEFORE UPDATE OR DELETE ON effect_
 
 -- Outcome guard for every role (review O1 on 717bb09). The broker's own
 -- moves stay open; what it settled stays settled:
---   - no effect is born resolved;
+--   - an effect is born a new intent (INTENT or APPROVAL_REQUIRED);
+--   - columns outside an allowlist never change, and state moves follow an
+--     allow-list of the broker's own steps;
 --   - QUARANTINED leaves only to RESOLVED_* with its audit row;
 --   - INTENT, APPROVAL_REQUIRED or APPROVED becomes NOT_APPLIED only by an
 --     audited abandon of a never-dispatched effect;
---   - CONFIRMED and RESOLVED_* never change state;
---   - FAILED_DEFINITE and NOT_APPLIED change only by Retry (to INTENT or
---     APPROVED);
+--   - Retry keeps an approval: INTENT without one, APPROVED with one;
 --   - effects are never deleted.
--- Known limit: the app role still records readback outcomes (UNKNOWN or
--- DISPATCHED to a settled state) by a plain write; the reconciler is the app.
+-- Known limit: the app role is the reconciler, so RECONCILING to a settled
+-- state records whatever readback the app reports.
 CREATE FUNCTION fabric_effects_outcome_guard() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
@@ -99,16 +99,37 @@ BEGIN
         RAISE EXCEPTION 'effect % receipt is settled (%)', NEW.id, OLD.state USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.state IS NOT DISTINCT FROM OLD.state THEN
-        RETURN NEW;
-    END IF;
-    IF NEW.state IN ('RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN
-        IF OLD.state <> 'QUARANTINED' OR NOT EXISTS (
-            SELECT 1 FROM public.effect_resolutions WHERE effect_id = NEW.id AND to_state = NEW.state
-                AND xact = txid_current()) THEN
-            RAISE EXCEPTION 'effect % may enter % only from QUARANTINED with an audited resolution', NEW.id, NEW.state
-                USING ERRCODE = 'check_violation';
+        -- Review S6: the diagnostic note is frozen with the outcome.
+        IF NEW.last_error IS DISTINCT FROM OLD.last_error
+           AND OLD.state IN ('CONFIRMED', 'FAILED_DEFINITE', 'NOT_APPLIED', 'QUARANTINED', 'RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN
+            RAISE EXCEPTION 'effect % is % and its record is frozen', NEW.id, OLD.state USING ERRCODE = 'check_violation';
         END IF;
         RETURN NEW;
+    END IF;
+    -- Review S1-S5 on 4ae0565: state moves are an allow-list mirroring the
+    -- broker (Submit, Approve, Dispatch, settle, Reconcile, Retry, resolve,
+    -- abandon). Anything it does not name is refused for every role.
+    IF NOT (CASE OLD.state
+        WHEN 'INTENT'            THEN NEW.state IN ('DISPATCHED', 'FAILED_DEFINITE', 'NOT_APPLIED')
+        WHEN 'APPROVAL_REQUIRED' THEN NEW.state IN ('APPROVED', 'NOT_APPLIED')
+        WHEN 'APPROVED'          THEN NEW.state IN ('DISPATCHED', 'FAILED_DEFINITE', 'NOT_APPLIED')
+        WHEN 'DISPATCHED'        THEN NEW.state IN ('CONFIRMED', 'FAILED_DEFINITE', 'UNKNOWN')
+        WHEN 'UNKNOWN'           THEN NEW.state = 'RECONCILING'
+        WHEN 'RECONCILING'       THEN NEW.state IN ('CONFIRMED', 'NOT_APPLIED', 'QUARANTINED', 'UNKNOWN')
+        WHEN 'FAILED_DEFINITE'   THEN NEW.state = (CASE WHEN OLD.approval_sha IS NULL THEN 'INTENT' ELSE 'APPROVED' END)
+        WHEN 'NOT_APPLIED'       THEN NEW.state = (CASE WHEN OLD.approval_sha IS NULL THEN 'INTENT' ELSE 'APPROVED' END)
+        WHEN 'QUARANTINED'       THEN NEW.state IN ('RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED')
+        ELSE false
+    END) THEN
+        RAISE EXCEPTION 'effect % may not move % -> %', NEW.id, OLD.state, NEW.state USING ERRCODE = 'check_violation';
+    END IF;
+    IF NEW.state IN ('RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.effect_resolutions WHERE effect_id = NEW.id AND to_state = NEW.state
+                AND xact = txid_current()) THEN
+            RAISE EXCEPTION 'effect % may enter % only with an audited resolution (fab effect resolve)', NEW.id, NEW.state
+                USING ERRCODE = 'check_violation';
+        END IF;
     END IF;
     -- An abandon: never dispatched, with its audit row from this transaction.
     IF OLD.state IN ('INTENT', 'APPROVAL_REQUIRED', 'APPROVED') AND NEW.state = 'NOT_APPLIED' THEN
@@ -118,18 +139,6 @@ BEGIN
             RAISE EXCEPTION 'effect % may be abandoned only if never dispatched and with an audited reason (fab effect abandon)', NEW.id
                 USING ERRCODE = 'check_violation';
         END IF;
-        RETURN NEW;
-    END IF;
-    IF OLD.state = 'QUARANTINED' THEN
-        RAISE EXCEPTION 'quarantined effect % leaves only by an audited resolution (fab effect resolve)', NEW.id
-            USING ERRCODE = 'check_violation';
-    END IF;
-    IF OLD.state IN ('CONFIRMED', 'RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN
-        RAISE EXCEPTION 'effect % is settled (%)', NEW.id, OLD.state USING ERRCODE = 'check_violation';
-    END IF;
-    IF OLD.state IN ('FAILED_DEFINITE', 'NOT_APPLIED') AND NEW.state NOT IN ('INTENT', 'APPROVED') THEN
-        RAISE EXCEPTION 'effect % is % and changes only by retry, not to %', NEW.id, OLD.state, NEW.state
-            USING ERRCODE = 'check_violation';
     END IF;
     RETURN NEW;
 END $$;
