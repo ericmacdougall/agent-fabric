@@ -1867,5 +1867,122 @@
     ""
    ]
   ]
+ },
+ {
+  "id": "M143_hold_decides_at_tx_start",
+  "invariant": "reservation_clock_0014",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestHoldRechecksLeaseAfterCapacityLock",
+  "edits": [
+   [
+    "\tvar decidedAt time.Time\n\tif err := tx.QueryRow(ctx, \"SELECT clock_timestamp()\").Scan(&decidedAt); err != nil {\n\t\treturn broke(err)",
+    "\tvar decidedAt time.Time\n\tif err := tx.QueryRow(ctx, \"SELECT now()\").Scan(&decidedAt); err != nil {\n\t\treturn broke(err)"
+   ]
+  ]
+ },
+ {
+  "id": "M144_close_decides_at_tx_start",
+  "invariant": "reservation_clock_0014",
+  "pkg": "./internal/store",
+  "file": "internal/store/reservations.go",
+  "expect": "TestExpireDecidesAfterLockWait",
+  "edits": [
+   [
+    "review F3).\n\tif err := tx.QueryRow(ctx, \"SELECT clock_timestamp()\")",
+    "review F3).\n\tif err := tx.QueryRow(ctx, \"SELECT now()\")"
+   ]
+  ]
+ },
+ {
+  "id": "M145_hold_receipt_mutable",
+  "invariant": "reservation_clock_0014",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0014_hold_receipts_and_clock_backstops.sql",
+  "expect": "TestHoldReceiptIsWriteOnce",
+  "edits": [
+   [
+    "CREATE TRIGGER hold_commands_write_once BEFORE UPDATE OR DELETE ON hold_commands\n    FOR EACH ROW EXECUTE FUNCTION fabric_hold_command_update();",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M146_backstop_clock_is_tx_start",
+  "invariant": "reservation_clock_0014",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0014_hold_receipts_and_clock_backstops.sql",
+  "expect": "TestReservationSQLBackstopsUseTriggerClock",
+  "edits": [
+   [
+    "    t timestamptz := clock_timestamp();",
+    "    t timestamptz := now();"
+   ]
+  ]
+ },
+ {
+  "id": "M147_born_expired_allowed",
+  "invariant": "reservation_clock_0014",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0014_hold_receipts_and_clock_backstops.sql",
+  "expect": "TestReservationSQLBackstopsUseTriggerClock",
+  "edits": [
+   [
+    "        IF NEW.expires_at <= t THEN",
+    "        IF NEW.expires_at <= t - interval '1 day' THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M148_backdated_decision_allowed",
+  "invariant": "reservation_clock_0014",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0014_hold_receipts_and_clock_backstops.sql",
+  "expect": "TestReservationSQLBackstopsUseTriggerClock",
+  "edits": [
+   [
+    "        IF NEW.created_at < now() OR NEW.created_at > t THEN",
+    "        IF NEW.created_at > t THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M149_replay_ignores_approval",
+  "invariant": "effect_identity",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestReplayBindsWholeIntent",
+  "edits": [
+   [
+    "existing.neededApproval() != spec.NeedsApproval {",
+    "existing.neededApproval() && !spec.NeedsApproval {"
+   ]
+  ]
+ },
+ {
+  "id": "M150_exponent_numbers_accepted",
+  "invariant": "effect_identity",
+  "pkg": "./internal/effects",
+  "file": "internal/domain/canonical.go",
+  "expect": "TestNonCanonicalNumberRefusedAtIntake",
+  "edits": [
+   [
+    "strings.ContainsAny(n, \"eE\") ||",
+    "strings.ContainsAny(n, \"\\x00\") ||"
+   ]
+  ]
+ },
+ {
+  "id": "M151_negative_zero_accepted",
+  "invariant": "effect_identity",
+  "pkg": "./internal/effects",
+  "file": "internal/domain/canonical.go",
+  "expect": "TestNonCanonicalNumberRefusedAtIntake",
+  "edits": [
+   [
+    "(strings.HasPrefix(n, \"-\") && strings.Trim(n[1:], \"0.\") == \"\")",
+    "(strings.HasPrefix(n, \"--\") && strings.Trim(n[1:], \"0.\") == \"\")"
+   ]
+  ]
  }
 ]
