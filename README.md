@@ -246,6 +246,9 @@ Rollback: stop everything using the database, reinstall the previous
 binary, and restore the dump, either into the same database with
 `pg_restore --clean --if-exists -d <db> <dump>` or into a fresh database
 that you then switch to. Everything written after the dump is lost.
+The native spend ceilings are constants in the binary, so a rollback also
+restores the previous binary's ceilings (before goodqa#15086 the month
+ceiling was USD 100, not USD 20).
 
 ## License
 
