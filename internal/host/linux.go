@@ -289,8 +289,8 @@ func (l *Linux) Inventory(h Handle) ([]Process, error) {
 }
 
 // uidProcesses lists escapees: processes owned by the worker uid whose cgroup
-// is under the worker's user manager but is neither the run unit, a job unit,
-// the manager's bus nor its init scope. The sudo/systemd-run waiter chain the
+// is under the worker's user manager but is neither the run unit nor the
+// manager's own infrastructure (managerInfra). The sudo/systemd-run waiter chain the
 // daemon started lives in the daemon's own slice and is not counted.
 func uidProcesses(uid int, inside map[int]bool, runCGroup string) ([]Process, error) {
 	managerPrefix := fmt.Sprintf("/user.slice/user-%d.slice/user@%d.service/", uid, uid)
@@ -327,9 +327,8 @@ func uidProcesses(uid int, inside map[int]bool, runCGroup string) ([]Process, er
 		if !strings.HasPrefix(path, managerPrefix) || path == unitRel || strings.HasPrefix(path, unitRel+"/") {
 			continue // not under the worker manager (our waiter chain), or the run unit itself
 		}
-		rel := strings.TrimPrefix(path, managerPrefix)
-		if rel == "init.scope" || strings.HasPrefix(rel, "session.slice/") || strings.HasPrefix(rel, "app.slice/dbus") || strings.HasPrefix(rel, "app.slice/fab-job-") {
-			continue // manager infrastructure (init scope, session slice with the bus) and host-owned jobs
+		if managerInfra(strings.TrimPrefix(path, managerPrefix)) {
+			continue
 		}
 		if p, ok := procIdentity(pid); ok {
 			p.Escaped = true
@@ -337,6 +336,23 @@ func uidProcesses(uid int, inside map[int]bool, runCGroup string) ([]Process, er
 		}
 	}
 	return out, nil
+}
+
+// managerInfra reports whether a cgroup path, relative to the worker's user
+// manager, is the manager's own infrastructure rather than an escapee: its
+// init scope and its session bus service, matched exactly. Anything else,
+// whatever its name, is a unit the worker started (goodqa#15174, Kimi K2;
+// host jobs are disabled, so no fab-job unit is legitimate). A worker can
+// still start such a unit through its manager's bus; this detects it, and
+// denying the bus is goodqa#15160.
+func managerInfra(rel string) bool {
+	switch rel {
+	case "init.scope",
+		"session.slice/dbus.service", "session.slice/dbus-broker.service",
+		"app.slice/dbus.service", "app.slice/dbus-broker.service":
+		return true
+	}
+	return false
 }
 
 // tokenCarriers scans /proc for own-UID processes whose environment carries
