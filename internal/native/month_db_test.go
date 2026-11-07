@@ -2,6 +2,8 @@ package native_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +55,31 @@ func TestMonthKeyIsDBTime(t *testing.T) {
 		want := agent.SpendResource("month", skewed)
 		if got := monthResources(t, st); len(got) != 1 || got[0] != want {
 			t.Fatalf("month reservations on %v, want only %s (month %s from the source)", got, want, skewed)
+		}
+	})
+	t.Run("the default source reads the database", func(t *testing.T) {
+		// Delta inspection 5ec02ad: a default that never touches the DB (an
+		// unskewed host clock) agrees with the DB month most of the time;
+		// against a closed store it returns no error and is caught here.
+		st := storetest.Open(t)
+		st.Close()
+		if m, err := native.DefaultMonthSource(ctx, st); err == nil {
+			t.Fatalf("default month source returned %q from a closed store; it does not read the database", m)
+		}
+	})
+	t.Run("a month source error stops Run before the attempt starts", func(t *testing.T) {
+		defer native.SetMonthSource(func(context.Context, *store.Store) (string, error) { return "", errors.New("db down") })()
+		e := newEnv(t, fakeapi.Step{Events: fakeapi.Text("never", 50, 5)})
+		st := storetest.Open(t)
+		_, err := native.Run(ctx, st, e.g, opts(true))
+		if err == nil || !strings.Contains(err.Error(), "month key") {
+			t.Fatalf("run with a failing month source: %v", err)
+		}
+		if n := count(t, st, "SELECT count(*) FROM attempts"); n != 0 || len(e.srv.Requests()) != 0 {
+			t.Fatalf("%d attempts, %d requests after a month-source failure; want 0, 0", n, len(e.srv.Requests()))
+		}
+		if n := count(t, st, "SELECT count(*) FROM reservations"); n != 0 {
+			t.Fatalf("%d reservations after a month-source failure", n)
 		}
 	})
 	t.Run("the default source is the DB month", func(t *testing.T) {

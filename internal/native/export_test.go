@@ -26,6 +26,9 @@ func NewKeyRing(argv []string, ttl time.Duration) (func(context.Context) (string
 	return src, ring, nil
 }
 
+// DefaultMonthSource is the production month source (goodqa#15124).
+var DefaultMonthSource = monthSource
+
 // SetMonthSource replaces the month cap's month source and returns the
 // restore (goodqa#15124).
 func SetMonthSource(f func(context.Context, *store.Store) (string, error)) func() {
