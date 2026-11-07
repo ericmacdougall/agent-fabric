@@ -421,6 +421,9 @@ func (s *Store) Settle(ctx context.Context, r UsageReceipt) (CloseResult, error)
 
 // ExpireReservations closes every held reservation whose expires_at has
 // passed by DB time, each rechecked under its locks. Bounded by limit.
+// It ignores the attempt's state, so it is not the dispatch gate's sweep:
+// fabd uses ExpireEndedReservations (red-team F5), which keeps holds of a
+// possibly running attempt.
 func (s *Store) ExpireReservations(ctx context.Context, limit int) (int, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id FROM reservations WHERE state = 'HELD' AND expires_at <= now()
 		ORDER BY attempt_id, resource LIMIT $1`, limit)

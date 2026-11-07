@@ -39,6 +39,11 @@ type Launcher interface {
 	StartJob(unit string, argv []string, env []string) error
 }
 
+// Prober reads a runner back by attempt id (G1). known false: no answer.
+type Prober interface {
+	Alive(run domain.AttemptID) (alive, known bool)
+}
+
 // Config is the policy the scheduler applies. Model and effort come from the
 // tier table upstream; here they are opaque strings copied into grants.
 type Config struct {
@@ -83,11 +88,14 @@ type Scheduler struct {
 	beforeRun func(domain.MissionID) error
 	// parked are missions a sweep step failed on, with when to try again
 	// (red-team F1, D1): an unreadable log stays parked until restart.
-	mu     sync.Mutex
-	parked map[domain.MissionID]time.Time
-	cfgErr error // gateErr at New; Tick refuses to run with it
+	mu         sync.Mutex
+	parked     map[domain.MissionID]time.Time
+	cfgErr     error // gateErr at New; Tick refuses to run with it
+	prober     Prober
+	waitLogged map[domain.MissionID]bool // capacity waits already named in the log
+
 	// Counters for /metrics and the AC-2 assertion.
-	Launched, WaitsResumed, JobsWoken, Expired int
+	Launched, WaitsResumed, JobsWoken, Expired, CapacityWaits int
 }
 
 func New(st *store.Store, cfg Config, ln Launcher) *Scheduler {
@@ -132,6 +140,9 @@ func (s *Scheduler) runnerDSN() string {
 	return os.Getenv("FABRIC_DSN")
 }
 
+// SetProber installs the runner readback the UNKNOWN reconciler uses (G1).
+func (s *Scheduler) SetProber(p Prober) { s.prober = p }
+
 func (s *Scheduler) gated() bool { return len(s.cfg.Holds) > 0 }
 
 // Tick runs one pass of every sweep and reports whether it did any work.
@@ -150,6 +161,7 @@ func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 		fmt.Fprintln(os.Stderr, "fabd: lease sweep:", err) // per-row failures never stop the loop (review H10)
 	}
 	s.Expired += len(exp)
+	s.reconcileUnknown(ctx)
 	if s.gated() {
 		if _, err := s.st.ExpireEndedReservations(ctx, 50); err != nil {
 			fmt.Fprintln(os.Stderr, "fabd: reservation sweep:", err)
@@ -320,6 +332,7 @@ func (s *Scheduler) dispatch(ctx context.Context) (int, error) {
 	for _, id := range ids {
 		if err := s.runOnce(ctx, id); err != nil {
 			if errors.Is(err, errCapacityFull) {
+				s.noteCapacityWait(ctx, id)
 				continue // waiting, not failing: no attempt, no park, not work
 			}
 			// Red-team F1 and D1: a per-mission error never stops the loop.
@@ -517,8 +530,11 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	s.bump(ctx, "runs_launched_total")
 	// The worker runs while the loop keeps serving its job requests and
 	// wakes; its end is settled from the stream when it exits.
+	done := make(chan struct{})
+	go s.heartbeat(ctx, attempt, fence, done)
 	go func() {
 		code, _ := s.ln.Wait(h)
+		close(done)
 		out.Close()
 		if errf != nil {
 			errf.Close()
@@ -529,6 +545,114 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		Notify(context.Background(), s.st)
 	}()
 	return nil
+}
+
+// heartbeat keeps a launched attempt's lease alive while its runner runs
+// (red-team G1): without it every run longer than the lease went UNKNOWN.
+// It stops when the runner ends, when this scheduler's context ends (a
+// crash or shutdown: the lease then lapses into UNKNOWN for the reconciler)
+// or when the attempt is no longer live.
+func (s *Scheduler) heartbeat(ctx context.Context, attempt domain.AttemptID, fence int64, done <-chan struct{}) {
+	every := s.st.Lease / 3
+	if every <= 0 {
+		every = time.Second
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := s.st.Heartbeat(ctx, attempt, fence); err != nil {
+				if ctx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "fabd: heartbeat %s stopped: %v\n", attempt, err)
+				}
+				return
+			}
+		}
+	}
+}
+
+// reconcileUnknown reads back each UNKNOWN attempt of this host (red-team
+// G1). A runner that is provably gone is quarantined: it ran, or may have,
+// and its outcome is unverified, so the mission pauses for review instead
+// of being retried blind, and its holds are released by the sweep. A live
+// runner, or no answer, leaves the attempt UNKNOWN and its capacity held.
+func (s *Scheduler) reconcileUnknown(ctx context.Context) {
+	if s.prober == nil {
+		return
+	}
+	rows, err := s.st.Pool().Query(ctx, `SELECT id, mission_id, fence FROM attempts WHERE state = 'UNKNOWN' AND host = $1
+		ORDER BY started_at LIMIT 20`, string(s.cfg.Host))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fabd: unknown sweep:", err)
+		return
+	}
+	type u struct {
+		id      domain.AttemptID
+		mission domain.MissionID
+		fence   int64
+	}
+	var page []u
+	for rows.Next() {
+		var x u
+		if err := rows.Scan(&x.id, &x.mission, &x.fence); err != nil {
+			rows.Close()
+			return
+		}
+		page = append(page, x)
+	}
+	rows.Close()
+	for _, x := range page {
+		alive, known := s.prober.Alive(x.id)
+		if !known || alive {
+			continue
+		}
+		_, err := s.st.Execute(ctx, "fabd", domain.CommandID("reconcile:gone:"+string(x.id)), domain.Command{Kind: domain.CmdReconcileAttempt,
+			Mission: x.mission, Attempt: x.id, Fence: x.fence, Result: "QUARANTINED", Reason: "runner gone after its lease lapsed; outcome unverified"})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "fabd: reconcile %s: %v\n", x.id, err) // per-attempt: never stops the loop
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "fabd: quarantined %s: runner gone, outcome unverified\n", x.id)
+		s.bump(ctx, "attempts_quarantined_total")
+	}
+}
+
+// noteCapacityWait records that a mission is waiting for capacity and,
+// once per mission, names what holds it (red-team G1: a wait leaves no
+// event, so it must leave a signal).
+func (s *Scheduler) noteCapacityWait(ctx context.Context, mission domain.MissionID) {
+	s.CapacityWaits++
+	s.bump(ctx, "capacity_waits_total")
+	s.mu.Lock()
+	if s.waitLogged == nil {
+		s.waitLogged = map[domain.MissionID]bool{}
+	}
+	first := !s.waitLogged[mission]
+	s.waitLogged[mission] = true
+	s.mu.Unlock()
+	if !first {
+		return
+	}
+	for _, h := range s.cfg.Holds {
+		rows, err := s.st.Pool().Query(ctx, `SELECT r.attempt_id, COALESCE(a.state, '?'), r.created_at FROM reservations r
+			LEFT JOIN attempts a ON a.id = r.attempt_id WHERE r.resource = $1 AND r.state = 'HELD' ORDER BY r.created_at LIMIT 5`, h.Resource)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var a, st string
+			var since time.Time
+			if rows.Scan(&a, &st, &since) == nil {
+				fmt.Fprintf(os.Stderr, "fabd: %s waiting for capacity on %s: held by %s (%s) since %s\n", mission, h.Resource, a, st, since.UTC().Format(time.RFC3339))
+			}
+		}
+		rows.Close()
+	}
 }
 
 // settle reads the finished worker's stream and ends the attempt.

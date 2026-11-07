@@ -204,6 +204,9 @@ func daemonMain(args []string) error {
 	}
 	return withStore(func(ctx context.Context, st *store.Store) error {
 		s := sched.New(st, cfg, ln)
+		if p, ok := runnerProber(*workerUser); ok {
+			s.SetProber(p) // G1: reconcile UNKNOWN attempts whose runner is gone
+		}
 		if *once {
 			for i := 0; i < 50; i++ {
 				worked, err := s.Tick(ctx)

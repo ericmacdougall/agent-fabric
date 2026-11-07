@@ -2218,5 +2218,83 @@
     "s.st.ExpireReservations(ctx, 50)"
    ]
   ]
+ },
+ {
+  "id": "M170_heartbeat_wrong_fence",
+  "invariant": "unknown_reconcile",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestOwnerHeartbeatsLiveRun",
+  "edits": [
+   [
+    "s.st.Heartbeat(ctx, attempt, fence); err != nil {",
+    "s.st.Heartbeat(ctx, attempt, fence+1); err != nil {"
+   ]
+  ]
+ },
+ {
+  "id": "M171_no_answer_is_gone",
+  "invariant": "unknown_reconcile",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestRestartWithoutReadbackKeepsUnknown",
+  "edits": [
+   [
+    "if !known || alive {",
+    "if alive || (!known && alive) {"
+   ]
+  ]
+ },
+ {
+  "id": "M172_reconciler_off",
+  "invariant": "unknown_reconcile",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestRestartReconcilesGoneRunner",
+  "edits": [
+   [
+    "\tif s.prober == nil {\n\t\treturn\n\t}\n\trows",
+    "\tif s.prober != nil {\n\t\treturn\n\t}\n\trows"
+   ]
+  ]
+ },
+ {
+  "id": "M173_capacity_wait_silent",
+  "invariant": "unknown_reconcile",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestRestartKeepsLiveRunnerSlot",
+  "edits": [
+   [
+    "\ts.CapacityWaits++\n",
+    "\ts.CapacityWaits += 0\n"
+   ]
+  ]
+ },
+ {
+  "id": "M174_prober_gone_reads_alive",
+  "invariant": "unknown_reconcile",
+  "pkg": "./cmd/fab",
+  "file": "cmd/fab/prober.go",
+  "expect": "TestCgroupProber",
+  "edits": [
+   [
+    "\tcase errors.Is(err, fs.ErrNotExist):\n\t\treturn false, true",
+    "\tcase errors.Is(err, fs.ErrNotExist):\n\t\treturn true, true"
+   ]
+  ]
+ },
+ {
+  "id": "M175_prober_no_slice_check",
+  "invariant": "unknown_reconcile",
+  "pkg": "./cmd/fab",
+  "file": "cmd/fab/prober.go",
+  "expect": "TestCgroupProber",
+  "edits": [
+   [
+    "if fi, err := os.Stat(slice); err != nil || !fi.IsDir() {",
+    "if fi, err := os.Stat(slice); err != nil && fi != nil {"
+   ]
+  ]
  }
 ]
