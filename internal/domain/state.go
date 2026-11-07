@@ -135,6 +135,15 @@ func EvidenceKey(attempt AttemptID, revision, generation int64, head, receipt st
 
 // Acceptance records which attempt's candidate was accepted and for which
 // exact (revision, generation, head).
+// LiveTest is a live_test receipt bound to a deployed commit (AC-6).
+type LiveTest struct {
+	Generation int64  `json:"generation"`
+	Head       string `json:"head"`
+	Host       HostID `json:"host"`
+	Target     string `json:"target"`
+	Receipt    string `json:"receipt"`
+}
+
 type Acceptance struct {
 	Attempt    AttemptID `json:"attempt"`
 	Revision   int64     `json:"revision"`
@@ -176,6 +185,7 @@ type Mission struct {
 	Effects             map[EffectID]Effect   `json:"effects,omitempty"`
 	Accepted            *Acceptance           `json:"accepted,omitempty"`
 	DeliveredGeneration *int64                `json:"delivered_generation,omitempty"`
+	LiveTest            *LiveTest             `json:"live_test,omitempty"` // AC-6: the receipt delivery LIVE_VERIFIED rests on
 
 	// Red-team F1: consecutive attempts abandoned before their runner started,
 	// the backoff now in force, and why the mission was parked.

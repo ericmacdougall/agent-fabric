@@ -29,6 +29,9 @@ const (
 	CmdRetryEffect      CommandKind = "RETRY_EFFECT"
 	CmdResolveEffect    CommandKind = "RESOLVE_EFFECT"
 	CmdRelease          CommandKind = "RELEASE"
+	// AC-6 (R6): a live_test receipt for the deployed commit, then done.
+	CmdRecordLiveTest  CommandKind = "RECORD_LIVE_TEST"
+	CmdCompleteMission CommandKind = "COMPLETE_MISSION"
 )
 
 // Command is one request to change a mission. The fields used depend on Kind;
@@ -57,6 +60,9 @@ type Command struct {
 	// EFFECT_UNKNOWN / RESOLVE_EFFECT: the submission the result is about.
 	Submission int    `json:"submission,omitempty"`
 	Reason     string `json:"reason,omitempty"`
+	// RECORD_LIVE_TEST: the live target the test ran against (URL or
+	// service identity), so a run against a fake cannot pass for live.
+	Target string `json:"target,omitempty"`
 
 	// SUBMIT_EFFECT (H1): the effect id is derived from kind + canonical
 	// request + occurrence; the caller never names it.
@@ -103,6 +109,9 @@ const (
 	// of them parks it as BLOCKED.
 	EvDispatchDeferred EventKind = "DISPATCH_DEFERRED"
 	EvMissionParked    EventKind = "MISSION_PARKED"
+	// AC-6: the deployed commit passed a live test; the mission is done.
+	EvLiveVerified     EventKind = "LIVE_VERIFIED"
+	EvMissionSucceeded EventKind = "MISSION_SUCCEEDED"
 )
 
 // knownEventKinds is every kind this build's reducer interprets. A new kind
@@ -114,6 +123,7 @@ var knownEventKinds = map[EventKind]bool{
 	EvWakeAcked: true, EvMissionResumed: true, EvEffectSubmitted: true, EvEffectUnknown: true,
 	EvEffectResubmitted: true, EvEffectResolved: true, EvMissionReleased: true, EvAcceptanceRevoked: true,
 	EvClaimRefused: true, EvDispatchDeferred: true, EvMissionParked: true,
+	EvLiveVerified: true, EvMissionSucceeded: true,
 }
 
 // KnownEventKinds lists the kinds this build interprets, sorted.
@@ -161,6 +171,7 @@ type Event struct {
 	Occurrence int          `json:"occurrence,omitempty"`
 	Vacuous    bool         `json:"vacuous,omitempty"`
 	Claims     []Claim      `json:"claims,omitempty"`
+	Target     string       `json:"target,omitempty"` // LIVE_VERIFIED
 }
 
 // RequestHash is the canonical SHA-256 of a command body. Two commands with

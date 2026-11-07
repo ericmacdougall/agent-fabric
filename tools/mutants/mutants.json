@@ -2620,5 +2620,113 @@
     "\t\tif errors.As(err, &pe) && pe.Code == \"42501\" && false {"
    ]
   ]
+ },
+ {
+  "id": "M200_livetest_any_commit",
+  "invariant": "done",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestDoneNeedsLiveTestForDeployedCommit",
+  "edits": [
+   [
+    "\t\tif cmd.Head != m.Accepted.Head {",
+    "\t\tif false && cmd.Head != m.Accepted.Head {"
+   ]
+  ]
+ },
+ {
+  "id": "M201_livetest_vacuous_passes",
+  "invariant": "done",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestDoneNeedsLiveTestForDeployedCommit",
+  "edits": [
+   [
+    "\t\tif cmd.Vacuous {\n\t\t\treturn nil, fmt.Errorf(\"%w: a vacuous live test",
+    "\t\tif false && cmd.Vacuous {\n\t\t\treturn nil, fmt.Errorf(\"%w: a vacuous live test"
+   ]
+  ]
+ },
+ {
+  "id": "M202_livetest_any_generation",
+  "invariant": "done",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestDoneNeedsLiveTestForDeployedCommit",
+  "edits": [
+   [
+    "\t\t\tcmd.Generation != m.Version.CandidateGeneration {\n\t\t\treturn nil, fmt.Errorf(\"%w: live test for generation",
+    "\t\t\tfalse {\n\t\t\treturn nil, fmt.Errorf(\"%w: live test for generation"
+   ]
+  ]
+ },
+ {
+  "id": "M203_done_without_live_test",
+  "invariant": "done",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestDoneNeedsLiveTestForDeployedCommit",
+  "edits": [
+   [
+    "\t\tif m.Delivery != domain.DelivLiveVerified || lt == nil || m.Accepted == nil || m.DeliveredGeneration == nil ||\n\t\t\tlt.Generation != m.Version.CandidateGeneration || *m.DeliveredGeneration != lt.Generation || lt.Head != m.Accepted.Head {",
+    "\t\tif m.Accepted == nil {"
+   ],
+   [
+    "\t\te := ev(domain.EvMissionSucceeded)\n\t\te.Generation = lt.Generation\n\t\te.Head = lt.Head\n\t\te.Receipt = lt.Receipt",
+    "\t\te := ev(domain.EvMissionSucceeded)\n\t\t_ = lt"
+   ]
+  ]
+ },
+ {
+  "id": "M204_new_candidate_keeps_livetest",
+  "invariant": "done",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestLiveTestNeedsDeployAndCurrentCandidate",
+  "edits": [
+   [
+    "\t\ts.DeliveredGeneration = nil\n\t\ts.LiveTest = nil\n",
+    "\t\ts.DeliveredGeneration = nil\n"
+   ]
+  ]
+ },
+ {
+  "id": "M205_done_while_attempt_live",
+  "invariant": "done",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestDoneRefusedWhileAttemptLive",
+  "edits": [
+   [
+    "\t\t\treturn nil, fmt.Errorf(\"%w: done while an attempt is live\", domain.ErrAttemptLive)",
+    "\t\t\t_ = 0"
+   ]
+  ]
+ },
+ {
+  "id": "M206_livetest_refusal_kind_lost",
+  "invariant": "done",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestDoneNeedsLiveTestThroughStore",
+  "edits": [
+   [
+    "\t\"live_test_missing\":  domain.ErrLiveTestMissing,\n",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M207_livetest_no_target",
+  "invariant": "done",
+  "pkg": "./internal/reducer",
+  "file": "internal/reducer/reducer.go",
+  "expect": "TestDoneNeedsLiveTestForDeployedCommit",
+  "edits": [
+   [
+    "\t\tif cmd.Host == \"\" || cmd.Target == \"\" || cmd.Receipt == \"\" {",
+    "\t\tif cmd.Host == \"\" || cmd.Receipt == \"\" {"
+   ]
+  ]
  }
 ]

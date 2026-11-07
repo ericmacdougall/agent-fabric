@@ -88,7 +88,7 @@ func (f *fleet) step(t *testing.T, cmd domain.Command) (events []domain.Event, e
 
 func rootName(err error) string {
 	for _, e := range []error{domain.ErrStaleFence, domain.ErrOverCapacity, domain.ErrUnknownUnresolved, domain.ErrEvidenceStale,
-		domain.ErrGenerationStale, domain.ErrDuplicate, domain.ErrNotFound, domain.ErrAttemptLive, domain.ErrInvalidTransition} {
+		domain.ErrGenerationStale, domain.ErrDuplicate, domain.ErrNotFound, domain.ErrAttemptLive, domain.ErrLiveTestMissing, domain.ErrInvalidTransition} {
 		if errors.Is(err, e) {
 			return e.Error()
 		}
@@ -276,6 +276,25 @@ func randomCommand(r *rand.Rand, f *fleet, id domain.MissionID, step int) domain
 			case a.State == domain.AttemptVerified && m.Candidate == domain.CandVerifying:
 				c.Kind, c.Attempt = domain.CmdAccept, aid
 				return c
+			case m.Delivery == domain.DelivLiveVerified && r.Intn(3) == 0:
+				c.Kind = domain.CmdCompleteMission
+				return c
+			case m.Delivery == domain.DelivDelivered && m.Accepted != nil:
+				// AC-6: mostly the deployed commit; sometimes another
+				// commit, an old generation or a vacuous run.
+				c.Kind, c.Generation, c.Head = domain.CmdRecordLiveTest, m.Version.CandidateGeneration, m.Accepted.Head
+				c.Host, c.Target, c.Receipt = "h_t2", "https://staging.example.test", fmt.Sprintf("rcpt_live_%d", step)
+				switch r.Intn(6) {
+				case 0:
+					c.Head = "sha_other"
+				case 1:
+					c.Generation--
+				case 2:
+					c.Vacuous = true
+				case 3:
+					c.Kind = domain.CmdCompleteMission // done before the live test
+				}
+				return c
 			case m.Accepted != nil && m.Accepted.Attempt == aid:
 				c.Kind, c.Attempt, c.Generation = domain.CmdDeliver, aid, m.Version.CandidateGeneration-int64(r.Intn(3)/2)
 				return c
@@ -375,14 +394,15 @@ func TestTraces(t *testing.T) {
 	}
 	// Coverage gates: each safety path must have been exercised.
 	need := []string{domain.ErrStaleFence.Error(), domain.ErrOverCapacity.Error(), domain.ErrUnknownUnresolved.Error(),
-		domain.ErrEvidenceStale.Error(), domain.ErrGenerationStale.Error(), domain.ErrDuplicate.Error(), domain.ErrAttemptLive.Error()}
+		domain.ErrEvidenceStale.Error(), domain.ErrGenerationStale.Error(), domain.ErrDuplicate.Error(), domain.ErrAttemptLive.Error(),
+		domain.ErrLiveTestMissing.Error()}
 	for _, n := range need {
 		if total[n] == 0 {
 			t.Errorf("refusal %q never exercised (seed base %d)", n, base)
 		}
 	}
 	for _, k := range []domain.EventKind{domain.EvCandidateAccepted, domain.EvDelivered, domain.EvMissionResumed, domain.EvEffectResubmitted,
-		domain.EvAttemptUnknown, domain.EvAttemptReconciled, domain.EvAcceptanceRevoked} {
+		domain.EvAttemptUnknown, domain.EvAttemptReconciled, domain.EvAcceptanceRevoked, domain.EvLiveVerified, domain.EvMissionSucceeded} {
 		if emitted[k] == 0 {
 			t.Errorf("event %s never emitted (seed base %d)", k, base)
 		}

@@ -17,6 +17,9 @@ var (
 	ErrGenerationStale     = errors.New("generation is not the current candidate generation")
 	ErrAttemptLive         = errors.New("attempt already live")
 	ErrDuplicate           = errors.New("duplicate")
+	// ErrLiveTestMissing (AC-6, R6): done needs a live_test receipt for the
+	// deployed commit; merged or deployed is not done.
+	ErrLiveTestMissing = errors.New("done needs a live_test receipt for the deployed commit")
 	// ErrUnsupportedEvent: the log holds an event kind this build cannot interpret.
 	ErrUnsupportedEvent = errors.New("unsupported event kind")
 )

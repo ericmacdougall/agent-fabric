@@ -193,6 +193,7 @@ var errKinds = map[string]error{
 	"duplicate":          domain.ErrDuplicate,
 	"not_found":          domain.ErrNotFound,
 	"attempt_live":       domain.ErrAttemptLive,
+	"live_test_missing":  domain.ErrLiveTestMissing,
 	"invalid_transition": domain.ErrInvalidTransition,
 }
 

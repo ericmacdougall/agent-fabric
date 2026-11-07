@@ -438,6 +438,60 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 			return nil, fmt.Errorf("%w: an attempt is unresolved; the slot is held until it is reconciled", domain.ErrUnknownUnresolved)
 		}
 		return []domain.Event{ev(domain.EvMissionReleased)}, nil
+
+	case domain.CmdRecordLiveTest:
+		// AC-6 (R6): a live test binds to the deployed commit: the accepted
+		// head of the current, delivered generation, run against a named
+		// live target on a named host, and not vacuous (R33).
+		if m.Delivery != domain.DelivDelivered && m.Delivery != domain.DelivLiveVerified {
+			return nil, fmt.Errorf("%w: live test while delivery is %s (needs a deployed commit)", domain.ErrInvalidTransition, m.Delivery)
+		}
+		if m.Accepted == nil || m.DeliveredGeneration == nil || *m.DeliveredGeneration != m.Version.CandidateGeneration ||
+			cmd.Generation != m.Version.CandidateGeneration {
+			return nil, fmt.Errorf("%w: live test for generation %d, deployed generation is %d", domain.ErrGenerationStale, cmd.Generation, m.Version.CandidateGeneration)
+		}
+		if cmd.Head != m.Accepted.Head {
+			return nil, fmt.Errorf("%w: live test of commit %q, deployed commit is %q", domain.ErrEvidenceStale, cmd.Head, m.Accepted.Head)
+		}
+		if cmd.Host == "" || cmd.Target == "" || cmd.Receipt == "" {
+			return nil, fmt.Errorf("%w: a live test names its host, live target and receipt", domain.ErrInvalidTransition)
+		}
+		if cmd.Vacuous {
+			return nil, fmt.Errorf("%w: a vacuous live test (nothing passed) is not a pass", domain.ErrInvalidTransition)
+		}
+		e := ev(domain.EvLiveVerified)
+		e.Generation = cmd.Generation
+		e.Head = cmd.Head
+		e.Host = cmd.Host
+		e.Target = cmd.Target
+		e.Receipt = cmd.Receipt
+		return []domain.Event{e}, nil
+
+	case domain.CmdCompleteMission:
+		// AC-6 / NEG-6: merged or deployed is not done. Done needs delivery
+		// LIVE_VERIFIED by a live test of the deployed commit of the current
+		// generation.
+		lt := m.LiveTest
+		if m.Delivery != domain.DelivLiveVerified || lt == nil || m.Accepted == nil || m.DeliveredGeneration == nil ||
+			lt.Generation != m.Version.CandidateGeneration || *m.DeliveredGeneration != lt.Generation || lt.Head != m.Accepted.Head {
+			want := "(none deployed)"
+			if m.Accepted != nil && m.DeliveredGeneration != nil {
+				want = m.Accepted.Head
+			}
+			return nil, fmt.Errorf("%w: delivery is %s; needs a live_test receipt for deployed commit %s, generation %d",
+				domain.ErrLiveTestMissing, m.Delivery, want, m.Version.CandidateGeneration)
+		}
+		if m.LiveAttempts() > 0 {
+			return nil, fmt.Errorf("%w: done while an attempt is live", domain.ErrAttemptLive)
+		}
+		if m.UnresolvedAttempts() > 0 {
+			return nil, fmt.Errorf("%w: done while an attempt is unresolved", domain.ErrUnknownUnresolved)
+		}
+		e := ev(domain.EvMissionSucceeded)
+		e.Generation = lt.Generation
+		e.Head = lt.Head
+		e.Receipt = lt.Receipt
+		return []domain.Event{e}, nil
 	}
 	return nil, fmt.Errorf("%w: unknown command %q", domain.ErrInvalidTransition, cmd.Kind)
 }
@@ -589,6 +643,7 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		s.Candidate = domain.CandUnverified
 		s.Accepted = nil
 		s.DeliveredGeneration = nil
+		s.LiveTest = nil
 		if s.Delivery == domain.DelivDelivered || s.Delivery == domain.DelivLiveVerified {
 			s.Delivery = domain.DelivNotReady
 		}
@@ -631,6 +686,13 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		f.State = domain.EffectState(e.Result)
 		s.Effects[e.Effect] = f
 	case domain.EvMissionReleased:
+		s.Execution = domain.ExecIdle
+		s.WaitKey = ""
+	case domain.EvLiveVerified:
+		s.Delivery = domain.DelivLiveVerified
+		s.LiveTest = &domain.LiveTest{Generation: e.Generation, Head: e.Head, Host: e.Host, Target: e.Target, Receipt: e.Receipt}
+	case domain.EvMissionSucceeded:
+		s.Terminal = domain.TermSucceeded
 		s.Execution = domain.ExecIdle
 		s.WaitKey = ""
 	}

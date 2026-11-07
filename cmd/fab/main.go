@@ -34,8 +34,10 @@ func main() {
 		err = sandboxMain(os.Args[2:])
 	case "mission":
 		err = missionMain(os.Args[2:])
-	case "admit", "release", "wake":
+	case "admit", "release", "wake", "done":
 		err = simpleCommand(os.Args[1], os.Args[2:])
+	case "live-test":
+		err = liveTestMain(os.Args[2:])
 	case "status":
 		err = statusMain(os.Args[2:])
 	case "asks":
@@ -82,6 +84,9 @@ func usage() {
   db capacity --resource R --unit U --capacity N   set a dispatch-gate resource
   mission new|list                     register / list missions
   admit|release|wake --mission M [--token T] --key K
+  live-test --mission M --commit C --generation G --host H --target URL --receipt R --key K
+                                       record a live_test receipt for the deployed commit (AC-6)
+  done --mission M --key K             close a mission; refused without a live_test receipt (AC-6)
   status                               missions, slots, open asks
   asks [--state open]                  the inbox
   ask new --id I --question Q --source S [--mission M --kind K --option O ...]
@@ -209,6 +214,8 @@ func simpleCommand(name string, args []string) error {
 		cmd.Kind = domain.CmdRelease
 	case "wake":
 		cmd.Kind = domain.CmdWake
+	case "done":
+		cmd.Kind = domain.CmdCompleteMission
 	}
 	return withStore(func(ctx context.Context, st *store.Store) error {
 		resp, err := execute(ctx, st, actor(), *key, cmd)
@@ -357,4 +364,32 @@ func profileForThisHost() (host.Profile, error) {
 		return newDarwinProfile(sb), nil
 	}
 	return nil, errors.New("no profile for " + runtime.GOOS)
+}
+
+// liveTestMain records a live_test receipt (AC-6): the deployed commit, the
+// live target it ran against and where the receipt is. It is not a pass for
+// a vacuous run; the reducer refuses one bound to any other commit.
+func liveTestMain(args []string) error {
+	fs := flag.NewFlagSet("live-test", flag.ContinueOnError)
+	mission := fs.String("mission", "", "mission id")
+	commit := fs.String("commit", "", "deployed commit the live test ran against")
+	generation := fs.Int64("generation", 0, "candidate generation that was deployed")
+	host := fs.String("host", "", "host the live test ran on")
+	target := fs.String("target", "", "live target (URL or service identity)")
+	receipt := fs.String("receipt", "", "receipt reference (log, WAL REALLY_TESTED id or artifact)")
+	vacuous := fs.Bool("vacuous", false, "the run passed nothing (recorded, never a pass)")
+	key := fs.String("key", "", "idempotency key")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cmd := domain.Command{Kind: domain.CmdRecordLiveTest, Mission: domain.MissionID(*mission), Head: *commit, Generation: *generation,
+		Host: domain.HostID(*host), Target: *target, Receipt: *receipt, Vacuous: *vacuous}
+	return withStore(func(ctx context.Context, st *store.Store) error {
+		resp, err := execute(ctx, st, actor(), *key, cmd)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("live-test %s: %s (%d events, replayed=%v)\n", *mission, resp.Status, len(resp.Events), resp.Replayed)
+		return nil
+	})
 }
