@@ -42,7 +42,7 @@ func (f *fleet) env(id domain.MissionID) Env {
 			used++
 		}
 	}
-	return Env{Cap: f.cap, SlotsUsed: used}
+	return Env{Cap: f.cap, SlotsUsed: used, Operator: true} // the fleet's commands come from the operator
 }
 
 // step runs one command through Decide/Apply/Check exactly as the store does.

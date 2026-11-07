@@ -9,6 +9,7 @@ package domain
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // Identifiers are opaque strings with a kind prefix. Parsers are strict: a
@@ -58,6 +59,15 @@ func ParseActorID(s string) (ActorID, error) {
 		return "", fmt.Errorf("%w: actor", ErrInvalidID)
 	}
 	return ActorID(s), nil
+}
+
+// IsOperator reports whether an actor is a human operator: the main chat
+// ("chat", the fab CLI default) or an "op:<name>" actor (FABRIC_ACTOR).
+// It is an allowlist, so a new automation actor is never an operator.
+// Actors are self-asserted by the caller, so this separates code paths
+// (fabd, native-runner, import, asks), not authenticated people.
+func IsOperator(a ActorID) bool {
+	return a == "chat" || (strings.HasPrefix(string(a), "op:") && len(a) > len("op:"))
 }
 
 // ParseCommandID accepts the client-minted idempotency key for one command.

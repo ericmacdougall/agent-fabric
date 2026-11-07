@@ -19,7 +19,7 @@ func TestKnownEventKindRegistryIsComplete(t *testing.T) {
 		domain.EvCandidateSelected, domain.EvCandidateAccepted, domain.EvDelivered, domain.EvWakeRecorded,
 		domain.EvWakeAcked, domain.EvMissionResumed, domain.EvEffectSubmitted, domain.EvEffectUnknown,
 		domain.EvEffectResubmitted, domain.EvEffectResolved, domain.EvMissionReleased, domain.EvAcceptanceRevoked,
-		domain.EvClaimRefused, domain.EvDispatchDeferred, domain.EvMissionParked,
+		domain.EvClaimRefused, domain.EvDispatchDeferred, domain.EvMissionParked, domain.EvMissionUnpaused,
 	} {
 		if !domain.KnownEventKind(k) {
 			t.Errorf("%s is declared but not known", k)

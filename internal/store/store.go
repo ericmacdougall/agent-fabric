@@ -406,7 +406,7 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		}
 	}
 
-	env := reducer.Env{Cap: cap}
+	env := reducer.Env{Cap: cap, Operator: domain.IsOperator(actor)}
 	if cmd.Kind == domain.CmdCompleteMission {
 		// Review N1: the broker's effects for this mission that are not
 		// settled, in this transaction. A new intent or dispatch holds its

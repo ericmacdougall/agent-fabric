@@ -73,7 +73,12 @@ func TestOldParkLogReplaysAndCanBeReadmitted(t *testing.T) {
 	if _, err := Decide(m, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_x", Host: "h_t2", Role: "writer"}, Env{Cap: 4}); !errors.Is(err, domain.ErrInvalidTransition) {
 		t.Errorf("a wedged parked mission started an attempt: %v", err)
 	}
-	evs, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: id}, Env{Cap: 1, SlotsUsed: 1})
+	// Main decision: automation (fabd, native-runner, import) never clears
+	// a park; only an operator admit does.
+	if _, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: id}, Env{Cap: 4}); !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Errorf("a non-operator admit of a parked mission was accepted: %v", err)
+	}
+	evs, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: id}, Env{Cap: 1, SlotsUsed: 1, Operator: true})
 	if err != nil {
 		t.Fatalf("re-admission of a wedged parked mission refused: %v", err)
 	}
@@ -83,7 +88,32 @@ func TestOldParkLogReplaysAndCanBeReadmitted(t *testing.T) {
 	if m.Execution != domain.ExecAdmitted || m.ParkedReason != "" {
 		t.Errorf("re-admission did not clear the park: %s %q", m.Execution, m.ParkedReason)
 	}
-	if _, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: id}, Env{Cap: 4}); !errors.Is(err, domain.ErrInvalidTransition) {
+	if _, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: id}, Env{Cap: 4, Operator: true}); !errors.Is(err, domain.ErrInvalidTransition) {
 		t.Errorf("an unparked admitted mission was admitted again: %v", err)
+	}
+}
+
+// Main decision (goodqa#15082 T2): a BLOCKED parked mission is re-admitted
+// only by an operator; fabd, the native runner and the importer are refused.
+func TestParkedAdmitIsOperatorOnly(t *testing.T) {
+	for _, a := range []struct {
+		actor domain.ActorID
+		want  bool
+	}{{"chat", true}, {"op:eric", true}, {"fabd", false}, {"native-runner", false}, {"import", false}, {"asks", false}, {"op:", false}, {"chatbot", false}} {
+		if got := domain.IsOperator(a.actor); got != a.want {
+			t.Errorf("IsOperator(%q) = %v, want %v", a.actor, got, a.want)
+		}
+	}
+	m := domain.Mission{ID: "m_po", Terminal: domain.TermNone, Execution: domain.ExecBlocked, ParkedReason: "6 consecutive attempts abandoned before launch"}
+	if _, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_po"}, Env{Cap: 4}); !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Errorf("an automated admit cleared a park: %v", err)
+	}
+	evs, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_po"}, Env{Cap: 4, Operator: true})
+	if err != nil || len(evs) != 1 || Apply(m, evs[0]).ParkedReason != "" {
+		t.Errorf("an operator admit did not clear the park: %v %+v", err, evs)
+	}
+	m.ParkedReason = ""
+	if _, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_po"}, Env{Cap: 4}); err != nil {
+		t.Errorf("an automated admit of an unparked BLOCKED mission was refused: %v", err)
 	}
 }

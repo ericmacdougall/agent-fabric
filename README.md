@@ -140,6 +140,31 @@ Database text is sanitized before it is drawn: ticket text, ask questions and re
 
 `fab version` prints the build revision, the same value as `fabric_build_info`.
 
+## Operator actions
+
+Some states wait for a human on purpose. The `fab` CLI acts as the
+operator: its actor is `chat`, or `op:<name>` when `FABRIC_ACTOR` is set to
+that. Any other actor (`fabd`, `native-runner`, `import`, `asks`) is
+automation. Actors are asserted by the caller, so this separates code paths,
+not authenticated people.
+
+- **Parked missions.** After six consecutive attempts abandoned before
+  launch, a mission is parked: no attempt starts, and once nothing is live it
+  is BLOCKED and frees its slot. Only an operator clears a park:
+  `fab admit --mission <id> --key <key>`. The scheduler, the native runner and the
+  importer get exit 3 (goodqa#15082).
+- **Paused missions.** A quarantined attempt pauses its mission, which keeps
+  its slot. After checking that the quarantined runner is gone,
+  `fab unpause --mission <id> --reason '<why>' --key <key>` returns it to ADMITTED. It is
+  refused while any attempt is live or unresolved, without a reason, or for
+  a non-operator actor (goodqa#15085). An older binary refuses to write to a
+  mission whose log has a `MISSION_UNPAUSED` event, so roll back with care.
+- **Final admission.** Every launch, gated or not, rechecks the attempt's
+  fence, lease and intent revision against the database clock just before
+  the runner starts. A database error at that moment abandons the attempt
+  before launch, and it counts toward the park budget, so a database outage
+  can park missions (fail closed; re-admit them afterwards).
+
 ## Known limits (honest list)
 
 - **Linux sandbox findings are still being fixed.** A code inspection found

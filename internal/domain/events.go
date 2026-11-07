@@ -32,6 +32,9 @@ const (
 	// AC-6 (R6): a live_test receipt for the deployed commit, then done.
 	CmdRecordLiveTest  CommandKind = "RECORD_LIVE_TEST"
 	CmdCompleteMission CommandKind = "COMPLETE_MISSION"
+	// goodqa#15085: an operator ends a quarantine pause once no attempt is
+	// live or unresolved, with a recorded reason.
+	CmdUnpauseMission CommandKind = "UNPAUSE_MISSION"
 )
 
 // Command is one request to change a mission. The fields used depend on Kind;
@@ -112,6 +115,8 @@ const (
 	// AC-6: the deployed commit passed a live test; the mission is done.
 	EvLiveVerified     EventKind = "LIVE_VERIFIED"
 	EvMissionSucceeded EventKind = "MISSION_SUCCEEDED"
+	// goodqa#15085: PAUSED -> ADMITTED by an operator.
+	EvMissionUnpaused EventKind = "MISSION_UNPAUSED"
 )
 
 // knownEventKinds is every kind this build's reducer interprets. A new kind
@@ -123,7 +128,7 @@ var knownEventKinds = map[EventKind]bool{
 	EvWakeAcked: true, EvMissionResumed: true, EvEffectSubmitted: true, EvEffectUnknown: true,
 	EvEffectResubmitted: true, EvEffectResolved: true, EvMissionReleased: true, EvAcceptanceRevoked: true,
 	EvClaimRefused: true, EvDispatchDeferred: true, EvMissionParked: true,
-	EvLiveVerified: true, EvMissionSucceeded: true,
+	EvLiveVerified: true, EvMissionSucceeded: true, EvMissionUnpaused: true,
 }
 
 // KnownEventKinds lists the kinds this build interprets, sorted.

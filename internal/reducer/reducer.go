@@ -25,6 +25,11 @@ type Env struct {
 	// UnsettledEffects: COMPLETE_MISSION only, the mission's broker effects
 	// that are DISPATCHED, UNKNOWN, RECONCILING or QUARANTINED (review N1).
 	UnsettledEffects int
+	// Operator: the command comes from a human operator (domain.IsOperator),
+	// not from fabd, the native runner or the importer. Only an operator
+	// clears a park (goodqa#15082 T2, main decision: the park after a run of
+	// prelaunch failures is for a human to look at).
+	Operator bool
 }
 
 // Decide returns the events a command produces, or a refusal. A refusal is a
@@ -89,6 +94,9 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 
 	switch cmd.Kind {
 	case domain.CmdAdmitMission:
+		if m.ParkedReason != "" && !env.Operator {
+			return nil, fmt.Errorf("%w: mission is parked (%s); only an operator may re-admit it", domain.ErrInvalidTransition, m.ParkedReason)
+		}
 		if parkedIdle(m) {
 			// goodqa#15082 T2: a park recorded while another attempt was
 			// live (or before this fix, never applied) leaves a slot-holding
@@ -103,6 +111,25 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 			return nil, fmt.Errorf("%w: %d of %d slots held", domain.ErrOverCapacity, env.SlotsUsed, env.Cap)
 		}
 		return []domain.Event{ev(domain.EvMissionAdmitted)}, nil
+
+	case domain.CmdUnpauseMission:
+		// goodqa#15085: PAUSED had no exit. Only an operator resumes it, with
+		// a reason, and only when no attempt is live or unresolved; the
+		// quarantined attempt stays QUARANTINED (the operator attests that
+		// its runner is gone). The mission keeps the slot it already holds.
+		switch {
+		case !env.Operator:
+			return nil, fmt.Errorf("%w: only an operator may unpause a mission", domain.ErrInvalidTransition)
+		case m.Execution != domain.ExecPaused:
+			return nil, fmt.Errorf("%w: unpause while %s", domain.ErrInvalidTransition, m.Execution)
+		case m.LiveAttempts() != 0 || m.UnresolvedAttempts() != 0:
+			return nil, fmt.Errorf("%w: an attempt is live or unresolved", domain.ErrInvalidTransition)
+		case cmd.Reason == "":
+			return nil, fmt.Errorf("%w: unpause needs a reason", domain.ErrInvalidTransition)
+		}
+		e := ev(domain.EvMissionUnpaused)
+		e.Reason = cmd.Reason
+		return []domain.Event{e}, nil
 
 	case domain.CmdReviseIntent:
 		e := ev(domain.EvIntentRevised)
@@ -741,6 +768,10 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		s.Wakes[e.Token] = true
 	case domain.EvWakeAcked:
 		delete(s.Wakes, e.Token)
+	case domain.EvMissionUnpaused:
+		if s.Execution == domain.ExecPaused {
+			s.Execution = domain.ExecAdmitted
+		}
 	case domain.EvMissionResumed:
 		if s.Execution == domain.ExecWaiting {
 			s.Execution = domain.ExecAdmitted

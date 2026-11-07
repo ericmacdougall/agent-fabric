@@ -36,7 +36,7 @@ func main() {
 		err = providerMain(os.Args[2:])
 	case "mission":
 		err = missionMain(os.Args[2:])
-	case "admit", "release", "wake", "done":
+	case "admit", "release", "wake", "done", "unpause":
 		err = simpleCommand(os.Args[1], os.Args[2:])
 	case "live-test":
 		err = liveTestMain(os.Args[2:])
@@ -102,6 +102,7 @@ func usage() {
   db capacity --resource R --unit U --capacity N   set a dispatch-gate resource
   mission new|list                     register / list missions
   admit|release|wake --mission M [--token T] --key K
+  unpause --mission M --reason R --key K   (operator only)
   live-test --mission M --commit C --generation G --host H --target URL --receipt R --key K
                                        record a live_test receipt for the deployed commit (AC-6)
   done --mission M --key K             close a mission; refused without a live_test receipt (AC-6)
@@ -228,11 +229,12 @@ func simpleCommand(name string, args []string) error {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	mission := fs.String("mission", "", "mission id")
 	token := fs.String("token", "", "wake token (wake only)")
+	reason := fs.String("reason", "", "why (unpause only; required)")
 	key := fs.String("key", "", "idempotency key")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cmd := domain.Command{Mission: domain.MissionID(*mission), Token: *token}
+	cmd := domain.Command{Mission: domain.MissionID(*mission), Token: *token, Reason: *reason}
 	switch name {
 	case "admit":
 		cmd.Kind = domain.CmdAdmitMission
@@ -242,6 +244,8 @@ func simpleCommand(name string, args []string) error {
 		cmd.Kind = domain.CmdWake
 	case "done":
 		cmd.Kind = domain.CmdCompleteMission
+	case "unpause":
+		cmd.Kind = domain.CmdUnpauseMission
 	}
 	return withStore(func(ctx context.Context, st *store.Store) error {
 		resp, err := execute(ctx, st, actor(), *key, cmd)
