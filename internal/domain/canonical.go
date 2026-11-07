@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // CanonicalJSON re-serialises a JSON document with object keys sorted, no
@@ -30,6 +31,11 @@ func CanonicalJSON(raw []byte) ([]byte, error) {
 	}
 	if dec.More() {
 		return nil, fmt.Errorf("%w: trailing data after the JSON request", ErrInvalidTransition)
+	}
+	if n := nonCanonicalNumber(v); n != "" {
+		// Red-team F3: storage (jsonb) re-renders such a number (1e2 as 100,
+		// -0 as 0), so a hash of the literal would never match the stored row.
+		return nil, fmt.Errorf("%w: number %s is not in canonical form (no exponent, no negative zero)", ErrInvalidTransition, n)
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -66,4 +72,29 @@ func EffectBase(kind string, request []byte) (string, error) {
 // itself says "the second identical ticket comment of this mission".
 func EffectIDFor(base string, occurrence int) EffectID {
 	return EffectID(fmt.Sprintf("e_%s_%d", base[:24], occurrence))
+}
+
+// nonCanonicalNumber returns the first number literal that jsonb would
+// render differently: one with an exponent, or a negative zero.
+func nonCanonicalNumber(v any) string {
+	switch x := v.(type) {
+	case json.Number:
+		n := string(x)
+		if strings.ContainsAny(n, "eE") || (strings.HasPrefix(n, "-") && strings.Trim(n[1:], "0.") == "") {
+			return n
+		}
+	case map[string]any:
+		for _, e := range x {
+			if n := nonCanonicalNumber(e); n != "" {
+				return n
+			}
+		}
+	case []any:
+		for _, e := range x {
+			if n := nonCanonicalNumber(e); n != "" {
+				return n
+			}
+		}
+	}
+	return ""
 }

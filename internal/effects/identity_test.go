@@ -53,6 +53,8 @@ func TestReplayBindsWholeIntent(t *testing.T) {
 		"attempt": func(s *IntentSpec) { s.Attempt = "r_other" },
 		"fence":   func(s *IntentSpec) { s.Fence = 2 },
 		"request": func(s *IntentSpec) { s.Request = json.RawMessage(`{"ticket": "goodqa#0", "body": "changed"}`) },
+		// Red-team F6: a rerun with --approve must not replay an unapproved intent.
+		"approval": func(s *IntentSpec) { s.NeedsApproval = true },
 	} {
 		s := spec("ki2", "hello")
 		mod(&s)
@@ -94,5 +96,31 @@ func TestStaleReceiptDoesNotSettleLaterDispatch(t *testing.T) {
 	}
 	if got.State != Dispatched || got.Dispatches != 2 {
 		t.Fatalf("a receipt from dispatch 1 settled dispatch %d: state %s", got.Dispatches, got.State)
+	}
+}
+
+// Red-team F3: a number that jsonb re-renders (1e2 as 100) would make the
+// stored request disagree with its hash forever and burn the key. It is
+// refused at intake, before anything is stored; the canonical form works.
+func TestNonCanonicalNumberRefusedAtIntake(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	s := spec("ki5", "n")
+	for _, lit := range []string{"1e2", "1E2", "-0", "-0.0", "2.5e-1"} {
+		s.Request = json.RawMessage(`{"ticket": "goodqa#0", "body": "n", "n": ` + lit + `}`)
+		if _, err := b.Submit(ctx, fake, s); !errors.Is(err, domain.ErrInvalidTransition) {
+			t.Errorf("%s: want refused at intake, got %v", lit, err)
+		}
+	}
+	var n int
+	if err := st.Pool().QueryRow(ctx, "SELECT count(*) FROM effects WHERE idem_key = 'ki5'").Scan(&n); err != nil || n != 0 {
+		t.Fatalf("a refused request was stored: %d rows %v", n, err)
+	}
+	s.Request = json.RawMessage(`{"ticket": "goodqa#0", "body": "n", "n": 100, "x": 1.50, "y": -3}`)
+	e, err := b.Submit(ctx, fake, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, err = b.Dispatch(ctx, fake, e.ID); err != nil || e.State != Confirmed {
+		t.Fatalf("canonical numbers did not dispatch: %s %v", e.State, err)
 	}
 }

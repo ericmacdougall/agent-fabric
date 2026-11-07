@@ -167,7 +167,8 @@ func (b *Broker) Submit(ctx context.Context, exec Executor, spec IntentSpec) (Ef
 	existing, err := b.loadTx(ctx, tx, "idem_key", spec.IdemKey)
 	if err == nil {
 		if existing.RequestSHA != base || existing.Mission != spec.Mission || existing.Attempt != spec.Attempt ||
-			existing.Fence != spec.Fence || existing.Kind != spec.Kind || existing.Subject != spec.Subject {
+			existing.Fence != spec.Fence || existing.Kind != spec.Kind || existing.Subject != spec.Subject ||
+			existing.neededApproval() != spec.NeedsApproval {
 			return Effect{}, fmt.Errorf("%w: effect key %s", domain.ErrIdempotencyConflict, spec.IdemKey)
 		}
 		existing.Replayed = true
@@ -212,6 +213,12 @@ func liveFence(ctx context.Context, tx pgx.Tx, attempt domain.AttemptID, fence i
 		return fmt.Errorf("%w: attempt %s is %s", domain.ErrInvalidTransition, attempt, state)
 	}
 	return nil
+}
+
+// neededApproval reports whether the effect was submitted as needing an
+// approval: it is waiting for one, or one was recorded (red-team F6).
+func (e Effect) neededApproval() bool {
+	return e.State == ApprovalRequired || e.ApprovalSHA != ""
 }
 
 // Approve binds an approval to the exact request hash (AC-17): a changed
