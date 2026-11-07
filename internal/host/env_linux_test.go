@@ -21,6 +21,20 @@ func TestLinuxEnvOverrideAndKeep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Inspection 6355639 F1: without --expand-environment=no the manager
+	// substitutes $VAR in the worker argv from its own environment.
+	expandOff := false
+	for _, a := range args {
+		if a == "__sandbox" {
+			break
+		}
+		if a == "--expand-environment=no" {
+			expandOff = true
+		}
+	}
+	if !expandOff {
+		t.Fatalf("systemd-run args %q lack --expand-environment=no before the command", args)
+	}
 	want := map[string]string{"FAB_RUN": g.Token, "LANG": "fabric-lang", "CLAUDE_CONFIG_DIR": "/run/x/claude-config", "FAB_MISSION": "m_1"}
 	got := map[string][]string{}
 	var keep string

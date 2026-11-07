@@ -91,7 +91,12 @@ func unitName(run string) string {
 // and `fab __sandbox --env-keep` execs the worker with only those names,
 // so nothing the worker user's systemd manager holds reaches it.
 func (l *Linux) startArgs(g Grant, unit string, argv, env []string) ([]string, error) {
-	args := []string{"--user", "--pipe", "--wait", "--collect", "--quiet", "--unit", unit,
+	// --expand-environment=no: otherwise the manager substitutes $VAR,
+	// ${VAR} and $$ in every argv element (the prompt included) from the
+	// unit's full environment before __sandbox filters it (inspection
+	// 6355639 F1). A systemd older than 254 rejects the flag, so the start
+	// fails closed rather than expanding.
+	args := []string{"--user", "--pipe", "--wait", "--collect", "--quiet", "--expand-environment=no", "--unit", unit,
 		"--working-directory=" + g.Worktree, "-p", "KillMode=control-group"}
 	for _, p := range []struct{ k, v string }{{"MemoryMax", l.MemoryMax}, {"CPUQuota", l.CPUQuota}, {"TasksMax", l.TasksMax}} {
 		if p.v != "" {

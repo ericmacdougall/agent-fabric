@@ -187,17 +187,31 @@ names. The worker is a static fab (`CGO_ENABLED=0`, see Deploying).
 
 A claude-code launch always passes `--setting-sources ""`, so no user or
 project settings load. The `--settings` file may hold only `permissions`,
-`hooks` and `model`. Each hook must be a single absolute path that resolves
-inside `FABRIC_HOOKS_DIR`. The worker user must be unable to write the hooks
-directory, each hook, and every directory above them: one that is owned by
-the worker, or writable by group or others (unless it is sticky and owned
-by root, like `/tmp`), refuses the launch. Managed settings apply whatever
+`hooks` and `model`, and each hook only `type: command`, `command` and
+`timeout` (keys are matched exactly, as Claude Code reads them). Each hook
+command must be a single absolute path under `FABRIC_HOOKS_DIR`, both as
+written and once symlinks are resolved. The worker user must be unable to
+change the settings file, the hooks directory, each hook, or any directory
+or symlink on the way to them: a file or directory owned by the worker or
+writable by group or others (a directory may be writable only if it is
+sticky and owned by root, like `/tmp`), or a symlink not owned by root or
+fabric, refuses the launch. This matters because Claude Code reloads an
+edited settings file in a running session. Managed settings apply whatever
 `--setting-sources` says, so fabric also reads `managed-settings.json`,
 every `managed-settings.d/*.json` and `managed-mcp.json` under
 `/etc/claude-code` (Linux) or `/Library/Application Support/ClaudeCode`
-(macOS). An env block or a credential or command helper in any of them, an
-env block on a managed MCP server, or a file that cannot be read or parsed
-refuses the launch. A missing file is fine.
+(macOS). Any of these refuses the launch: an env block; a credential or
+command helper (including `policyHelper`, `processWrapper` and the
+`sandbox` binary paths); managed hooks, plugins or MCP servers (a managed
+MCP server would inherit the worker's `FABRIC_DSN`); or a file that cannot
+be read or parsed. A missing file is fine. The macOS managed-preferences
+profile and server-managed settings are not read; both are controlled by
+the machine's or organisation's administrators.
+
+On Linux, workers start with `systemd-run --expand-environment=no`, so the
+user manager never substitutes `$VAR` in a worker's arguments (a prompt
+included). That flag needs systemd 254 or later; an older systemd rejects
+it and the start fails.
 
 ### Upgrades in lockstep
 
@@ -323,7 +337,10 @@ Go 1.22, `pgx/v5` and `x/sys` only.
    version` prints the commit's 12-character prefix; refuse to install a
    build that fails any of these, prints `devel` or ends in `-dirty`. We observed a build from a `git worktree` checkout
    (Go 1.22.2) print `devel`; the version check catches it either way.
-3. Stop anything using the database, then run `fab migrate` as the owner.
+3. Stop anything using the database, fabd included, before installing the
+   new binary (a running fabd launches workers through the installed `fab`,
+   and an old fabd with a new `fab` fails every start), then run
+   `fab migrate` as the owner.
 4. Run `fab db roles` as the owner after every migration, with the same
    password files, so the app and runner roles are granted the new tables;
    without it the app role gets `permission denied` (SQLSTATE 42501).
