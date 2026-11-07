@@ -3822,7 +3822,7 @@
   "invariant": "publish_cas",
   "pkg": "./internal/effects",
   "file": "internal/effects/publish.go",
-  "expect": "TestPublishBindsDestination",
+  "expect": "TestPublishEnvAllowListed",
   "edits": [
    [
     "\"GIT_CONFIG_GLOBAL=/dev/null\", ",
