@@ -109,6 +109,10 @@ type Receipt struct {
 	Outcome Outcome         `json:"outcome"`
 	Detail  string          `json:"detail,omitempty"`
 	Remote  json.RawMessage `json:"remote,omitempty"` // e.g. the comment id returned
+	// Dispatch is the dispatch number this receipt settles, stamped by the
+	// broker; the 0021 guard requires it so an earlier receipt cannot be
+	// reused to settle a later dispatch.
+	Dispatch int `json:"dispatch,omitempty"`
 }
 
 // Observation is the result of a token-free readback.
@@ -357,6 +361,7 @@ func (b *Broker) settle(ctx context.Context, id string, dispatch int, rc Receipt
 	default:
 		state = Unknown
 	}
+	rc.Dispatch = dispatch
 	rcJSON, _ := json.Marshal(rc)
 	if _, err := b.pool.Exec(ctx, `UPDATE effects SET state = $2, receipt = $3, last_error = $4, updated_at = now() WHERE id = $1 AND state = $5 AND dispatches = $6`,
 		id, string(state), rcJSON, rc.Detail, string(Dispatched), dispatch); err != nil {

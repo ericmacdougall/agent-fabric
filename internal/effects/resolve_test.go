@@ -150,7 +150,7 @@ func TestAppRoleCannotBypassEffectOutcomes(t *testing.T) {
 				"NOT_APPLIED":     {"DISPATCHED", "UNKNOWN", "RECONCILING", "NOT_APPLIED"},
 				"FAILED_DEFINITE": {"DISPATCHED", "FAILED_DEFINITE"},
 			}[state] {
-				if _, err := st.Pool().Exec(ctx, "UPDATE effects SET receipt = CASE WHEN state = 'DISPATCHED' AND $2::text IN ('CONFIRMED', 'FAILED_DEFINITE') THEN jsonb_build_object('outcome', $2::text) ELSE receipt END, state = $2, dispatches = dispatches + CASE WHEN $2 = 'DISPATCHED' THEN 1 ELSE 0 END WHERE id = $1", e.ID, s); err != nil {
+				if _, err := st.Pool().Exec(ctx, "UPDATE effects SET receipt = CASE WHEN state = 'DISPATCHED' AND $2::text IN ('CONFIRMED', 'FAILED_DEFINITE') THEN jsonb_build_object('outcome', $2::text, 'dispatch', dispatches) ELSE receipt END, state = $2, dispatches = dispatches + CASE WHEN $2 = 'DISPATCHED' THEN 1 ELSE 0 END WHERE id = $1", e.ID, s); err != nil {
 					t.Fatalf("fixture %s -> %s: %v", key, s, err)
 				}
 			}
@@ -616,12 +616,8 @@ func TestStaleDispatchedRecovers(t *testing.T) {
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)
-	crash := func(key string) Effect {
+	crashOf := func(e Effect) Effect {
 		t.Helper()
-		e, err := b.Submit(ctx, fake, uspec(key))
-		if err != nil {
-			t.Fatal(err)
-		}
 		b.afterTransport = func(Effect, Receipt) { panic("crash after transport") }
 		func() {
 			defer func() { recover() }() //nolint:errcheck
@@ -630,14 +626,37 @@ func TestStaleDispatchedRecovers(t *testing.T) {
 		b.afterTransport = nil
 		e, _ = b.Load(ctx, e.ID)
 		if e.State != Dispatched {
-			t.Fatalf("setup %s: %s", key, e.State)
+			t.Fatalf("setup %s: %s", e.IdemKey, e.State)
 		}
 		return e
 	}
+	crash := func(key string) Effect {
+		t.Helper()
+		e, err := b.Submit(ctx, fake, uspec(key))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return crashOf(e)
+	}
 	e := crash("t1a")
 	f := crash("t1b")
-	if fake.Count() != 2 {
-		t.Fatalf("remote writes %d, want 2", fake.Count())
+	// One that failed definitely and was retried still carries that
+	// receipt while DISPATCHED; reusing it is not a new outcome.
+	fake.Reject = true
+	g, err := b.Submit(ctx, fake, uspec("t1c"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g, err = b.Dispatch(ctx, fake, g.ID); err != nil || g.State != FailedDefinite {
+		t.Fatalf("setup t1c: %s %v", g.State, err)
+	}
+	fake.Reject = false
+	if g, err = b.Retry(ctx, g.ID); err != nil {
+		t.Fatal(err)
+	}
+	g = crashOf(g)
+	if fake.Count() != 3 {
+		t.Fatalf("remote writes %d, want 3", fake.Count())
 	}
 	// While the attempt is live the dispatcher may still settle it.
 	if _, err := ab.Reconcile(ctx, fake, e.ID); !errors.Is(err, ErrNotReconcilable) {
@@ -653,23 +672,26 @@ func TestStaleDispatchedRecovers(t *testing.T) {
 	for _, q := range []string{
 		"UPDATE effects SET state = 'FAILED_DEFINITE' WHERE id = $1",
 		"UPDATE effects SET state = 'CONFIRMED' WHERE id = $1",
-		`UPDATE effects SET state = 'FAILED_DEFINITE', receipt = '{"outcome":"CONFIRMED"}' WHERE id = $1`,
+		`UPDATE effects SET state = 'FAILED_DEFINITE', receipt = '{"outcome":"CONFIRMED","dispatch":1}' WHERE id = $1`,
 	} {
 		if _, err := ab.pool.Exec(ctx, q, f.ID); err == nil {
 			t.Errorf("raw settle accepted: %s", q)
 		}
 	}
-	ids, err := ab.Unresolved(ctx, 0, 10)
-	if err != nil || len(ids) != 2 {
-		t.Fatalf("unresolved after the attempt ended: %v %v, want both", ids, err)
+	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET state = 'FAILED_DEFINITE' WHERE id = $1", g.ID); err == nil {
+		t.Error("raw settle reusing the previous FAILED_DEFINITE receipt accepted")
 	}
-	for _, id := range []string{e.ID, f.ID} {
+	ids, err := ab.Unresolved(ctx, 0, 10)
+	if err != nil || len(ids) != 3 {
+		t.Fatalf("unresolved after the attempt ended: %v %v, want all three", ids, err)
+	}
+	for _, id := range []string{e.ID, f.ID, g.ID} {
 		got, err := ab.Reconcile(ctx, fake, id)
 		if err != nil || got.State != Confirmed {
 			t.Errorf("reconcile of stale %s: %+v %v", id, got, err)
 		}
 	}
-	if fake.Count() != 2 {
+	if fake.Count() != 3 {
 		t.Fatalf("recovery sent again: remote writes %d", fake.Count())
 	}
 }

@@ -1,7 +1,9 @@
 -- Review T1/T2 on e35d78e, in addition to 0020's effects guard (published, so
 -- not edited). A separate trigger, named to fire after effects_zz_outcome_guard.
---   T1: DISPATCHED settles to CONFIRMED or FAILED_DEFINITE only with a new
---       receipt whose outcome says so, which only the dispatcher writes. A
+--   T1: DISPATCHED settles to CONFIRMED or FAILED_DEFINITE only with a
+--       receipt for this dispatch (receipt.dispatch = dispatches, stamped by
+--       Broker.settle) whose outcome says so. A retried row still carries its
+--       earlier receipt, which names an earlier dispatch. A
 --       crash-left DISPATCHED row cannot be relabelled FAILED_DEFINITE and
 --       sent again; it leaves by UNKNOWN and a readback (Broker.Reconcile
 --       once its attempt is no longer live).
@@ -11,9 +13,9 @@ CREATE FUNCTION fabric_effects_settle_guard() RETURNS trigger LANGUAGE plpgsql
 SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
     IF OLD.state = 'DISPATCHED' AND NEW.state IN ('CONFIRMED', 'FAILED_DEFINITE')
-       AND (NEW.receipt IS NULL OR NEW.receipt IS NOT DISTINCT FROM OLD.receipt
+       AND (NEW.receipt->>'dispatch' IS DISTINCT FROM NEW.dispatches::text
             OR NEW.receipt->>'outcome' IS DISTINCT FROM NEW.state) THEN
-        RAISE EXCEPTION 'effect % may settle % only with a new receipt saying so', NEW.id, NEW.state
+        RAISE EXCEPTION 'effect % may settle % only with a receipt for dispatch % saying so', NEW.id, NEW.state, NEW.dispatches
             USING ERRCODE = 'check_violation';
     END IF;
     IF OLD.state = 'NOT_APPLIED' AND NEW.state IS DISTINCT FROM 'NOT_APPLIED' AND EXISTS (

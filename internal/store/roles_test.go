@@ -175,7 +175,7 @@ func TestRunnerCannotApproveEffects(t *testing.T) {
 			('e_ok', 'm_ap', 'r_ap_1', 1, 'comment', 's4', 'k_ok', '{}', 'sha', 'APPROVAL_REQUIRED')`,
 		"UPDATE effects SET state = 'APPROVED', approval_sha = 'sha', approved_by = 'eric' WHERE id = 'e_ok'",
 		"UPDATE effects SET state = 'DISPATCHED', dispatches = dispatches + 1 WHERE id IN ('e_ap3', 'e_ok')",
-		`UPDATE effects SET state = 'FAILED_DEFINITE', receipt = '{"outcome": "FAILED_DEFINITE"}' WHERE id IN ('e_ap3', 'e_ok')`,
+		`UPDATE effects SET state = 'FAILED_DEFINITE', receipt = '{"outcome": "FAILED_DEFINITE", "dispatch": 1}' WHERE id IN ('e_ap3', 'e_ok')`,
 	} {
 		if _, err := owner.pool.Exec(ctx, q); err != nil {
 			t.Fatalf("fixture %q: %v", q, err)

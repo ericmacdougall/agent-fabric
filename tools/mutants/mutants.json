@@ -3235,5 +3235,109 @@
     "        WHEN 'INTENT'            THEN NEW.state IN ('DISPATCHED', 'FAILED_DEFINITE', 'NOT_APPLIED', 'CONFIRMED')"
    ]
   ]
+ },
+ {
+  "id": "M251_settle_any_dispatch",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0021_effect_settle_guard.sql",
+  "expect": "TestStaleDispatchedRecovers",
+  "edits": [
+   [
+    "       AND (NEW.receipt->>'dispatch' IS DISTINCT FROM NEW.dispatches::text\n            OR NEW.receipt",
+    "       AND (NEW.receipt"
+   ]
+  ]
+ },
+ {
+  "id": "M252_settle_outcome_mismatch",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0021_effect_settle_guard.sql",
+  "expect": "TestStaleDispatchedRecovers",
+  "edits": [
+   [
+    "            OR NEW.receipt->>'outcome' IS DISTINCT FROM NEW.state) THEN",
+    "            ) THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M253_abandon_not_final",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0021_effect_settle_guard.sql",
+  "expect": "TestAbandonStrandedIntent",
+  "edits": [
+   [
+    "        RAISE EXCEPTION 'effect % was abandoned and is final', NEW.id USING ERRCODE = 'check_violation';",
+    "        NULL;"
+   ]
+  ]
+ },
+ {
+  "id": "M254_reconcile_no_stale_mark",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestStaleDispatchedRecovers",
+  "edits": [
+   [
+    "\tif err := b.markStaleDispatched(ctx, id); err != nil {\n\t\treturn Effect{}, err\n\t}\n\ttag, err",
+    "\ttag, err"
+   ]
+  ]
+ },
+ {
+  "id": "M255_stale_ignores_live",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestStaleDispatchedRecovers",
+  "edits": [
+   [
+    "\tAND a.state IN ('ADMITTED', 'LEASED', 'PREPARING', 'RUNNING'))`",
+    "\tAND a.state IN ('NONE'))`"
+   ]
+  ]
+ },
+ {
+  "id": "M256_unresolved_skips_dispatched",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestStaleDispatchedRecovers",
+  "edits": [
+   [
+    "(state IN ($1, $2) OR (state = $5 AND `+staleAttempt+`))",
+    "(state IN ($1, $2) OR ($5 = '' AND `+staleAttempt+`))"
+   ]
+  ]
+ },
+ {
+  "id": "M257_retry_ignores_abandon",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestAbandonStrandedIntent",
+  "edits": [
+   [
+    "\tif abandoned {\n\t\treturn Effect{}, fmt.Errorf(",
+    "\tif false && abandoned {\n\t\treturn Effect{}, fmt.Errorf("
+   ]
+  ]
+ },
+ {
+  "id": "M258_settle_unstamped",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestDefiniteRejectRetriesWithSameKey",
+  "edits": [
+   [
+    "\trc.Dispatch = dispatch\n",
+    ""
+   ]
+  ]
  }
 ]

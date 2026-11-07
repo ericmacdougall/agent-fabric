@@ -98,7 +98,7 @@ func TestDoneCountsBrokerEffects(t *testing.T) {
 					t.Fatal(err)
 				}
 				for _, s := range path[state] {
-					if _, err := st.pool.Exec(ctx, `UPDATE effects SET receipt = CASE WHEN state = 'DISPATCHED' AND $2::text IN ('CONFIRMED', 'FAILED_DEFINITE') THEN jsonb_build_object('outcome', $2::text) ELSE receipt END, state = $2, dispatches = dispatches + CASE WHEN $2 = 'DISPATCHED' THEN 1 ELSE 0 END,
+					if _, err := st.pool.Exec(ctx, `UPDATE effects SET receipt = CASE WHEN state = 'DISPATCHED' AND $2::text IN ('CONFIRMED', 'FAILED_DEFINITE') THEN jsonb_build_object('outcome', $2::text, 'dispatch', dispatches) ELSE receipt END, state = $2, dispatches = dispatches + CASE WHEN $2 = 'DISPATCHED' THEN 1 ELSE 0 END,
 						approval_sha = CASE WHEN $2 = 'APPROVED' THEN request_sha ELSE approval_sha END,
 						approved_by = CASE WHEN $2 = 'APPROVED' THEN 'eric' ELSE approved_by END WHERE id = $1`, id, s); err != nil {
 						t.Fatalf("fixture %s -> %s: %v", id, s, err)

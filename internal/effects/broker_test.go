@@ -282,6 +282,12 @@ func TestDefiniteRejectRetriesWithSameKey(t *testing.T) {
 	if e.State != FailedDefinite || fake.Count() != 0 {
 		t.Fatalf("want FAILED_DEFINITE with no write, got %s remote=%d", e.State, fake.Count())
 	}
+	// A second identical rejection after a retry still settles (the 0021
+	// settle guard must not mistake an equal receipt for a reused one).
+	e, _ = b.Retry(ctx, e.ID)
+	if e, _ = b.Dispatch(ctx, fake, e.ID); e.State != FailedDefinite || fake.Count() != 0 {
+		t.Fatalf("second reject: want FAILED_DEFINITE, got %s remote=%d", e.State, fake.Count())
+	}
 	fake.Reject = false
 	e, _ = b.Retry(ctx, e.ID)
 	e, err := b.Dispatch(ctx, fake, e.ID)
