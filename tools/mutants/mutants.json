@@ -3731,7 +3731,7 @@
   "invariant": "publish_cas",
   "pkg": "./internal/effects",
   "file": "internal/effects/publish.go",
-  "expect": "TestPublishGitHelpersDisabled",
+  "expect": "TestPublishEnvAllowListed",
   "edits": [
    [
     "\t\"-c\", \"core.hooksPath=/dev/null\",\n",
@@ -3866,6 +3866,84 @@
    [
     "if p.AllowLocal && filepath.Clean(s) == s {",
     "if filepath.Clean(s) == s {"
+   ]
+  ]
+ },
+ {
+  "id": "M301_publish_no_mirror",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishConfigFlipAfterBind",
+  "edits": [
+   [
+    "return r, m, cleanup, err",
+    "_ = m\n\treturn r, dir, cleanup, err"
+   ]
+  ]
+ },
+ {
+  "id": "M302_publish_no_post_push_readback",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishConfirmNeedsReadback",
+  "edits": [
+   [
+    "err != nil || !found || head != r.NewHead {",
+    "false {"
+   ]
+  ]
+ },
+ {
+  "id": "M303_publish_ssh_unpinned",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishSSHURLs",
+  "edits": [
+   [
+    "func (p *Publish) sshReady() error {",
+    "func (p *Publish) sshReady() error {\n\treturn nil"
+   ]
+  ]
+ },
+ {
+  "id": "M304_publish_ssh_user_dash",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishSSHURLs",
+  "edits": [
+   [
+    "if strings.HasPrefix(u.User.Username(), \"-\") {",
+    "if false {"
+   ]
+  ]
+ },
+ {
+  "id": "M305_publish_ssh_config_read",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishEnvAllowListed",
+  "edits": [
+   [
+    "\"ssh -F /dev/null -o BatchMode=yes",
+    "\"ssh -o BatchMode=yes"
+   ]
+  ]
+ },
+ {
+  "id": "M306_publish_gpgsign_on",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishEnvAllowListed",
+  "edits": [
+   [
+    "\t\"-c\", \"push.gpgSign=false\",\n",
+    ""
    ]
   ]
  }

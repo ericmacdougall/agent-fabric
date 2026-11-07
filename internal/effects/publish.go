@@ -58,6 +58,7 @@ type Publish struct {
 	Root       string // every repository must be strictly inside it; empty refuses all
 	Git        string // the git binary; default "git"
 	AllowLocal bool   // allow an absolute-path (file transport) URL; tests only
+	KnownHosts string // pinned known_hosts file for ssh URLs
 }
 
 type publishRequest struct {
@@ -71,7 +72,7 @@ type publishRequest struct {
 var (
 	objectNameRE = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 	branchNameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$`)
-	scpURLRE     = regexp.MustCompile(`^[A-Za-z0-9._-]+@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9._~/-]+$`)
+	scpURLRE     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9._~/-]+$`)
 	urlPathRE    = regexp.MustCompile(`^/[A-Za-z0-9._~/-]+$`)
 )
 
@@ -92,14 +93,24 @@ var gitSafety = []string{
 	"-c", "protocol.https.allow=always",
 	"-c", "push.recurseSubmodules=no",
 	"-c", "push.followTags=false",
+	"-c", "push.gpgSign=false",
 }
 
-// riskyConfig matches effective configuration keys that could redirect the
-// push or the readback, or run a helper; a repository with any is refused.
-const riskyConfig = `^(url\..*|credential\..*|include\..*|includeif\..*|core\.(askpass|gitproxy|sshcommand|worktree|alternaterefscommand)|http\..*(proxy|sslverify|sslcainfo|sslcapath|sslcert|sslkey|cookiefile))$`
+// riskyConfig matches configuration keys that could redirect the push or
+// the readback, or run a helper; a repository with any is refused. Since
+// review N1 on 4571d10 the transport never reads the repository's config
+// (see mirror), so this is a second layer that fails closed.
+const riskyConfig = `^(url\..*|credential\..*|include\..*|includeif\..*|http\..*|core\.(askpass|gitproxy|sshcommand|worktree|alternaterefscommand))$`
 
-// gitSSH keeps ssh from leaving a master connection behind.
-const gitSSH = "ssh -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -o ControlPersist=no"
+// gitSSH reads no ssh config file (review N2: ssh finds ~/.ssh/config by
+// the passwd entry, not $HOME), never leaves a master connection behind,
+// and checks host keys strictly against the pinned file only.
+const gitSSH = "ssh -F /dev/null -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -o ControlPersist=no" +
+	" -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null -o UserKnownHostsFile="
+
+// knownHostsRE keeps the pinned file's path safe inside GIT_SSH_COMMAND,
+// which git runs through a shell.
+var knownHostsRE = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
 
 // gitEnvKeep is the allow-list of inherited variables.
 var gitEnvKeep = map[string]bool{"PATH": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true, "TMPDIR": true, "SSH_AUTH_SOCK": true}
@@ -160,7 +171,7 @@ func (p *Publish) validURL(s string) error {
 		return bad
 	}
 	if scpURLRE.MatchString(s) {
-		return nil
+		return p.sshReady()
 	}
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" || strings.HasPrefix(u.Host, "-") || u.RawQuery != "" || u.Fragment != "" || !urlPathRE.MatchString(u.Path) {
@@ -175,8 +186,23 @@ func (p *Publish) validURL(s string) error {
 		if _, has := u.User.Password(); has {
 			return errors.New("publish: an ssh url must not carry a password")
 		}
+		if strings.HasPrefix(u.User.Username(), "-") {
+			return bad // review N4: never an ssh option
+		}
+		return p.sshReady()
 	default:
 		return bad
+	}
+	return nil
+}
+
+// sshReady requires a pinned known_hosts file for an ssh URL (review N2).
+func (p *Publish) sshReady() error {
+	if p.KnownHosts == "" {
+		return errors.New("publish: an ssh url needs a pinned known_hosts file (Publish.KnownHosts)")
+	}
+	if !knownHostsRE.MatchString(p.KnownHosts) || filepath.Clean(p.KnownHosts) != p.KnownHosts {
+		return fmt.Errorf("publish: known_hosts path %q must be an absolute clean plain path", p.KnownHosts)
 	}
 	return nil
 }
@@ -230,19 +256,20 @@ func (p *Publish) repoDir(repo string) (string, error) {
 
 // bind checks, before any transport, that the repository's git dir and
 // common dir are inside Root, that it borrows no objects from elsewhere,
-// and that no configuration could redirect or wrap the transport.
-func (p *Publish) bind(ctx context.Context, dir string) error {
+// and that no configuration could redirect or wrap the transport. It
+// returns the resolved object directory.
+func (p *Publish) bind(ctx context.Context, dir string) (string, error) {
 	root, err := filepath.EvalSymlinks(p.Root)
 	if err != nil {
-		return fmt.Errorf("publish: root: %v", err)
+		return "", fmt.Errorf("publish: root: %v", err)
 	}
 	out, err := p.git(ctx, dir, "rev-parse", "--absolute-git-dir", "--git-common-dir")
 	if err != nil {
-		return fmt.Errorf("publish: git rev-parse: %v: %s", err, clip(out))
+		return "", fmt.Errorf("publish: git rev-parse: %v: %s", err, clip(out))
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if len(lines) != 2 {
-		return fmt.Errorf("publish: git rev-parse: unexpected output %q", clip(out))
+		return "", fmt.Errorf("publish: git rev-parse: unexpected output %q", clip(out))
 	}
 	common := lines[1]
 	if !filepath.IsAbs(common) {
@@ -250,12 +277,16 @@ func (p *Publish) bind(ctx context.Context, dir string) error {
 	}
 	for _, d := range []string{lines[0], common} {
 		if _, err := within(root, d); err != nil {
-			return fmt.Errorf("publish: git dir: %v", err)
+			return "", fmt.Errorf("publish: git dir: %v", err)
 		}
 	}
+	objects, err := within(root, filepath.Join(common, "objects"))
+	if err != nil {
+		return "", fmt.Errorf("publish: object directory: %v", err)
+	}
 	for _, alt := range []string{"alternates", "http-alternates"} {
-		if _, err := os.Lstat(filepath.Join(common, "objects", "info", alt)); err == nil {
-			return fmt.Errorf("publish: the repository borrows objects (%s); refused", alt)
+		if _, err := os.Lstat(filepath.Join(objects, "info", alt)); err == nil {
+			return "", fmt.Errorf("publish: the repository borrows objects (%s); refused", alt)
 		}
 	}
 	// The -c safety settings are read back too (scope "command"); only keys
@@ -263,7 +294,7 @@ func (p *Publish) bind(ctx context.Context, dir string) error {
 	out, err = p.git(ctx, dir, "config", "--show-scope", "--name-only", "--get-regexp", riskyConfig)
 	var ee *exec.ExitError
 	if err != nil && !(ctx.Err() == nil && errors.As(err, &ee) && ee.ExitCode() == 1) {
-		return fmt.Errorf("publish: git config: %v: %s", err, clip(out))
+		return "", fmt.Errorf("publish: git config: %v: %s", err, clip(out))
 	}
 	var risky []string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -274,9 +305,38 @@ func (p *Publish) bind(ctx context.Context, dir string) error {
 		}
 	}
 	if len(risky) > 0 {
-		return fmt.Errorf("publish: repository configuration could redirect the push: %s", clip([]byte(strings.Join(risky, " "))))
+		return "", fmt.Errorf("publish: repository configuration could redirect the push: %s", clip([]byte(strings.Join(risky, " "))))
 	}
-	return nil
+	return objects, nil
+}
+
+// mirror makes a fabric-owned bare repository, outside Root, that borrows
+// the source repository's objects through alternates (review N1 on
+// 4571d10). Every later git call runs in it, so configuration written into
+// the source after bind cannot redirect the readback or the push. Objects
+// are content addressed: whatever the source holds, the push sends exactly
+// new_head's history. The caller runs cleanup.
+func (p *Publish) mirror(ctx context.Context, objects string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "fabric-publish-")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("publish: mirror: %v", err)
+	}
+	cleanup := func() { os.RemoveAll(dir) } //nolint:errcheck
+	if root, err := filepath.EvalSymlinks(p.Root); err == nil {
+		if _, outside := within(root, dir); outside == nil {
+			cleanup()
+			return "", func() {}, errors.New("publish: the temporary directory is inside the publish root")
+		}
+	}
+	if out, err := p.git(ctx, filepath.Dir(dir), "init", "-q", "--bare", "--template=", dir); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("publish: mirror: git init: %v: %s", err, clip(out))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "objects", "info", "alternates"), []byte(objects+"\n"), 0o600); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("publish: mirror: %v", err)
+	}
+	return dir, cleanup, nil
 }
 
 // git runs one git command in dir with the safety settings and a scrubbed
@@ -290,21 +350,26 @@ func (p *Publish) git(ctx context.Context, dir string, args ...string) ([]byte, 
 	if p.AllowLocal {
 		pre = append(pre, "-c", "protocol.file.allow=always")
 	}
-	return RunCommandEnv(ctx, dir, gitEnv(dir), bin, append(pre, args...)...)
+	return RunCommandEnv(ctx, dir, p.gitEnv(dir), bin, append(pre, args...)...)
 }
 
 // gitEnv is the allow-listed environment: no GIT_* or other inherited
 // variables, no global or system configuration, no prompts, discovery kept
-// to dir, and the ssh command above.
-func gitEnv(dir string) []string {
+// to dir, and the ssh command above with the pinned known_hosts file (none
+// configured: /dev/null, so strict checking refuses every host).
+func (p *Publish) gitEnv(dir string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		if k, _, _ := strings.Cut(kv, "="); gitEnvKeep[k] {
 			env = append(env, kv)
 		}
 	}
+	kh := "/dev/null"
+	if p.sshReady() == nil {
+		kh = p.KnownHosts
+	}
 	return append(env, "HOME=/nonexistent", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
-		"GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND="+gitSSH, "GIT_CEILING_DIRECTORIES="+filepath.Dir(dir))
+		"GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND="+gitSSH+kh, "GIT_CEILING_DIRECTORIES="+filepath.Dir(dir))
 }
 
 // remoteHead reads the remote branch head; found is false when the remote
@@ -351,20 +416,28 @@ func (p *Publish) fastForward(ctx context.Context, dir string, r publishRequest)
 	return "ancestry check failed (is expected_head fetched?): " + clip(out), nil
 }
 
-// load parses the stored request and binds its repository.
-func (p *Publish) load(ctx context.Context, e Effect) (publishRequest, string, error) {
+// load parses the stored request, binds its repository and returns a
+// fabric-owned mirror to run every later git call in (review N1). The
+// caller runs cleanup.
+func (p *Publish) load(ctx context.Context, e Effect) (publishRequest, string, func(), error) {
 	r, dir, err := p.parse(e.Request, e.Subject)
 	if err != nil {
-		return r, "", err
+		return r, "", func() {}, err
 	}
-	return r, dir, p.bind(ctx, dir)
+	objects, err := p.bind(ctx, dir)
+	if err != nil {
+		return r, "", func() {}, err
+	}
+	m, cleanup, err := p.mirror(ctx, objects)
+	return r, m, cleanup, err
 }
 
 // Precondition holds the effect lock and its transaction across one
 // ls-remote, so the session idles in a transaction for up to the transport
 // timeout (review 6); idle_in_transaction_session_timeout must exceed it.
 func (p *Publish) Precondition(ctx context.Context, e Effect) (bool, string, error) {
-	r, dir, err := p.load(ctx, e)
+	r, dir, cleanup, err := p.load(ctx, e)
+	defer cleanup()
 	if err != nil {
 		return false, "", err
 	}
@@ -386,7 +459,8 @@ func (p *Publish) Precondition(ctx context.Context, e Effect) (bool, string, err
 }
 
 func (p *Publish) Dispatch(ctx context.Context, sub Submission) (Receipt, error) {
-	r, dir, err := p.load(ctx, sub.Effect)
+	r, dir, cleanup, err := p.load(ctx, sub.Effect)
+	defer cleanup()
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -406,6 +480,11 @@ func (p *Publish) Dispatch(ctx context.Context, sub Submission) (Receipt, error)
 	if !fastForwarded(out, ref) {
 		return Receipt{}, fmt.Errorf("git push reported no fast-forward of %s: %s", ref, clip(out))
 	}
+	// Review N1: CONFIRMED needs the remote itself to show new_head; any
+	// doubt is an error, so the effect goes UNKNOWN and readback decides.
+	if head, found, err := p.remoteHead(ctx, dir, r); err != nil || !found || head != r.NewHead {
+		return Receipt{}, fmt.Errorf("git push: readback does not show new_head (found=%v head=%s err=%v)", found, head, err)
+	}
 	remote, _ := json.Marshal(map[string]string{"url": r.URL, "ref": ref, "old": r.ExpectedHead, "new": r.NewHead})
 	return Receipt{Outcome: OutcomeConfirmed, Detail: "fast-forwarded " + ref, Remote: remote}, nil
 }
@@ -423,7 +502,8 @@ func fastForwarded(out []byte, ref string) bool {
 }
 
 func (p *Publish) Reconcile(ctx context.Context, e Effect) (Observation, string, error) {
-	r, dir, err := p.load(ctx, e)
+	r, dir, cleanup, err := p.load(ctx, e)
+	defer cleanup()
 	if err != nil {
 		return ObsUnknown, "", err
 	}

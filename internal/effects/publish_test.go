@@ -277,7 +277,9 @@ func TestPublishValidate(t *testing.T) {
 	for _, u := range []string{"https://github.com/o/r.git", "ssh://git@github.com/o/r.git", "git@github.com:o/r.git"} {
 		s := ok
 		remote(&s, u)
-		if err := ex.Validate(s); err != nil {
+		pinned := *ex
+		pinned.KnownHosts = "/etc/fabric/known_hosts"
+		if err := pinned.Validate(s); err != nil {
 			t.Errorf("url %s refused: %v", u, err)
 		}
 	}
@@ -436,7 +438,7 @@ func TestPublishEnvAllowListed(t *testing.T) {
 	dir := t.TempDir()
 	dump := filepath.Join(dir, "env")
 	fake := filepath.Join(dir, "git")
-	if err := os.WriteFile(fake, []byte("#!/bin/sh\nenv > '"+dump+"'\nexit 1\n"), 0o755); err != nil {
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nenv > '"+dump+"'\necho \"$@\" > '"+dump+".args'\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PGPASSWORD", "not-a-secret")
@@ -461,6 +463,133 @@ func TestPublishEnvAllowListed(t *testing.T) {
 	}
 	if n < 5 || !strings.Contains(string(raw), "GIT_CONFIG_GLOBAL=/dev/null") {
 		t.Fatalf("env dump looks empty (%d lines)", n)
+	}
+	// Review nit N2 on 4571d10: ssh reads no user or system config and
+	// checks host keys strictly. N3: signed pushes cannot be switched on.
+	for _, want := range []string{"-F /dev/null", "StrictHostKeyChecking=yes", "GlobalKnownHostsFile=/dev/null"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("GIT_SSH_COMMAND lacks %q", want)
+		}
+	}
+	args, _ := os.ReadFile(dump + ".args")
+	// Hooks are off even though the mirror has none (no template).
+	for _, want := range []string{"push.gpgSign=false", "core.hooksPath=/dev/null"} {
+		if !strings.Contains(string(args), want) {
+			t.Errorf("git args lack %s: %s", want, args)
+		}
+	}
+}
+
+// Review nit N1 on 4571d10: configuration written into the repository after
+// the bind check (a writer inside Root racing the publish) cannot redirect
+// the readback or the push. A wrapper git flips the configuration just
+// before each ls-remote and push.
+func TestPublishConfigFlipAfterBind(t *testing.T) {
+	f := newGitFixture(t)
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoy := filepath.Join(f.root, "decoy.git")
+	gitT(t, f.root, "clone", "-q", "--bare", f.remote, decoy)
+	// The decoy's head differs, so a redirected readback would see it.
+	gitT(t, f.other, "commit", "-q", "--allow-empty", "-m", "decoy")
+	gitT(t, f.other, "push", "-q", decoy, "HEAD:refs/heads/main")
+	decoyHead := gitT(t, decoy, "rev-parse", "refs/heads/main")
+	dir := t.TempDir()
+	wrapper := filepath.Join(dir, "git")
+	script := "#!/bin/sh\ncase \" $* \" in\n" +
+		"*\" ls-remote \"*) '" + real + "' -C '" + f.work + "' config url.'" + decoy + "'.insteadOf '" + f.remote + "' ;;\n" +
+		"*\" push \"*) '" + real + "' -C '" + f.work + "' config url.'" + decoy + "'.pushInsteadOf '" + f.remote + "' ;;\n" +
+		"esac\nexec '" + real + "' \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ex := &Publish{Root: f.root, Git: wrapper, AllowLocal: true}
+	ctx := context.Background()
+	e := f.effect(f.a, f.b)
+	if ok, detail, err := ex.Precondition(ctx, e); err != nil || !ok {
+		t.Fatalf("precondition read the decoy after a config flip: %v %s %v", ok, detail, err)
+	}
+	// Each call's bind check sees the earlier flip, so clear it in between:
+	// the race under test is the one after bind.
+	gitT(t, f.work, "config", "--unset-all", "url."+decoy+".insteadOf")
+	rc, err := ex.Dispatch(ctx, Submission{Effect: e, RemoteKey: "flip"})
+	gitT(t, f.work, "config", "--unset-all", "url."+decoy+".pushInsteadOf")
+	gitT(t, f.work, "config", "--unset-all", "url."+decoy+".insteadOf")
+	if d := gitT(t, decoy, "rev-parse", "refs/heads/main"); d != decoyHead {
+		t.Errorf("the push went to the decoy (%s): %+v %v", d, rc, err)
+	}
+	if err != nil || rc.Outcome != OutcomeConfirmed {
+		t.Fatalf("dispatch: %+v %v", rc, err)
+	}
+	if h := f.remoteHead(); h != f.b {
+		t.Fatalf("remote head %s, want %s", h, f.b)
+	}
+	if obs, _, err := ex.Reconcile(ctx, e); err != nil || obs != ObsCommitted {
+		t.Fatalf("readback after a config flip: %s %v", obs, err)
+	}
+}
+
+// Review N1 on 4571d10: a porcelain fast-forward line is not enough for
+// CONFIRMED; the remote must show new_head. A wrapper git reports the old
+// head on every ls-remote.
+func TestPublishConfirmNeedsReadback(t *testing.T) {
+	f := newGitFixture(t)
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(t.TempDir(), "git")
+	script := "#!/bin/sh\ncase \" $* \" in\n*\" ls-remote \"*) printf '%s\\trefs/heads/main\\n' " + f.a + "; exit 0 ;;\nesac\nexec '" + real + "' \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ex := &Publish{Root: f.root, Git: wrapper, AllowLocal: true}
+	rc, err := ex.Dispatch(context.Background(), Submission{Effect: f.effect(f.a, f.b), RemoteKey: "rb"})
+	if err == nil || rc.Outcome == OutcomeConfirmed {
+		t.Fatalf("confirmed without a readback of new_head: %+v %v", rc, err)
+	}
+}
+
+// Review nits N2 and N4 on 4571d10: an ssh URL needs a pinned known_hosts
+// file, and neither user nor host may look like an option.
+func TestPublishSSHURLs(t *testing.T) {
+	f := newGitFixture(t)
+	kh := filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(kh, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	with := func(u string) IntentSpec {
+		s := pubSpec(f, "s", f.a, f.b)
+		m := map[string]string{}
+		json.Unmarshal(s.Request, &m) //nolint:errcheck
+		m["url"] = u
+		s.Request, _ = json.Marshal(m)
+		s.Subject = "branch:" + u + "#main"
+		return s
+	}
+	pinned := &Publish{Root: f.root, KnownHosts: kh}
+	for _, u := range []string{"ssh://git@github.com/o/r.git", "git@github.com:o/r.git"} {
+		if err := pinned.Validate(with(u)); err != nil {
+			t.Errorf("%s refused with a pinned known_hosts: %v", u, err)
+		}
+		if err := (&Publish{Root: f.root}).Validate(with(u)); err == nil {
+			t.Errorf("%s accepted without a pinned known_hosts", u)
+		}
+	}
+	if err := pinned.Validate(with("https://github.com/o/r.git")); err != nil {
+		t.Errorf("https refused: %v", err)
+	}
+	for _, u := range []string{"ssh://-oProxyCommand=id@github.com/o/r.git", "-oProxyCommand=id@github.com:o/r.git", "ssh://git@-oX/o/r.git"} {
+		if err := pinned.Validate(with(u)); err == nil {
+			t.Errorf("%s accepted", u)
+		}
+	}
+	for _, bad := range []string{"relative/kh", "/tmp/kh with space", "/tmp/kh;id"} {
+		if err := (&Publish{Root: f.root, KnownHosts: bad}).Validate(with("git@github.com:o/r.git")); err == nil {
+			t.Errorf("known_hosts path %q accepted", bad)
+		}
 	}
 }
 
