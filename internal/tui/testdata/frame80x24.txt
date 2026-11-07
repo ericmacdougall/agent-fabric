@@ -1,0 +1,96 @@
+fab tui  00:10:00Z                                                              
+v-test s24 | missions 2/3 active | attempts 1 live 1 stale | asks 2
+effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
+[Missions 3]  Attempts 2   Effects 3   Asks 2                                   
+  ID             EXEC      TERM      AGE   SPENT/CAP     TICKET                 
+> m_1            RUNNING   NONE      10m   $0.25/$5.00   goodqa#1 build the thi~
+  m_2            IDLE      NONE      5m    $0.00/$5.00   goodqa#2 write the docs
+  m_3            IDLE      SUCCEEDED 2d    $0.00/$5.00   goodqa#3 shipped       
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+j/k move  Enter open  Tab pane  / filter  q quit
+fab tui  00:10:00Z                                                              
+v-test s24 | missions 2/3 active | attempts 1 live 1 stale | asks 2
+effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
+ Missions 3  [Attempts 2]  Effects 3   Asks 2                                   
+  ID             MISSION        STATE     FENCE LEASE                           
+> a_2            m_2            LEASED    1     stale 3m                        
+  a_1            m_1            RUNNING   1     live 27027d                     
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+j/k move  Enter open  Tab pane  / filter  q quit
+fab tui  00:10:00Z                                                              
+v-test s24 | missions 2/3 active | attempts 1 live 1 stale | asks 2
+effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
+ Missions 3   Attempts 2  [Effects 3]  Asks 2                                   
+  ID             MISSION        KIND           STATE       AGE   DISP           
+> e_2            m_1            publish        QUARANTINED 8m    1              
+  e_3            m_1            ticket_comment UNKNOWN     2m    1              
+  e_4            m_2            publish        RECONCILING 1m    2              
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+j/k move  Enter open  Tab pane  / filter  q quit
+fab tui  00:10:00Z                                                              
+v-test s24 | missions 2/3 active | attempts 1 live 1 stale | asks 2
+effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
+ Missions 3   Attempts 2   Effects 3  [Asks 2]                                  
+  ID             MISSION        KIND       AGE   QUESTION                       
+> k_1            m_1            decision   8m    ship it?                       
+  k_2                           permission 1m    allow network?                 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+j/k move  Enter open  Tab pane  / filter  q quit

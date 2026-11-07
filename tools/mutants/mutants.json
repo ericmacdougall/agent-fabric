@@ -4076,5 +4076,200 @@
     ""
    ]
   ]
+ },
+ {
+  "id": "M317_tui_clean_keeps_c1",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/clean.go",
+  "expect": "TestClean",
+  "edits": [
+   [
+    "|| (r >= 0x80 && r <= 0x9f):",
+    ":"
+   ]
+  ]
+ },
+ {
+  "id": "M318_tui_clean_keeps_esc",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/clean.go",
+  "expect": "TestHostileTextInert",
+  "edits": [
+   [
+    "case r < 0x20 || r == 0x7f",
+    "case (r < 0x20 && r != 0x1b) || r == 0x7f"
+   ]
+  ]
+ },
+ {
+  "id": "M319_tui_clean_keeps_bidi",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/clean.go",
+  "expect": "TestClean",
+  "edits": [
+   [
+    "case r >= 0x202a && r <= 0x202e:",
+    "case false:"
+   ]
+  ]
+ },
+ {
+  "id": "M320_tui_wide_runes_count_one",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/clean.go",
+  "expect": "TestLongFields",
+  "edits": [
+   [
+    "\t\treturn 2\n",
+    "\t\treturn 1\n"
+   ]
+  ]
+ },
+ {
+  "id": "M321_tui_cell_not_cleaned",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/render.go",
+  "expect": "TestHostileTextInert",
+  "edits": [
+   [
+    "Pad(Clean(r.cells[c.index], 0), c.width)",
+    "Pad(r.cells[c.index], c.width)"
+   ]
+  ]
+ },
+ {
+  "id": "M322_tui_refresh_timeout_ignored",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/load.go",
+  "expect": "TestRefreshUnderLocks",
+  "edits": [
+   [
+    "metrics.ReadOnly(ctx, s.Pool, timeout,",
+    "metrics.ReadOnly(ctx, s.Pool, 10*time.Second+0*timeout,"
+   ]
+  ]
+ },
+ {
+  "id": "M323_tui_keys_off_ignored",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/keys.go",
+  "expect": "TestKeysOff",
+  "edits": [
+   [
+    "\t\tif !keysOn {\n\t\t\treturn KeyResult{}\n\t\t}\n",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M324_tui_pool_not_read_only",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/load.go",
+  "expect": "TestReadOnlyPool",
+  "edits": [
+   [
+    "\tcfg.ConnConfig.RuntimeParams[\"default_transaction_read_only\"] = \"on\"\n",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M325_tui_direct_pool_call",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/load.go",
+  "expect": "TestNoDirectDBCalls",
+  "edits": [
+   [
+    "\terr := metrics.ReadOnly(ctx, s.Pool,",
+    "\ts.Pool.Exec(ctx, `SELECT 1`) //nolint:errcheck\n\terr := metrics.ReadOnly(ctx, s.Pool,"
+   ]
+  ]
+ },
+ {
+  "id": "M326_tui_unreachable_shown_stale",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/load.go",
+  "expect": "TestNoSecretsInFrames",
+  "edits": [
+   [
+    "\treturn Failure{Disconnected: true}\n}",
+    "\treturn Failure{}\n}"
+   ]
+  ]
+ },
+ {
+  "id": "M327_tui_asks_pane_shows_options",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/load.go",
+  "expect": "TestNoSecretsInFrames",
+  "edits": [
+   [
+    "kind, state, left(question, 512), created_at\n\t\tFROM asks WHERE state = 'open'",
+    "kind, state, left(options::text || recommended, 512), created_at\n\t\tFROM asks WHERE state = 'open'"
+   ]
+  ]
+ },
+ {
+  "id": "M328_tui_no_color_ignored",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/render.go",
+  "expect": "TestNoColor",
+  "edits": [
+   [
+    "if !o.Color || len(codes) == 0 {",
+    "if len(codes) == 0 {"
+   ]
+  ]
+ },
+ {
+  "id": "M329_tui_focus_marker_dropped",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/render.go",
+  "expect": "TestFocusVisible",
+  "edits": [
+   [
+    "if top+i == sel {\n\t\t\tmarker = \"> \"",
+    "if top+i == sel {\n\t\t\tmarker = \"  \""
+   ]
+  ]
+ },
+ {
+  "id": "M330_tui_effects_newest_first",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/load.go",
+  "expect": "TestGoldenFrame",
+  "edits": [
+   [
+    "ORDER BY updated_at, id LIMIT 500",
+    "ORDER BY updated_at DESC, id LIMIT 500"
+   ]
+  ]
+ },
+ {
+  "id": "M331_tui_server_disconnect_shown_stale",
+  "invariant": "tui",
+  "pkg": "./internal/tui",
+  "file": "internal/tui/load.go",
+  "expect": "TestClassify",
+  "edits": [
+   [
+    "\t\tlost := len(code) >= 2",
+    "\t\tlost := false && len(code) >= 2"
+   ]
+  ]
  }
 ]

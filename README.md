@@ -102,6 +102,44 @@ in-process `serve-metrics` in the daemon.
 | `fabric_asks_open` | gauge | kind | open asks |
 | `fabric_asks_open_oldest_age_seconds` | gauge | | oldest open ask, 0 when none |
 
+## TUI
+
+`fab tui` is a read-only terminal view of the same state. It needs a terminal
+and `FABRIC_DSN`, and it starts even while the database is down.
+
+- **Header:** the `/metrics` gauges. These are the version, schema level, missions, attempts live and stale, effects UNKNOWN, QUARANTINED and RECONCILING, dispatch in flight against its limit and overdue, open asks, and month spend against its cap.
+- **Missions pane:** active missions first, running work on top. Each row shows age and spend against the job cap.
+- **Attempts pane:** LEASED, PREPARING and RUNNING attempts, each marked live or stale.
+- **Effects pane:** UNKNOWN, QUARANTINED and RECONCILING effects, oldest first.
+- **Asks pane:** open asks, oldest first.
+- **Detail:** Enter opens the selected row's mission, with its attempts, effects, asks and decisions. Decisions are its asks of kind decision plus the effect resolutions recorded on its effects.
+
+Keys:
+
+| Key | Action |
+|---|---|
+| Up/Down, j/k | Move |
+| PgUp/PgDn | Page |
+| Tab, Shift-Tab | Change pane |
+| Enter | Open the mission |
+| Esc | Go back, or clear the filter |
+| `/`, Ctrl-F | Filter |
+| q, Ctrl-C | Quit |
+
+`--keys=off` turns off the single-character shortcuts j, k, q and `/`. The arrows, Enter, Esc, Tab, Ctrl-F and Ctrl-C still work.
+
+`--no-color`, or a set `NO_COLOR`, removes every text attribute. Colour is never the only cue:
+- the focused row starts with `>`;
+- a warning starts with `!` and says `disconnected` or `stale`.
+
+`--interval` (default 2s, at least 250ms) sets the refresh rate. `--timeout` (default 1s) bounds each refresh.
+
+Every refresh runs in one read-only transaction (`metrics.ReadOnly`), on a pool whose sessions are `default_transaction_read_only`, so the view cannot write. A row lock never delays it. Under a table lock, the refresh gives up at its timeout and the header shows `! stale` over the last data. A lost database shows `! disconnected: retrying` until it returns.
+
+Database text is sanitized before it is drawn: ticket text, ask questions and resolution actors. Control and escape sequences, C1 controls, and bidi and zero-width characters are removed, and the text is cut to the terminal width. Effect subjects and requests, prompt bodies, ask options and errors are never shown. A failure shows only its SQLSTATE.
+
+`fab version` prints the build revision, the same value as `fabric_build_info`.
+
 ## Known limits (honest list)
 
 - **Linux sandbox findings are still being fixed.** A code inspection found
@@ -131,6 +169,10 @@ in-process `serve-metrics` in the daemon.
   dispatches, so a forged transport receipt for a live run is believed; a
   dispatch left by an ended run goes to the app role's readback (0019). The
   capacity gate does not depend on these rows.
+- `fab metrics`, `fab serve-metrics` and `fab tui` connect with whatever
+  `FABRIC_DSN` names; read-only transactions (and, for the TUI, read-only
+  sessions) are the guard. A least-privilege read-only role is not yet
+  provided, and `--allow-remote` metrics have no auth.
 - Store tests need a disposable PostgreSQL 16 (`FABRIC_TEST_DSN`); the
   process-signalling controls are opt-in (`FABRIC_HOST_CONTROLS=1`).
 

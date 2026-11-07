@@ -43,7 +43,13 @@ func buildVersion() string {
 		}
 	}
 	if rev == "" {
-		return bi.Main.Version
+		// A binary built without VCS stamping (go run, go test) reports
+		// "(devel)", which is not a valid label value and would export as
+		// "other"; name it plainly instead.
+		if v := bi.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+		return "devel"
 	}
 	if len(rev) > 12 {
 		rev = rev[:12]

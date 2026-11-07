@@ -132,6 +132,39 @@ func ReadOnly(ctx context.Context, pool *pgxpool.Pool, timeout time.Duration, f 
 	return nil
 }
 
+// CollectTx collects inside a transaction the caller opened with ReadOnly,
+// so the TUI's header and panes come from one snapshot.
+func CollectTx(ctx context.Context, tx pgx.Tx, o Options) (*Snapshot, error) {
+	return collect(ctx, tx, o)
+}
+
+// Sum adds the values of every sample of the named family whose labels
+// include all of match (name, value pairs).
+func (s *Snapshot) Sum(name string, match ...[2]string) float64 {
+	var total float64
+	for _, f := range s.Families {
+		if f.Name != name {
+			continue
+		}
+	sample:
+		for _, smp := range f.Samples {
+			for _, m := range match {
+				found := false
+				for _, l := range smp.Labels {
+					if l == m {
+						found = true
+					}
+				}
+				if !found {
+					continue sample
+				}
+			}
+			total += smp.Value
+		}
+	}
+	return total
+}
+
 func collect(ctx context.Context, tx pgx.Tx, o Options) (*Snapshot, error) {
 	c := &collector{ctx: ctx, tx: tx}
 	s := &Snapshot{}
