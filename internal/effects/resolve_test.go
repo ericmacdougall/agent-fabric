@@ -614,6 +614,7 @@ func TestDispatchRefusesUnapprovedIntentWithApproval(t *testing.T) {
 // again.
 func TestStaleDispatchedRecovers(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	b.SetTransportTimeout(100 * time.Millisecond)
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)
@@ -659,8 +660,9 @@ func TestStaleDispatchedRecovers(t *testing.T) {
 	if fake.Count() != 3 {
 		t.Fatalf("remote writes %d, want 3", fake.Count())
 	}
-	// Past the reconciler's deadline (TestDispatcherSessionLossKeepsOutcome
-	// covers the deadline itself), so here only attempt liveness protects.
+	// Past the dispatch's stamped deadline and the reconciler's (the
+	// deadline itself is covered by TestDispatcherSessionLossKeepsOutcome and
+	// TestStaleFollowsStampedDeadline), so here only attempt liveness protects.
 	ab.SetTransportTimeout(100 * time.Millisecond)
 	time.Sleep(250 * time.Millisecond)
 	// While the attempt is live the dispatcher may still settle it.
@@ -721,6 +723,7 @@ func (p parkedSend) Dispatch(ctx context.Context, sub Submission) (Receipt, erro
 // A settle that finds the row moved on is reported, not dropped.
 func TestInFlightDispatchNotReconciled(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	b.SetTransportTimeout(50 * time.Millisecond)
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)
@@ -752,7 +755,8 @@ func TestInFlightDispatchNotReconciled(t *testing.T) {
 	if _, err := st.Pool().Exec(ctx, "UPDATE attempts SET state = 'UNKNOWN' WHERE id = 'r_1'"); err != nil {
 		t.Fatal(err)
 	}
-	// Past the reconciler's deadline, so only the dispatcher's lock protects it.
+	// Past the stamped and the reconciler's deadline, so only the
+	// dispatcher's lock protects it.
 	ab.SetTransportTimeout(50 * time.Millisecond)
 	time.Sleep(150 * time.Millisecond)
 	ids, err := ab.Unresolved(ctx, 0, 10)

@@ -130,6 +130,13 @@ const (
 )
 
 // Executor is the per-kind transport (Kimi's EffectExecutor, DESIGN.md 3.3).
+//
+// Contract (review W2 on cbebbd6): every call returns by its context's
+// deadline, and nothing it started may reach the remote after it returns.
+// The broker relies on this to decide when a dispatch whose session died is
+// stale. Network executors pass ctx to every request; process-based ones
+// use RunCommand, which stops the process group at the deadline. Check a
+// new executor with the deadline contract test (contract_test.go).
 type Executor interface {
 	Kind() string
 	Validate(spec IntentSpec) error
@@ -146,6 +153,8 @@ type Broker struct {
 	// because the run had ended (ErrSettleRunEnded).
 	settleRefused atomic.Int64
 	settleLost    atomic.Int64
+	// executorOverruns counts Executor contract breaches (review W2).
+	executorOverruns atomic.Int64
 	// slots caps dispatches holding a connection; transportTimeout bounds
 	// Precondition plus transport (main on 25fb014).
 	slots            chan struct{}
@@ -160,12 +169,8 @@ type Broker struct {
 
 func New(st *store.Store) *Broker {
 	// A dispatch holds one connection for its transport (the effect lock);
-	// at most half the pool, so reconcile and commands always have the rest.
-	n := int(st.Pool().Config().MaxConns) / 2
-	if n < 1 {
-		n = 1
-	}
-	return &Broker{st: st, pool: st.Pool(), slots: make(chan struct{}, n),
+	// the store caps that at half its pool across every broker on it.
+	return &Broker{st: st, pool: st.Pool(), slots: st.DispatchSlots(),
 		transportTimeout: DefaultTransportTimeout, staleAfter: 2 * DefaultTransportTimeout}
 }
 
@@ -313,12 +318,35 @@ func (b *Broker) Dispatch(ctx context.Context, exec Executor, id string) (Effect
 		unlock = func() { c.Release() }
 		return Effect{}, fmt.Errorf("%w: effect %s is being dispatched or reconciled", ErrNotDispatchable, id)
 	}
-	if err := b.dispatchOn(ctx, c, exec, id); err != nil {
+	err = b.dispatchOn(ctx, c, exec, id)
+	var rs *resettleNeeded
+	if errors.As(err, &rs) {
+		// Review nit 1: drop the dead connection (its unlock fails, so it is
+		// closed) before taking a fresh one.
+		unlock()
+		unlock = func() {}
+		err = b.resettle(ctx, id, rs)
+	}
+	if err != nil {
 		return Effect{}, err
 	}
 	unlock()
 	unlock = func() {}
 	return b.Load(ctx, id)
+}
+
+// deadlineOf is ctx's deadline (dispatch contexts always carry one).
+func deadlineOf(ctx context.Context) time.Time {
+	dl, _ := ctx.Deadline()
+	return dl
+}
+
+// staleAge is SQL true when the effect's current dispatch is past twice its
+// stamped deadline window, or, for a dispatch with no stamp (before 0023),
+// older than $n, the broker's staleAfter.
+func staleAge(n int) string {
+	return fmt.Sprintf(`now() > coalesce((SELECT d.deadline + (d.deadline - d.at) FROM effect_dispatches d
+		WHERE d.effect_id = effects.id AND d.dispatch = effects.dispatches), effects.updated_at + $%d::interval)`, n)
 }
 
 // interval renders d for a $n::interval parameter.
@@ -407,6 +435,7 @@ func (b *Broker) dispatchOn(ctx context.Context, c *pgxpool.Conn, exec Executor,
 	tctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	ok, detail, err := exec.Precondition(tctx, e)
+	b.noteOverrun(tctx)
 	if err != nil {
 		return err
 	}
@@ -427,6 +456,13 @@ func (b *Broker) dispatchOn(ctx context.Context, c *pgxpool.Conn, exec Executor,
 		}
 		return err
 	}
+	// Review nit 4 on cbebbd6: stamp this dispatch's deadline, so every
+	// reconciler judges staleness by it, not by its own timeout setting.
+	left := time.Until(deadlineOf(tctx))
+	if _, err := tx.Exec(ctx, `INSERT INTO effect_dispatches (effect_id, dispatch, deadline) VALUES ($1, $2, now() + $3::interval)`,
+		id, e.Dispatches+1, interval(left)); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		if store.IsUniqueViolation(err) {
 			return fmt.Errorf("%w: %s", ErrSubjectBusy, e.Subject)
@@ -439,6 +475,7 @@ func (b *Broker) dispatchOn(ctx context.Context, c *pgxpool.Conn, exec Executor,
 		b.afterDispatchCommit(e)
 	}
 	rc, terr := exec.Dispatch(tctx, Submission{Effect: e, RemoteKey: e.IdemKey})
+	b.noteOverrun(tctx)
 	if terr != nil {
 		rc = Receipt{Outcome: OutcomeUnknown, Detail: "transport: " + terr.Error()}
 	}
@@ -447,21 +484,41 @@ func (b *Broker) dispatchOn(ctx context.Context, c *pgxpool.Conn, exec Executor,
 	}
 	err = b.settle(ctx, c, id, e.Dispatches, rc)
 	if err != nil && !errors.Is(err, ErrSettleRunEnded) && !errors.Is(err, ErrSettleLost) && connLost(c, err) {
-		// Review V1: the session (and lock) died under the transport. The
-		// outcome is still recorded once on a fresh connection; the row
-		// cannot be stale yet (staleAfter exceeds the transport deadline).
-		fresh, aerr := b.pool.Acquire(context.WithoutCancel(ctx))
-		if aerr != nil {
-			b.settleLost.Add(1)
-			return fmt.Errorf("%w: effect %s dispatch %d outcome %s: %v", ErrSettleLost, id, e.Dispatches, rc.Outcome, err)
-		}
-		defer fresh.Release()
-		if err = b.settle(context.WithoutCancel(ctx), fresh, id, e.Dispatches, rc); err != nil && !errors.Is(err, ErrSettleRunEnded) && !errors.Is(err, ErrSettleLost) {
-			b.settleLost.Add(1)
-			return fmt.Errorf("%w: effect %s dispatch %d outcome %s: %v", ErrSettleLost, id, e.Dispatches, rc.Outcome, err)
-		}
+		// Review V1: the session (and lock) died under the transport; the
+		// caller closes the dead connection, then records the outcome once
+		// on a fresh one.
+		return &resettleNeeded{dispatch: e.Dispatches, rc: rc, cause: err}
 	}
 	return err
+}
+
+// resettleNeeded carries an outcome whose connection died before it was
+// recorded.
+type resettleNeeded struct {
+	dispatch int
+	rc       Receipt
+	cause    error
+}
+
+func (r *resettleNeeded) Error() string { return "resettle needed: " + r.cause.Error() }
+
+// resettleWait bounds the wait for a fresh connection (review nit 1).
+const resettleWait = 10 * time.Second
+
+// resettle records an outcome on a fresh connection, bounded by resettleWait.
+func (b *Broker) resettle(ctx context.Context, id string, r *resettleNeeded) error {
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resettleWait)
+	defer cancel()
+	fresh, err := b.pool.Acquire(actx)
+	if err == nil {
+		defer fresh.Release()
+		err = b.settle(actx, fresh, id, r.dispatch, r.rc)
+		if err == nil || errors.Is(err, ErrSettleRunEnded) || errors.Is(err, ErrSettleLost) {
+			return err
+		}
+	}
+	b.settleLost.Add(1)
+	return fmt.Errorf("%w: effect %s dispatch %d outcome %s: %v (first: %v)", ErrSettleLost, id, r.dispatch, r.rc.Outcome, err, r.cause)
 }
 
 // settle records a transport receipt only on the dispatch it came from: a
@@ -489,6 +546,15 @@ func (b *Broker) settle(ctx context.Context, c *pgxpool.Conn, id string, dispatc
 		return err
 	}
 	if tag.RowsAffected() != 1 {
+		// Review nit 2 on cbebbd6: a retry after a lost reply finds its own
+		// commit (same state, dispatch and outcome); that is not lost.
+		var cur string
+		var rDispatch, rOutcome *string
+		if err := c.QueryRow(ctx, `SELECT state, receipt->>'dispatch', receipt->>'outcome' FROM effects WHERE id = $1`, id).
+			Scan(&cur, &rDispatch, &rOutcome); err == nil && cur == string(state) &&
+			rDispatch != nil && *rDispatch == fmt.Sprint(dispatch) && rOutcome != nil && *rOutcome == string(rc.Outcome) {
+			return nil
+		}
 		// Review U1: the row moved on under this dispatch (only a raw write
 		// can, while the lock is held). Report the outcome, never drop it.
 		b.settleLost.Add(1)
@@ -564,7 +630,7 @@ func (b *Broker) markStaleDispatched(ctx context.Context, id string) error {
 	}
 	defer lockRelease(c, id)()
 	_, err = c.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now()
-		WHERE id = $1 AND state = $4 AND updated_at < now() - $5::interval AND `+staleAttempt,
+		WHERE id = $1 AND state = $4 AND `+staleAge(5)+` AND `+staleAttempt,
 		id, string(Unknown), "stale dispatch: its dispatcher ended before the outcome was recorded", string(Dispatched), interval(b.staleAfter))
 	return err
 }
@@ -637,7 +703,7 @@ func (b *Broker) Unresolved(ctx context.Context, age time.Duration, limit int) (
 	// Review U1: and whose dispatcher no longer holds the effect lock.
 	// Review V1: and that is older than staleAfter (its transport deadline
 	// has passed even if the dispatcher's session, and so its lock, died).
-	rows, err := b.pool.Query(ctx, `SELECT id FROM effects WHERE (state IN ($1, $2) OR (state = $5 AND updated_at < now() - $6::interval AND `+staleAttempt+`
+	rows, err := b.pool.Query(ctx, `SELECT id FROM effects WHERE (state IN ($1, $2) OR (state = $5 AND `+staleAge(6)+` AND `+staleAttempt+`
 		AND NOT EXISTS (SELECT 1 FROM pg_locks l WHERE l.locktype = 'advisory' AND l.granted
 			AND l.classid = `+fmt.Sprint(effectLockNS)+` AND l.objid = hashtext(effects.id)::oid AND l.objsubid = 2)))
 		AND updated_at < now() - $3::interval ORDER BY updated_at LIMIT $4`,
@@ -667,6 +733,20 @@ func (b *Broker) SettleLost() int64 { return b.settleLost.Load() }
 
 // DispatchLimit is how many dispatches may hold a connection at once.
 func (b *Broker) DispatchLimit() int { return cap(b.slots) }
+
+// ExecutorOverruns counts executor calls that returned more than
+// overrunGrace after their deadline: a breach of the Executor contract.
+func (b *Broker) ExecutorOverruns() int64 { return b.executorOverruns.Load() }
+
+// overrunGrace is how late past its deadline an executor call may return.
+const overrunGrace = 250 * time.Millisecond
+
+// noteOverrun counts a call that returned well past ctx's deadline.
+func (b *Broker) noteOverrun(ctx context.Context) {
+	if dl, ok := ctx.Deadline(); ok && time.Since(dl) > overrunGrace {
+		b.executorOverruns.Add(1)
+	}
+}
 
 // SetTransportTimeout caps one Precondition plus transport (default
 // DefaultTransportTimeout); the attempt's lease end caps it further.

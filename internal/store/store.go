@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -39,6 +40,11 @@ type Store struct {
 	hooks hooks
 
 	repairWakeTimeout time.Duration // per-wake deadline in RepairAskWakes; 0 means defaultRepairWakeTimeout
+
+	// dispatchSlots caps effect dispatches holding a pool connection across
+	// every broker on this store (review nit 3 on cbebbd6).
+	dispatchSlotsOnce sync.Once
+	dispatchSlots     chan struct{}
 }
 
 type hooks struct {
@@ -77,6 +83,19 @@ func (s *Store) Close() { s.pool.Close() }
 
 // Pool exposes the pool for read-only audits and tests.
 func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
+// DispatchSlots is the store-wide semaphore for effect dispatches: half the
+// pool, at least one, so reconcile and commands always have connections.
+func (s *Store) DispatchSlots() chan struct{} {
+	s.dispatchSlotsOnce.Do(func() {
+		n := int(s.pool.Config().MaxConns) / 2
+		if n < 1 {
+			n = 1
+		}
+		s.dispatchSlots = make(chan struct{}, n)
+	})
+	return s.dispatchSlots
+}
 
 const migrationLock = 7_431_902_001 // arbitrary, fixed advisory lock key for migrations
 

@@ -30,7 +30,7 @@ var rolePrefix = regexp.MustCompile(`^[a-z][a-z0-9_]{0,40}$`)
 // free its hold). A runner requests jobs and records their exit, submits
 // and dispatches effects, and raises asks; 0017 narrows jobs and effects
 // further. It reads everything.
-var runnerWrites = map[string]string{"jobs": "INSERT, UPDATE", "effects": "INSERT, UPDATE", "asks": "INSERT"}
+var runnerWrites = map[string]string{"jobs": "INSERT, UPDATE", "effects": "INSERT, UPDATE", "asks": "INSERT", "effect_dispatches": "INSERT"}
 
 // RoleTimeout bounds every statement and idle transaction of the app and
 // runner roles (goodqa#14929 item 3; also bounds goodqa#14925).

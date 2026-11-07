@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // Fake is an in-memory remote with GoodQA-like semantics: a comment is
@@ -19,6 +20,23 @@ type Fake struct {
 	LoseAfter bool // apply, then return UNKNOWN (response lost)
 	LoseBefor bool // do not apply, return UNKNOWN (request lost)
 	Reject    bool // definite 4xx before any write
+	// Hang blocks every call until its context ends (a remote that never
+	// answers, for the Executor deadline contract). Stall sleeps that long
+	// ignoring the context: an executor that breaks the contract.
+	Hang  bool
+	Stall time.Duration
+}
+
+// wait applies Hang and Stall before a call.
+func (f *Fake) wait(ctx context.Context) error {
+	if f.Stall > 0 {
+		time.Sleep(f.Stall)
+	}
+	if f.Hang {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return nil
 }
 
 func NewFake() *Fake { return &Fake{applied: map[string]json.RawMessage{}} }
@@ -37,10 +55,16 @@ func (f *Fake) Validate(spec IntentSpec) error {
 }
 
 func (f *Fake) Precondition(ctx context.Context, e Effect) (bool, string, error) {
+	if err := f.wait(ctx); err != nil {
+		return false, "", err
+	}
 	return true, "", nil
 }
 
 func (f *Fake) Dispatch(ctx context.Context, sub Submission) (Receipt, error) {
+	if err := f.wait(ctx); err != nil {
+		return Receipt{}, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.Reject {
@@ -60,6 +84,9 @@ func (f *Fake) Dispatch(ctx context.Context, sub Submission) (Receipt, error) {
 }
 
 func (f *Fake) Reconcile(ctx context.Context, e Effect) (Observation, string, error) {
+	if err := f.wait(ctx); err != nil {
+		return ObsUnknown, "", err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	body, ok := f.applied[e.IdemKey]
