@@ -22,8 +22,15 @@ const commandWaitDelay = 2 * time.Second
 // up; the Executor deadline contract holds. Output is combined stdout and
 // stderr.
 func RunCommand(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	return RunCommandEnv(ctx, dir, nil, name, args...)
+}
+
+// RunCommandEnv is RunCommand with an explicit environment (nil inherits
+// the process environment).
+func RunCommandEnv(ctx context.Context, dir string, env []string, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return stopGroup(cmd.Process.Pid) }
 	cmd.WaitDelay = commandWaitDelay

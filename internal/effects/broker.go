@@ -58,6 +58,11 @@ var (
 	// ErrSettleLost: a transport outcome arrived for a row that had already
 	// moved on; it is reported, never dropped silently (review U1).
 	ErrSettleLost = errors.New("dispatch outcome not recorded: the effect had moved on")
+	// ErrPreconditionConflict: an executor's Precondition found the remote
+	// in a state the request did not expect (AC-12: the branch head moved).
+	// The broker records QUARANTINED and sends nothing; only an operator
+	// resolution settles it (migration 0024 allows the move for publish).
+	ErrPreconditionConflict = errors.New("precondition conflict")
 )
 
 // Intent is what a caller submits.
@@ -441,13 +446,25 @@ func (b *Broker) dispatchOn(ctx context.Context, c *pgxpool.Conn, exec Executor,
 	defer cancel()
 	ok, detail, err := exec.Precondition(tctx, e)
 	b.noteOverrun(tctx)
-	if err != nil {
+	conflict := errors.Is(err, ErrPreconditionConflict)
+	if err != nil && !conflict {
 		return err
+	}
+	if conflict {
+		detail = err.Error()
 	}
 	// Review O3: Precondition may take a network round trip; the attempt
 	// can end meanwhile. Re-check (the 0020 trigger holds it from here).
 	if err := liveFence(ctx, tx, e.Mission, e.Attempt, e.Fence); err != nil {
 		return err
+	}
+	if conflict {
+		// AC-12: the remote moved under the request; nothing is sent and
+		// the effect waits for an operator (ResolveQuarantined).
+		if _, err := tx.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now() WHERE id = $1`, id, string(Quarantined), "precondition: "+detail); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	}
 	if !ok {
 		if _, err := tx.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now() WHERE id = $1`, id, string(FailedDefinite), "precondition: "+detail); err != nil {
