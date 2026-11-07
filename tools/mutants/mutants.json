@@ -2003,7 +2003,7 @@
   "invariant": "loop_isolation",
   "pkg": "./internal/sched",
   "file": "internal/sched/sched.go",
-  "expect": "TestDispatchErrorParksOnlyThatMission",
+  "expect": "TestDispatchRawErrorParksOnlyThatMission",
   "edits": [
    [
     "\t\t\ts.park(id, err)\n\t\t\tcontinue\n\t\t}\n\t\tn++",
@@ -2060,6 +2060,32 @@
    [
     "canonicalJSON(c.Request, false)",
     "canonicalJSON(c.Request, true)"
+   ]
+  ]
+ },
+ {
+  "id": "M158_mkdir_failure_leaves_live_attempt",
+  "invariant": "loop_isolation",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestDispatchErrorParksOnlyThatMission",
+  "edits": [
+   [
+    "\t\t\treturn s.abandonPrelaunch(ctx, mission, attempt, fence, \"run directory not prepared: \"+err.Error())",
+    "\t\t\treturn err"
+   ]
+  ]
+ },
+ {
+  "id": "M159_dispatch_park_skipped",
+  "invariant": "loop_isolation",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestDispatchRawErrorParksOnlyThatMission",
+  "edits": [
+   [
+    "\t\t\ts.park(id, err)\n\t\t\tcontinue\n\t\t}\n\t\tn++",
+    "\t\t\tif id == \"\" {\n\t\t\t\ts.park(id, err)\n\t\t\t}\n\t\t\tcontinue\n\t\t}\n\t\tn++"
    ]
   ]
  }

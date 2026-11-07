@@ -75,6 +75,9 @@ type Scheduler struct {
 	afterRead func()
 	// afterAck is a test cutpoint after ACK_START, before the dispatch grant.
 	afterAck func()
+	// beforeRun is a test cutpoint that can fail one mission's runOnce
+	// (loop isolation, red-team D1); nil in production.
+	beforeRun func(domain.MissionID) error
 	// parked are missions a sweep step failed on, with when to try again
 	// (red-team F1, D1): an unreadable log stays parked until restart.
 	mu     sync.Mutex
@@ -331,6 +334,11 @@ func (s *Scheduler) parkedIDs() []string {
 
 // runOnce = StartAttempt -> launch -> parse stream -> FinishAttempt -> Reconcile.
 func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error {
+	if s.beforeRun != nil {
+		if err := s.beforeRun(mission); err != nil {
+			return err
+		}
+	}
 	m, err := s.st.Mission(ctx, mission)
 	if err != nil {
 		return err
@@ -365,7 +373,8 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	runDir := filepath.Join(s.cfg.WorkRoot, "run", string(attempt))
 	for _, d := range []string{worktree, runDir, filepath.Join(runDir, "jobs"), filepath.Join(runDir, "claude-config"), filepath.Join(runDir, "cache"), filepath.Join(runDir, "config")} {
 		if err := os.MkdirAll(d, 0o775); err != nil {
-			return err
+			// Red-team N1: nothing launched yet; abandon so the holds go now.
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "run directory not prepared: "+err.Error())
 		}
 		os.Chmod(d, 0o775|os.ModeSetgid) //nolint:errcheck // group-shared with the worker account
 	}
@@ -419,7 +428,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	}
 	out, err := os.Create(filepath.Join(runDir, "stream.jsonl"))
 	if err != nil {
-		return err
+		return s.abandonPrelaunch(ctx, mission, attempt, fence, "stream file not created: "+err.Error())
 	}
 	errf, _ := os.Create(filepath.Join(runDir, "stderr.log"))
 	h, err := s.ln.Start(g, argv, env, out, errf)

@@ -3,6 +3,7 @@ package sched
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,5 +80,45 @@ func TestDispatchErrorParksOnlyThatMission(t *testing.T) {
 	}
 	if ln.starts != 1 {
 		t.Fatalf("the healthy mission was not dispatched: %d starts", ln.starts)
+	}
+	// Red-team N1 on 42c7bd2: a preparation failure after START is a
+	// pre-launch abandonment, not a live attempt left to expire into UNKNOWN.
+	m, err := st.Mission(ctx, "m_bad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.LiveAttempts() != 0 || m.UnresolvedAttempts() != 0 || m.PrelaunchFailures != 1 {
+		t.Fatalf("worktree failure left %d live, %d unresolved attempts, %d pre-launch failures; want 0, 0, 1",
+			m.LiveAttempts(), m.UnresolvedAttempts(), m.PrelaunchFailures)
+	}
+}
+
+// D1, the dispatch path with an error runOnce cannot turn into an
+// abandonment: the mission is parked and the next one still runs.
+func TestDispatchRawErrorParksOnlyThatMission(t *testing.T) {
+	st, ln, cfg := ownerSetup(t, "m_err")
+	ctx := context.Background()
+	if err := st.CreateMission(ctx, "m_ok", "GoodQA goodqa#14922", "fabric", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Execute(ctx, "chat", "admit-m_ok", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_ok"}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(st, cfg, ln)
+	calls := 0
+	s.beforeRun = func(id domain.MissionID) error {
+		if id == "m_err" {
+			calls++
+			return errors.New("injected per-mission fault")
+		}
+		return nil
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := s.Tick(ctx); err != nil {
+			t.Fatalf("tick %d: a per-mission dispatch error stopped the loop: %v", i, err)
+		}
+	}
+	if ln.starts != 1 || calls != 1 {
+		t.Fatalf("%d starts, %d tries of the failing mission; want 1 and 1 (parked after the first)", ln.starts, calls)
 	}
 }
