@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,35 +22,47 @@ import (
 // stands alone.
 //
 //   - Validate: a strict request, an approval required, the repository
-//     inside Root, a remote name (not a URL or an option), a plain branch
-//     name, and full object names.
-//   - Precondition: the remote head is read with ls-remote. Anything but
-//     expected_head is ErrPreconditionConflict, which the broker records as
-//     QUARANTINED with nothing sent. new_head must be a local commit that
+//     inside Root, an explicit remote URL (review 1 on 4d98e31: the request
+//     hash and so the approval bind where the push goes, not a remote name
+//     that configuration resolves), a plain branch name, full object names.
+//   - Every call first binds the repository (review 2): its git dir and
+//     common dir are inside Root, it has no alternates, and its effective
+//     configuration has no key that could redirect or wrap the transport
+//     (url.*, credential.*, includes, askpass, proxies, ssh command).
+//   - Precondition: the remote head is read with ls-remote <url>. Anything
+//     but expected_head is ErrPreconditionConflict, which the broker records
+//     as QUARANTINED with nothing sent. new_head must be a local commit that
 //     descends from expected_head (a fast-forward), or the effect fails
 //     definitely.
-//   - Dispatch: git push --force-with-lease=refs/heads/B:expected_head
+//   - Dispatch: git push --force-with-lease=refs/heads/B:expected_head <url>
 //     new_head:refs/heads/B. The lease is the compare-and-swap against a
 //     move after the precondition; ancestry is checked again first, so the
 //     lease can never rewrite history. Only a porcelain fast-forward line
 //     is CONFIRMED; anything else is an error, which the broker records as
 //     UNKNOWN, and readback decides.
 //   - Reconcile: the remote head is new_head (COMMITTED), expected_head
-//     (NOT_APPLIED) or anything else (CONFLICT, so QUARANTINED).
+//     (NOT_APPLIED) or anything else (CONFLICT, so QUARANTINED). After a
+//     transport timeout the server may still apply a pack it received
+//     (review 5); a later Retry then finds head == new_head and quarantines,
+//     the safe side. The stale-dispatch window bounds when readback starts.
 //
 // git runs through RunCommandEnv, whose process group is stopped at the
-// deadline. Helpers that could outlive the group (review nit 3 on 11145f4)
-// are disabled: ssh ControlMaster and ControlPersist, credential helpers,
-// fsmonitor, auto gc and maintenance, and repository hooks. The ext::
-// transport, prompts, submodule pushes and followed tags are off too.
+// deadline, with no global or system configuration and an allow-listed
+// environment (review 3). Helpers that could outlive the group (review nit
+// 3 on 11145f4) are off: ssh ControlMaster and ControlPersist, credential
+// helpers, askpass, fsmonitor, auto gc and maintenance, repository hooks.
+// Only the ssh and https transports are allowed, plus file when AllowLocal.
+// Residual: a symlink swapped inside Root between the bind check and a git
+// call; Root must be writable only by the fabric and its runner.
 type Publish struct {
-	Root string // every repository must be strictly inside it; empty refuses all
-	Git  string // the git binary; default "git"
+	Root       string // every repository must be strictly inside it; empty refuses all
+	Git        string // the git binary; default "git"
+	AllowLocal bool   // allow an absolute-path (file transport) URL; tests only
 }
 
 type publishRequest struct {
 	Repo         string `json:"repo"`
-	Remote       string `json:"remote"`
+	URL          string `json:"url"`
 	Branch       string `json:"branch"`
 	ExpectedHead string `json:"expected_head"`
 	NewHead      string `json:"new_head"`
@@ -57,26 +70,39 @@ type publishRequest struct {
 
 var (
 	objectNameRE = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
-	remoteNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 	branchNameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$`)
+	scpURLRE     = regexp.MustCompile(`^[A-Za-z0-9._-]+@[A-Za-z0-9][A-Za-z0-9.-]*:[A-Za-z0-9._~/-]+$`)
+	urlPathRE    = regexp.MustCompile(`^/[A-Za-z0-9._~/-]+$`)
 )
 
-// gitSafety precedes every git command: the -c settings apply last, so they
-// override repository and user configuration.
+// publishSubject is the subject a publish request must carry: one live
+// effect per destination branch.
+func publishSubject(r publishRequest) string { return "branch:" + r.URL + "#" + r.Branch }
+
+// gitSafety precedes every git command: the -c settings apply last.
 var gitSafety = []string{
 	"-c", "credential.helper=",
+	"-c", "core.askPass=",
 	"-c", "core.fsmonitor=false",
 	"-c", "core.hooksPath=/dev/null",
 	"-c", "gc.auto=0",
 	"-c", "maintenance.auto=false",
-	"-c", "protocol.ext.allow=never",
+	"-c", "protocol.allow=never",
+	"-c", "protocol.ssh.allow=always",
+	"-c", "protocol.https.allow=always",
 	"-c", "push.recurseSubmodules=no",
 	"-c", "push.followTags=false",
 }
 
-// gitSSH keeps ssh from leaving a master connection behind; GIT_SSH_COMMAND
-// overrides core.sshCommand.
+// riskyConfig matches effective configuration keys that could redirect the
+// push or the readback, or run a helper; a repository with any is refused.
+const riskyConfig = `^(url\..*|credential\..*|include\..*|includeif\..*|core\.(askpass|gitproxy|sshcommand|worktree|alternaterefscommand)|http\..*(proxy|sslverify|sslcainfo|sslcapath|sslcert|sslkey|cookiefile))$`
+
+// gitSSH keeps ssh from leaving a master connection behind.
 const gitSSH = "ssh -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -o ControlPersist=no"
+
+// gitEnvKeep is the allow-list of inherited variables.
+var gitEnvKeep = map[string]bool{"PATH": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true, "TMPDIR": true, "SSH_AUTH_SOCK": true}
 
 func (p *Publish) Kind() string { return "publish" }
 
@@ -100,8 +126,8 @@ func (p *Publish) parse(raw json.RawMessage, subject string) (publishRequest, st
 	if dec.More() {
 		return r, "", errors.New("publish: request: trailing data")
 	}
-	if !remoteNameRE.MatchString(r.Remote) {
-		return r, "", fmt.Errorf("publish: remote %q is not a remote name", r.Remote)
+	if err := p.validURL(r.URL); err != nil {
+		return r, "", err
 	}
 	if !validBranch(r.Branch) {
 		return r, "", fmt.Errorf("publish: branch %q is not a plain branch name", r.Branch)
@@ -112,11 +138,47 @@ func (p *Publish) parse(raw json.RawMessage, subject string) (publishRequest, st
 	if r.ExpectedHead == r.NewHead {
 		return r, "", errors.New("publish: new_head equals expected_head")
 	}
-	if want := "branch:" + r.Remote + "/" + r.Branch; subject != want {
+	if want := publishSubject(r); subject != want {
 		return r, "", fmt.Errorf("publish: subject %q, want %q", subject, want)
 	}
 	dir, err := p.repoDir(r.Repo)
 	return r, dir, err
+}
+
+// validURL accepts https://host/path and ssh://[user@]host[:port]/path with
+// no password, scp-like user@host:path, and an absolute path only when
+// AllowLocal. Never an option, a transport helper (::) or credentials.
+func (p *Publish) validURL(s string) error {
+	bad := fmt.Errorf("publish: url %q is not an allowed remote URL", s)
+	if s == "" || len(s) > 512 || strings.HasPrefix(s, "-") || strings.Contains(s, "::") || strings.ContainsAny(s, " \t\r\n\\") {
+		return bad
+	}
+	if strings.HasPrefix(s, "/") {
+		if p.AllowLocal && filepath.Clean(s) == s {
+			return nil
+		}
+		return bad
+	}
+	if scpURLRE.MatchString(s) {
+		return nil
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || strings.HasPrefix(u.Host, "-") || u.RawQuery != "" || u.Fragment != "" || !urlPathRE.MatchString(u.Path) {
+		return bad
+	}
+	switch u.Scheme {
+	case "https":
+		if u.User != nil {
+			return errors.New("publish: an https url must not carry credentials")
+		}
+	case "ssh":
+		if _, has := u.User.Password(); has {
+			return errors.New("publish: an ssh url must not carry a password")
+		}
+	default:
+		return bad
+	}
+	return nil
 }
 
 // validBranch accepts a plain branch name: no refspec or option syntax, no
@@ -133,6 +195,19 @@ func validBranch(b string) bool {
 	return true
 }
 
+// within resolves path and requires it strictly inside root (resolved).
+func within(root, path string) (string, error) {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, real)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%q is not inside the publish root", path)
+	}
+	return real, nil
+}
+
 // repoDir resolves repo (absolute and clean) and requires it to be strictly
 // inside Root after symlinks.
 func (p *Publish) repoDir(repo string) (string, error) {
@@ -146,15 +221,62 @@ func (p *Publish) repoDir(repo string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("publish: root: %v", err)
 	}
-	real, err := filepath.EvalSymlinks(repo)
+	real, err := within(root, repo)
 	if err != nil {
 		return "", fmt.Errorf("publish: repo: %v", err)
 	}
-	rel, err := filepath.Rel(root, real)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("publish: repo %q is not inside the publish root", repo)
-	}
 	return real, nil
+}
+
+// bind checks, before any transport, that the repository's git dir and
+// common dir are inside Root, that it borrows no objects from elsewhere,
+// and that no configuration could redirect or wrap the transport.
+func (p *Publish) bind(ctx context.Context, dir string) error {
+	root, err := filepath.EvalSymlinks(p.Root)
+	if err != nil {
+		return fmt.Errorf("publish: root: %v", err)
+	}
+	out, err := p.git(ctx, dir, "rev-parse", "--absolute-git-dir", "--git-common-dir")
+	if err != nil {
+		return fmt.Errorf("publish: git rev-parse: %v: %s", err, clip(out))
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 2 {
+		return fmt.Errorf("publish: git rev-parse: unexpected output %q", clip(out))
+	}
+	common := lines[1]
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(dir, common)
+	}
+	for _, d := range []string{lines[0], common} {
+		if _, err := within(root, d); err != nil {
+			return fmt.Errorf("publish: git dir: %v", err)
+		}
+	}
+	for _, alt := range []string{"alternates", "http-alternates"} {
+		if _, err := os.Lstat(filepath.Join(common, "objects", "info", alt)); err == nil {
+			return fmt.Errorf("publish: the repository borrows objects (%s); refused", alt)
+		}
+	}
+	// The -c safety settings are read back too (scope "command"); only keys
+	// from a configuration file count.
+	out, err = p.git(ctx, dir, "config", "--show-scope", "--name-only", "--get-regexp", riskyConfig)
+	var ee *exec.ExitError
+	if err != nil && !(ctx.Err() == nil && errors.As(err, &ee) && ee.ExitCode() == 1) {
+		return fmt.Errorf("publish: git config: %v: %s", err, clip(out))
+	}
+	var risky []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if scope, name, ok := strings.Cut(line, "\t"); ok && scope != "command" {
+			risky = append(risky, scope+":"+name)
+		} else if !ok && line != "" {
+			risky = append(risky, line)
+		}
+	}
+	if len(risky) > 0 {
+		return fmt.Errorf("publish: repository configuration could redirect the push: %s", clip([]byte(strings.Join(risky, " "))))
+	}
+	return nil
 }
 
 // git runs one git command in dir with the safety settings and a scrubbed
@@ -164,28 +286,32 @@ func (p *Publish) git(ctx context.Context, dir string, args ...string) ([]byte, 
 	if bin == "" {
 		bin = "git"
 	}
-	return RunCommandEnv(ctx, dir, gitEnv(), bin, append(append([]string{}, gitSafety...), args...)...)
+	pre := append([]string{}, gitSafety...)
+	if p.AllowLocal {
+		pre = append(pre, "-c", "protocol.file.allow=always")
+	}
+	return RunCommandEnv(ctx, dir, gitEnv(dir), bin, append(pre, args...)...)
 }
 
-// gitEnv is the process environment without GIT_* overrides or an ssh
-// askpass, plus no prompts and the ssh command above.
-func gitEnv() []string {
+// gitEnv is the allow-listed environment: no GIT_* or other inherited
+// variables, no global or system configuration, no prompts, discovery kept
+// to dir, and the ssh command above.
+func gitEnv(dir string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
-		k, _, _ := strings.Cut(kv, "=")
-		if strings.HasPrefix(k, "GIT_") || k == "SSH_ASKPASS" {
-			continue
+		if k, _, _ := strings.Cut(kv, "="); gitEnvKeep[k] {
+			env = append(env, kv)
 		}
-		env = append(env, kv)
 	}
-	return append(env, "GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND="+gitSSH)
+	return append(env, "HOME=/nonexistent", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND="+gitSSH, "GIT_CEILING_DIRECTORIES="+filepath.Dir(dir))
 }
 
 // remoteHead reads the remote branch head; found is false when the remote
 // has no such branch.
 func (p *Publish) remoteHead(ctx context.Context, dir string, r publishRequest) (head string, found bool, err error) {
 	ref := "refs/heads/" + r.Branch
-	out, err := p.git(ctx, dir, "ls-remote", "--heads", r.Remote, ref)
+	out, err := p.git(ctx, dir, "ls-remote", "--heads", r.URL, ref)
 	if err != nil {
 		return "", false, fmt.Errorf("git ls-remote: %v: %s", err, clip(out))
 	}
@@ -225,8 +351,20 @@ func (p *Publish) fastForward(ctx context.Context, dir string, r publishRequest)
 	return "ancestry check failed (is expected_head fetched?): " + clip(out), nil
 }
 
-func (p *Publish) Precondition(ctx context.Context, e Effect) (bool, string, error) {
+// load parses the stored request and binds its repository.
+func (p *Publish) load(ctx context.Context, e Effect) (publishRequest, string, error) {
 	r, dir, err := p.parse(e.Request, e.Subject)
+	if err != nil {
+		return r, "", err
+	}
+	return r, dir, p.bind(ctx, dir)
+}
+
+// Precondition holds the effect lock and its transaction across one
+// ls-remote, so the session idles in a transaction for up to the transport
+// timeout (review 6); idle_in_transaction_session_timeout must exceed it.
+func (p *Publish) Precondition(ctx context.Context, e Effect) (bool, string, error) {
+	r, dir, err := p.load(ctx, e)
 	if err != nil {
 		return false, "", err
 	}
@@ -235,10 +373,10 @@ func (p *Publish) Precondition(ctx context.Context, e Effect) (bool, string, err
 		return false, "", err
 	}
 	if !found {
-		return false, "", fmt.Errorf("%w: %s has no branch %s (expected %s)", ErrPreconditionConflict, r.Remote, r.Branch, r.ExpectedHead)
+		return false, "", fmt.Errorf("%w: %s has no branch %s (expected %s)", ErrPreconditionConflict, r.URL, r.Branch, r.ExpectedHead)
 	}
 	if head != r.ExpectedHead {
-		return false, "", fmt.Errorf("%w: %s/%s is at %s, expected %s", ErrPreconditionConflict, r.Remote, r.Branch, head, r.ExpectedHead)
+		return false, "", fmt.Errorf("%w: %s %s is at %s, expected %s", ErrPreconditionConflict, r.URL, r.Branch, head, r.ExpectedHead)
 	}
 	detail, err := p.fastForward(ctx, dir, r)
 	if err != nil {
@@ -248,7 +386,7 @@ func (p *Publish) Precondition(ctx context.Context, e Effect) (bool, string, err
 }
 
 func (p *Publish) Dispatch(ctx context.Context, sub Submission) (Receipt, error) {
-	r, dir, err := p.parse(sub.Effect.Request, sub.Effect.Subject)
+	r, dir, err := p.load(ctx, sub.Effect)
 	if err != nil {
 		return Receipt{}, err
 	}
@@ -261,15 +399,15 @@ func (p *Publish) Dispatch(ctx context.Context, sub Submission) (Receipt, error)
 		return Receipt{Outcome: OutcomeFailedDefinite, Detail: detail}, nil
 	}
 	ref := "refs/heads/" + r.Branch
-	out, err := p.git(ctx, dir, "push", "--porcelain", "--force-with-lease="+ref+":"+r.ExpectedHead, r.Remote, r.NewHead+":"+ref)
+	out, err := p.git(ctx, dir, "push", "--porcelain", "--force-with-lease="+ref+":"+r.ExpectedHead, r.URL, r.NewHead+":"+ref)
 	if err != nil {
 		return Receipt{}, fmt.Errorf("git push: %v: %s", err, clip(out))
 	}
 	if !fastForwarded(out, ref) {
 		return Receipt{}, fmt.Errorf("git push reported no fast-forward of %s: %s", ref, clip(out))
 	}
-	remote, _ := json.Marshal(map[string]string{"ref": ref, "old": r.ExpectedHead, "new": r.NewHead})
-	return Receipt{Outcome: OutcomeConfirmed, Detail: "fast-forwarded " + r.Remote + "/" + r.Branch, Remote: remote}, nil
+	remote, _ := json.Marshal(map[string]string{"url": r.URL, "ref": ref, "old": r.ExpectedHead, "new": r.NewHead})
+	return Receipt{Outcome: OutcomeConfirmed, Detail: "fast-forwarded " + ref, Remote: remote}, nil
 }
 
 // fastForwarded reports whether porcelain push output has a fast-forward
@@ -285,7 +423,7 @@ func fastForwarded(out []byte, ref string) bool {
 }
 
 func (p *Publish) Reconcile(ctx context.Context, e Effect) (Observation, string, error) {
-	r, dir, err := p.parse(e.Request, e.Subject)
+	r, dir, err := p.load(ctx, e)
 	if err != nil {
 		return ObsUnknown, "", err
 	}
@@ -295,13 +433,13 @@ func (p *Publish) Reconcile(ctx context.Context, e Effect) (Observation, string,
 	}
 	switch {
 	case !found:
-		return ObsConflict, r.Remote + " has no branch " + r.Branch, nil
+		return ObsConflict, "the remote has no branch " + r.Branch, nil
 	case head == r.NewHead:
-		return ObsCommitted, r.Remote + "/" + r.Branch + " is at new_head", nil
+		return ObsCommitted, r.Branch + " is at new_head", nil
 	case head == r.ExpectedHead:
-		return ObsNotApplied, r.Remote + "/" + r.Branch + " is still at expected_head", nil
+		return ObsNotApplied, r.Branch + " is still at expected_head", nil
 	default:
-		return ObsConflict, r.Remote + "/" + r.Branch + " is at " + head + ", neither expected_head nor new_head", nil
+		return ObsConflict, r.Branch + " is at " + head + ", neither expected_head nor new_head", nil
 	}
 }
 

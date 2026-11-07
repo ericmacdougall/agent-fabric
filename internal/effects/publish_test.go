@@ -65,12 +65,23 @@ func (f *gitFixture) moveHead() string {
 func (f *gitFixture) remoteHead() string { return gitT(f.t, f.remote, "rev-parse", "refs/heads/main") }
 
 func (f *gitFixture) req(expected, next string) json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"repo": f.work, "remote": "origin", "branch": "main", "expected_head": expected, "new_head": next})
+	b, _ := json.Marshal(map[string]string{"repo": f.work, "url": f.remote, "branch": "main", "expected_head": expected, "new_head": next})
 	return b
 }
 
+// subject is the destination subject of the fixture's main branch.
+func (f *gitFixture) subject() string { return "branch:" + f.remote + "#main" }
+
+// exec is the executor under test: the fixture remote is a local path.
+func (f *gitFixture) exec() *Publish { return &Publish{Root: f.root, AllowLocal: true} }
+
+// effect is an unstored publish effect for direct executor calls.
+func (f *gitFixture) effect(expected, next string) Effect {
+	return Effect{Kind: "publish", Subject: f.subject(), IdemKey: "direct", Request: f.req(expected, next)}
+}
+
 func pubSpec(f *gitFixture, key, expected, next string) IntentSpec {
-	return IntentSpec{Mission: "m_1", Attempt: "r_1", Fence: 1, Kind: "publish", Subject: "branch:origin/main",
+	return IntentSpec{Mission: "m_1", Attempt: "r_1", Fence: 1, Kind: "publish", Subject: f.subject(),
 		IdemKey: key, Request: f.req(expected, next), NeedsApproval: true}
 }
 
@@ -99,7 +110,7 @@ func dispatchRows(t *testing.T, ctx context.Context, b *Broker, id string) int {
 func TestPublishHappyPath(t *testing.T) {
 	f := newGitFixture(t)
 	ctx, _, b, _ := setup(t)
-	ex := &Publish{Root: f.root}
+	ex := f.exec()
 	e := submitApproved(t, ctx, b, b, ex, pubSpec(f, "p_ok", f.a, f.b))
 	got, err := b.Dispatch(ctx, ex, e.ID)
 	if err != nil || got.State != Confirmed || got.Dispatches != 1 {
@@ -121,7 +132,7 @@ func TestPublishHappyPath(t *testing.T) {
 func TestPublishMovedHeadQuarantined(t *testing.T) {
 	f := newGitFixture(t)
 	ctx, _, b, _ := setup(t)
-	ex := &Publish{Root: f.root}
+	ex := f.exec()
 	e := submitApproved(t, ctx, b, b, ex, pubSpec(f, "p_moved", f.a, f.b))
 	c := f.moveHead()
 	got, err := b.Dispatch(ctx, ex, e.ID)
@@ -134,6 +145,20 @@ func TestPublishMovedHeadQuarantined(t *testing.T) {
 	if n := dispatchRows(t, ctx, b, e.ID); n != 0 {
 		t.Fatalf("dispatch rows %d, want 0", n)
 	}
+	// Review 4: it was never sent, so it cannot resolve as applied, by the
+	// broker or by a raw write with its audit row.
+	if _, err := b.ResolveQuarantined(ctx, e.ID, ResolvedApplied, "says so", "wal:w_test", "eric"); err == nil {
+		t.Fatal("a never-dispatched publish resolved as applied")
+	}
+	tx, err := b.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.Exec(ctx, `INSERT INTO effect_resolutions (effect_id, from_state, to_state, reason, evidence, actor) VALUES ($1, 'QUARANTINED', 'RESOLVED_APPLIED', 'r', 'e', 'eric')`, e.ID) //nolint:errcheck
+	if _, err := tx.Exec(ctx, "UPDATE effects SET state = 'RESOLVED_APPLIED' WHERE id = $1", e.ID); err == nil {
+		t.Error("the guard let a never-dispatched effect resolve as applied")
+	}
+	tx.Rollback(ctx) //nolint:errcheck
 	// The operator exit still applies.
 	if got, err := b.ResolveQuarantined(ctx, e.ID, ResolvedNotApplied, "head moved before publish", "wal:w_test", "eric"); err != nil || got.State != ResolvedNotApplied {
 		t.Fatalf("resolve: %+v %v", got, err)
@@ -145,7 +170,7 @@ func TestPublishMovedHeadQuarantined(t *testing.T) {
 func TestPublishHeadMovesDuringDispatch(t *testing.T) {
 	f := newGitFixture(t)
 	ctx, _, b, _ := setup(t)
-	ex := &Publish{Root: f.root}
+	ex := f.exec()
 	e := submitApproved(t, ctx, b, b, ex, pubSpec(f, "p_race", f.a, f.b))
 	var c string
 	b.afterDispatchCommit = func(Effect) { c = f.moveHead() }
@@ -172,7 +197,7 @@ func TestPublishHeadMovesDuringDispatch(t *testing.T) {
 func TestPublishStaleExpectedHeadRefused(t *testing.T) {
 	f := newGitFixture(t)
 	ctx, _, b, _ := setup(t)
-	ex := &Publish{Root: f.root}
+	ex := f.exec()
 	gitT(t, f.work, "push", "-q", "origin", f.b+":refs/heads/main")
 	e := submitApproved(t, ctx, b, b, ex, pubSpec(f, "p_stale", f.a, f.d))
 	var rowExpected string
@@ -205,7 +230,7 @@ func TestPublishStaleExpectedHeadRefused(t *testing.T) {
 func TestPublishRefusesNonFastForward(t *testing.T) {
 	f := newGitFixture(t)
 	ctx, _, b, _ := setup(t)
-	ex := &Publish{Root: f.root}
+	ex := f.exec()
 	orphan := gitT(t, f.work, "commit-tree", f.a+"^{tree}", "-m", "orphan")
 	e := submitApproved(t, ctx, b, b, ex, pubSpec(f, "p_nonff", f.a, orphan))
 	got, err := b.Dispatch(ctx, ex, e.ID)
@@ -227,7 +252,7 @@ func TestPublishRefusesNonFastForward(t *testing.T) {
 
 func TestPublishValidate(t *testing.T) {
 	f := newGitFixture(t)
-	ex := &Publish{Root: f.root}
+	ex := f.exec()
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(f.root, "escape")); err != nil {
 		t.Fatal(err)
@@ -244,8 +269,18 @@ func TestPublishValidate(t *testing.T) {
 		return b
 	}
 	set := func(k string, v any) json.RawMessage { return with(func(m map[string]any) { m[k] = v }) }
-	branch := func(s *IntentSpec, v string) { s.Request = set("branch", v); s.Subject = "branch:origin/" + v }
-	remote := func(s *IntentSpec, v string) { s.Request = set("remote", v); s.Subject = "branch:" + v + "/main" }
+	branch := func(s *IntentSpec, v string) {
+		s.Request = set("branch", v)
+		s.Subject = "branch:" + f.remote + "#" + v
+	}
+	remote := func(s *IntentSpec, v string) { s.Request = set("url", v); s.Subject = "branch:" + v + "#main" }
+	for _, u := range []string{"https://github.com/o/r.git", "ssh://git@github.com/o/r.git", "git@github.com:o/r.git"} {
+		s := ok
+		remote(&s, u)
+		if err := ex.Validate(s); err != nil {
+			t.Errorf("url %s refused: %v", u, err)
+		}
+	}
 	cases := []struct {
 		name string
 		mut  func(*IntentSpec)
@@ -262,9 +297,19 @@ func TestPublishValidate(t *testing.T) {
 		{"lock branch", func(s *IntentSpec) { branch(s, "main.lock") }},
 		{"hidden component", func(s *IntentSpec) { branch(s, "a/.b") }},
 		{"empty component", func(s *IntentSpec) { branch(s, "a//b") }},
-		{"option remote", func(s *IntentSpec) { remote(s, "--force") }},
-		{"url remote", func(s *IntentSpec) { remote(s, "ext::sh -c id") }},
-		{"path remote", func(s *IntentSpec) { remote(s, "/tmp/elsewhere.git") }},
+		{"option url", func(s *IntentSpec) { remote(s, "--upload-pack=id") }},
+		{"ext url", func(s *IntentSpec) { remote(s, "ext::sh -c id") }},
+		{"fd url", func(s *IntentSpec) { remote(s, "fd::3") }},
+		{"remote name", func(s *IntentSpec) { remote(s, "origin") }},
+		{"file url", func(s *IntentSpec) { remote(s, "file:///tmp/x.git") }},
+		{"http url", func(s *IntentSpec) { remote(s, "http://github.com/o/r.git") }},
+		{"https with a token", func(s *IntentSpec) { remote(s, "https://x:tok@github.com/o/r.git") }},
+		{"https with a user", func(s *IntentSpec) { remote(s, "https://x@github.com/o/r.git") }},
+		{"ssh with a password", func(s *IntentSpec) { remote(s, "ssh://git:pw@github.com/o/r.git") }},
+		{"option host", func(s *IntentSpec) { remote(s, "ssh://-oProxyCommand=id/r.git") }},
+		{"scp option host", func(s *IntentSpec) { remote(s, "git@-oProxyCommand=id:r.git") }},
+		{"url with a query", func(s *IntentSpec) { remote(s, "https://github.com/o/r.git?x=1") }},
+		{"unclean path url", func(s *IntentSpec) { remote(s, f.root+"/x/../remote.git") }},
 		{"force flag", func(s *IntentSpec) { s.Request = set("force", true) }},
 		{"missing field", func(s *IntentSpec) { s.Request = with(func(m map[string]any) { delete(m, "expected_head") }) }},
 		{"relative repo", func(s *IntentSpec) { s.Request = set("repo", "work") }},
@@ -272,7 +317,7 @@ func TestPublishValidate(t *testing.T) {
 		{"repo through a symlink out of root", func(s *IntentSpec) { s.Request = set("repo", filepath.Join(f.root, "escape")) }},
 		{"unclean repo path", func(s *IntentSpec) { s.Request = set("repo", f.root+"/x/../work") }},
 		{"repo is the root", func(s *IntentSpec) { s.Request = set("repo", f.root) }},
-		{"subject mismatch", func(s *IntentSpec) { s.Subject = "branch:origin/other" }},
+		{"subject mismatch", func(s *IntentSpec) { s.Subject = "branch:" + f.remote + "#other" }},
 	}
 	for _, c := range cases {
 		s := ok
@@ -284,35 +329,160 @@ func TestPublishValidate(t *testing.T) {
 	if err := (&Publish{}).Validate(ok); err == nil {
 		t.Error("an executor with no root accepted a publish")
 	}
+	if err := (&Publish{Root: f.root}).Validate(ok); err == nil {
+		t.Error("a local path url was accepted without AllowLocal")
+	}
+}
+
+// Review 1 on 4d98e31: the approved URL is where the push goes. Repository
+// redirection (pushInsteadOf, insteadOf) is refused before any transport;
+// a remote's pushurl and the user's global configuration do not apply.
+func TestPublishBindsDestination(t *testing.T) {
+	ctx := context.Background()
+	newDecoy := func(f *gitFixture) string {
+		d := filepath.Join(f.root, "decoy.git")
+		gitT(t, f.root, "clone", "-q", "--bare", f.remote, d)
+		return d
+	}
+	for _, key := range []string{"pushInsteadOf", "insteadOf"} {
+		f := newGitFixture(t)
+		decoy := newDecoy(f)
+		gitT(t, f.work, "config", "url."+decoy+"."+key, f.remote)
+		ex := f.exec()
+		e := f.effect(f.a, f.b)
+		if _, _, err := ex.Precondition(ctx, e); err == nil {
+			t.Errorf("%s: precondition accepted a redirecting repository", key)
+		}
+		if rc, err := ex.Dispatch(ctx, Submission{Effect: e, RemoteKey: "k"}); err == nil {
+			t.Errorf("%s: dispatch went ahead: %+v", key, rc)
+		}
+		if obs, _, err := ex.Reconcile(ctx, e); err == nil || obs != ObsUnknown {
+			t.Errorf("%s: readback from a redirecting repository: %s %v", key, obs, err)
+		}
+		if d := gitT(t, decoy, "rev-parse", "refs/heads/main"); d != f.a {
+			t.Errorf("%s: decoy moved to %s", key, d)
+		}
+		if h := f.remoteHead(); h != f.a {
+			t.Errorf("%s: remote moved to %s", key, h)
+		}
+	}
+	// A pushurl on a named remote and a global pushInsteadOf are ignored:
+	// the push goes to the approved URL.
+	f := newGitFixture(t)
+	decoy := newDecoy(f)
+	gitT(t, f.work, "config", "remote.origin.pushurl", decoy)
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[url \""+decoy+"\"]\n\tpushInsteadOf = "+f.remote+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	ex := f.exec()
+	if rc, err := ex.Dispatch(ctx, Submission{Effect: f.effect(f.a, f.b), RemoteKey: "k"}); err != nil || rc.Outcome != OutcomeConfirmed {
+		t.Fatalf("push: %+v %v", rc, err)
+	}
+	if d := gitT(t, decoy, "rev-parse", "refs/heads/main"); d != f.a {
+		t.Errorf("decoy moved to %s", d)
+	}
+	if h := f.remoteHead(); h != f.b {
+		t.Errorf("remote head %s, want %s", h, f.b)
+	}
+}
+
+// Review 2 on 4d98e31: the git dir and object store are bound to Root too.
+func TestPublishBindsGitDir(t *testing.T) {
+	ctx := context.Background()
+	f := newGitFixture(t)
+	outside := t.TempDir()
+	gitT(t, outside, "clone", "-q", f.work, "real")
+	linked := filepath.Join(f.root, "linked")
+	if err := os.MkdirAll(linked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(linked, ".git"), []byte("gitdir: "+filepath.Join(outside, "real", ".git")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ex := f.exec()
+	at := func(repo string) Effect {
+		e := f.effect(f.a, f.b)
+		e.Request = []byte(strings.Replace(string(e.Request), `"repo":"`+f.work+`"`, `"repo":"`+repo+`"`, 1))
+		if !strings.Contains(string(e.Request), repo) {
+			t.Fatalf("request not rewritten: %s", e.Request)
+		}
+		return e
+	}
+	if _, _, err := ex.Precondition(ctx, at(linked)); err == nil || !strings.Contains(err.Error(), "git dir") {
+		t.Errorf("a git dir outside Root was used: %v", err)
+	}
+	// Borrowed objects: alternates into a directory outside Root.
+	alt := filepath.Join(f.root, "alt")
+	gitT(t, f.root, "clone", "-q", "--shared", f.work, alt)
+	if _, _, err := ex.Precondition(ctx, at(alt)); err == nil || !strings.Contains(err.Error(), "borrows") {
+		t.Errorf("a repository with alternates was used: %v", err)
+	}
+	// A worktree redirection in config.
+	gitT(t, f.work, "config", "core.worktree", outside)
+	if _, _, err := ex.Precondition(ctx, f.effect(f.a, f.b)); err == nil {
+		t.Error("a repository with core.worktree was used")
+	}
+	if h := f.remoteHead(); h != f.a {
+		t.Fatalf("remote moved to %s", h)
+	}
+}
+
+// Review 3 on 4d98e31: git sees only an allow-listed environment.
+func TestPublishEnvAllowListed(t *testing.T) {
+	f := newGitFixture(t)
+	dir := t.TempDir()
+	dump := filepath.Join(dir, "env")
+	fake := filepath.Join(dir, "git")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nenv > '"+dump+"'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PGPASSWORD", "not-a-secret")
+	t.Setenv("GIT_ALTERNATE_OBJECT_DIRECTORIES", dir)
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'url.x.insteadof'='y'")
+	ex := &Publish{Root: f.root, Git: fake, AllowLocal: true}
+	ex.Precondition(context.Background(), f.effect(f.a, f.b)) //nolint:errcheck
+	raw, err := os.ReadFile(dump)
+	if err != nil {
+		t.Fatalf("the fake git did not run: %v", err)
+	}
+	allowed := map[string]bool{"PATH": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true, "TMPDIR": true, "SSH_AUTH_SOCK": true,
+		"HOME": true, "GIT_CONFIG_GLOBAL": true, "GIT_CONFIG_NOSYSTEM": true, "GIT_TERMINAL_PROMPT": true, "GIT_SSH_COMMAND": true,
+		"GIT_CEILING_DIRECTORIES": true, "PWD": true, "SHLVL": true, "_": true, "OLDPWD": true}
+	var n int
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		k, _, _ := strings.Cut(line, "=")
+		n++
+		if !allowed[k] {
+			t.Errorf("git saw %s", k)
+		}
+	}
+	if n < 5 || !strings.Contains(string(raw), "GIT_CONFIG_GLOBAL=/dev/null") {
+		t.Fatalf("env dump looks empty (%d lines)", n)
+	}
 }
 
 // Review nit 3 on 11145f4: what could outlive the process group or
-// redirect git is off: repository hooks, the ext:: transport, and an
-// inherited GIT_* override.
+// redirect git is off: repository hooks and an inherited GIT_* override.
 func TestPublishGitHelpersDisabled(t *testing.T) {
 	f := newGitFixture(t)
-	ex := &Publish{Root: f.root}
+	ex := f.exec()
 	mark := filepath.Join(t.TempDir(), "ran")
 	if err := os.WriteFile(filepath.Join(f.work, ".git", "hooks", "pre-push"), []byte("#!/bin/sh\ntouch '"+mark+"'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gitT(t, f.work, "remote", "add", "evil", "ext::sh -c touch% "+mark)
 	t.Setenv("GIT_DIR", f.remote) // would point every command at the bare remote
 	ctx := context.Background()
-	e := Effect{Kind: "publish", Subject: "branch:origin/main", IdemKey: "h", Request: f.req(f.a, f.b)}
-	if rc, err := ex.Dispatch(ctx, Submission{Effect: e, RemoteKey: e.IdemKey}); err != nil || rc.Outcome != OutcomeConfirmed {
+	if rc, err := ex.Dispatch(ctx, Submission{Effect: f.effect(f.a, f.b), RemoteKey: "h"}); err != nil || rc.Outcome != OutcomeConfirmed {
 		t.Fatalf("push: %+v %v", rc, err)
 	}
 	if h := f.remoteHead(); h != f.b {
 		t.Fatalf("remote head %s, want %s", h, f.b)
 	}
-	raw, _ := json.Marshal(map[string]string{"repo": f.work, "remote": "evil", "branch": "main", "expected_head": f.a, "new_head": f.b})
-	evil := Effect{Kind: "publish", Subject: "branch:evil/main", IdemKey: "x", Request: raw}
-	if _, _, err := ex.Precondition(ctx, evil); err == nil {
-		t.Error("an ext:: remote was read")
-	}
 	if _, err := os.Stat(mark); err == nil {
-		t.Fatal("a repository hook or an ext:: command ran")
+		t.Fatal("a repository hook ran")
 	}
 }
 
@@ -326,8 +496,8 @@ func TestPublishHonoursDeadline(t *testing.T) {
 	if err := os.WriteFile(hung, []byte("#!/bin/sh\necho call >> '"+mark+"'\nexec sleep 30\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	e := Effect{ID: "e_p", Kind: "publish", Subject: "branch:origin/main", IdemKey: "contract", Request: f.req(f.a, f.b)}
-	assertHonoursDeadline(t, "Publish", &Publish{Root: f.root, Git: hung}, e)
+	e := f.effect(f.a, f.b)
+	assertHonoursDeadline(t, "Publish", &Publish{Root: f.root, Git: hung, AllowLocal: true}, e)
 	raw, _ := os.ReadFile(mark)
 	if n := strings.Count(string(raw), "call"); n != 3 {
 		t.Fatalf("hung git reached %d times, want 3 (the contract test would be vacuous)", n)
@@ -354,7 +524,7 @@ func TestPublishQuarantineGuard(t *testing.T) {
 	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET state = 'QUARANTINED' WHERE id = 'e_pub_ar'"); err == nil {
 		t.Error("APPROVAL_REQUIRED moved to QUARANTINED")
 	}
-	ex := &Publish{Root: f.root}
+	ex := f.exec()
 	e := submitApproved(t, ctx, rb, ab, ex, pubSpec(f, "p_guard", f.a, f.b))
 	for _, q := range []string{
 		"UPDATE effects SET state = 'QUARANTINED', dispatches = dispatches + 1 WHERE id = $1",

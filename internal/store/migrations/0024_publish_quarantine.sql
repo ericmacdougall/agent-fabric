@@ -11,6 +11,7 @@
 --     rules keep that move free of a dispatch count, a receipt and an
 --     approval change. Other kinds keep review S5 (no never-sent
 --     quarantine).
+--     A never-dispatched effect resolves only to RESOLVED_NOT_APPLIED.
 --   - fabric_effects_runner_guard: the same move for a runner on its own
 --     live run, as for a failed precondition.
 CREATE OR REPLACE FUNCTION fabric_effects_outcome_guard() RETURNS trigger LANGUAGE plpgsql
@@ -87,6 +88,11 @@ BEGIN
         RAISE EXCEPTION 'effect % may not move % -> %', NEW.id, OLD.state, NEW.state USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.state IN ('RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN
+        -- AC-12 review 4: a never-dispatched effect was not applied.
+        IF NEW.state = 'RESOLVED_APPLIED' AND OLD.dispatches = 0 THEN
+            RAISE EXCEPTION 'effect % was never dispatched and may resolve only to RESOLVED_NOT_APPLIED', NEW.id
+                USING ERRCODE = 'check_violation';
+        END IF;
         IF NOT EXISTS (
             SELECT 1 FROM public.effect_resolutions WHERE effect_id = NEW.id AND to_state = NEW.state
                 AND xact = txid_current()) THEN

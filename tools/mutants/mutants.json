@@ -3617,8 +3617,8 @@
   "expect": "TestPublishStaleExpectedHeadRefused",
   "edits": [
    [
-    "\"push\", \"--porcelain\", \"--force-with-lease=\"+ref+\":\"+r.ExpectedHead, r.Remote",
-    "\"push\", \"--porcelain\", r.Remote"
+    "\"push\", \"--porcelain\", \"--force-with-lease=\"+ref+\":\"+r.ExpectedHead, r.URL",
+    "\"push\", \"--porcelain\", r.URL"
    ]
   ]
  },
@@ -3630,8 +3630,8 @@
   "expect": "TestPublishHeadMovesDuringDispatch",
   "edits": [
    [
-    "\"--force-with-lease=\"+ref+\":\"+r.ExpectedHead, r.Remote",
-    "\"--force\", r.Remote"
+    "\"--force-with-lease=\"+ref+\":\"+r.ExpectedHead, r.URL",
+    "\"--force\", r.URL"
    ]
   ]
  },
@@ -3744,11 +3744,11 @@
   "invariant": "publish_cas",
   "pkg": "./internal/effects",
   "file": "internal/effects/publish.go",
-  "expect": "TestPublishGitHelpersDisabled",
+  "expect": "TestPublishEnvAllowListed",
   "edits": [
    [
-    "if strings.HasPrefix(k, \"GIT_\") || k == \"SSH_ASKPASS\" {",
-    "if k == \"SSH_ASKPASS\" {"
+    "if k, _, _ := strings.Cut(kv, \"=\"); gitEnvKeep[k] {",
+    "if k, _, _ := strings.Cut(kv, \"=\"); gitEnvKeep[k] || k != \"\" {"
    ]
   ]
  },
@@ -3788,6 +3788,84 @@
    [
     "if !spec.NeedsApproval {",
     "if false {"
+   ]
+  ]
+ },
+ {
+  "id": "M295_publish_config_unchecked",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishBindsDestination",
+  "edits": [
+   [
+    "\tif len(risky) > 0 {",
+    "\tif false && len(risky) > 0 {"
+   ]
+  ]
+ },
+ {
+  "id": "M296_publish_gitdir_unchecked",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishBindsGitDir",
+  "edits": [
+   [
+    "for _, d := range []string{lines[0], common} {",
+    "for _, d := range []string{} {"
+   ]
+  ]
+ },
+ {
+  "id": "M297_publish_global_config",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishBindsDestination",
+  "edits": [
+   [
+    "\"GIT_CONFIG_GLOBAL=/dev/null\", ",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M298_guard_zero_dispatch_applied",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0024_publish_quarantine.sql",
+  "expect": "TestPublishMovedHeadQuarantined",
+  "edits": [
+   [
+    "IF NEW.state = 'RESOLVED_APPLIED' AND OLD.dispatches = 0 THEN",
+    "IF false THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M299_publish_alternates_unchecked",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishBindsGitDir",
+  "edits": [
+   [
+    "for _, alt := range []string{\"alternates\", \"http-alternates\"} {",
+    "for _, alt := range []string{} {"
+   ]
+  ]
+ },
+ {
+  "id": "M300_publish_local_url_always",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishValidate",
+  "edits": [
+   [
+    "if p.AllowLocal && filepath.Clean(s) == s {",
+    "if filepath.Clean(s) == s {"
    ]
   ]
  }

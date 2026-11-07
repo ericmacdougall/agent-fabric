@@ -807,7 +807,8 @@ func (b *Broker) ResolveQuarantined(ctx context.Context, id string, outcome Stat
 	}
 	defer tx.Rollback(context.Background()) //nolint:errcheck
 	var state string
-	err = tx.QueryRow(ctx, "SELECT state FROM effects WHERE id = $1 FOR UPDATE", id).Scan(&state)
+	var dispatches int
+	err = tx.QueryRow(ctx, "SELECT state, dispatches FROM effects WHERE id = $1 FOR UPDATE", id).Scan(&state, &dispatches)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Effect{}, fmt.Errorf("%w: effect %s", domain.ErrNotFound, id)
 	}
@@ -816,6 +817,11 @@ func (b *Broker) ResolveQuarantined(ctx context.Context, id string, outcome Stat
 	}
 	if State(state) != Quarantined {
 		return Effect{}, fmt.Errorf("%w: resolve while %s (needs QUARANTINED)", domain.ErrInvalidTransition, state)
+	}
+	// Review 4 on 4d98e31: an effect quarantined by its precondition was
+	// never sent, so it cannot have been applied (0024 holds this too).
+	if outcome == ResolvedApplied && dispatches == 0 {
+		return Effect{}, fmt.Errorf("%w: effect %s was never dispatched; it resolves only to %s", domain.ErrInvalidTransition, id, ResolvedNotApplied)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO effect_resolutions (effect_id, from_state, to_state, reason, evidence, actor) VALUES ($1, $2, $3, $4, $5, $6)`,
 		id, state, string(outcome), reason, evidence, actor); err != nil {
