@@ -67,6 +67,13 @@ func TestResolveQuarantinedEffect(t *testing.T) {
 	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET state = 'RESOLVED_APPLIED' WHERE id = $1", e.ID); err == nil {
 		t.Error("an unaudited RESOLVED_APPLIED write was accepted")
 	}
+	// Nor can a row be born resolved.
+	for _, st := range []string{"RESOLVED_APPLIED", "RESOLVED_NOT_APPLIED"} {
+		if _, err := ab.pool.Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state)
+			VALUES ('e_born', 'm_1', 'r_1', 1, 'fake', 's_born', 'k_born', '{}', 'sha', $1)`, st); err == nil {
+			t.Errorf("an effect was inserted already %s", st)
+		}
+	}
 	got, err := ab.ResolveQuarantined(ctx, e.ID, ResolvedNotApplied, "ticket comments read back: not posted", "wal:w_x", "eric")
 	if err != nil || got.State != ResolvedNotApplied {
 		t.Fatalf("operator resolve: %+v %v", got, err)

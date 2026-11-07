@@ -2858,5 +2858,18 @@
     "    RETURN NULL;"
    ]
   ]
+ },
+ {
+  "id": "M218_born_resolved",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestResolveQuarantinedEffect",
+  "edits": [
+   [
+    "        IF NEW.state IN ('RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN\n            RAISE",
+    "        IF false THEN\n            RAISE"
+   ]
+  ]
  }
 ]

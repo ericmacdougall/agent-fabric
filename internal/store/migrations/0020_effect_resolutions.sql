@@ -26,10 +26,17 @@ END $$;
 CREATE TRIGGER effect_resolutions_append_only BEFORE UPDATE OR DELETE ON effect_resolutions
     FOR EACH ROW EXECUTE FUNCTION fabric_effect_resolutions_append_only();
 
--- Any move into RESOLVED_* must come from QUARANTINED with its audit row.
+-- Any move into RESOLVED_* must come from QUARANTINED with its audit row,
+-- and no effect is born resolved.
 CREATE FUNCTION fabric_effects_resolution_guard() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.state IN ('RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN
+            RAISE EXCEPTION 'effect % may not be inserted %', NEW.id, NEW.state USING ERRCODE = 'check_violation';
+        END IF;
+        RETURN NEW;
+    END IF;
     IF NEW.state IN ('RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') AND NEW.state IS DISTINCT FROM OLD.state THEN
         IF OLD.state <> 'QUARANTINED' OR NOT EXISTS (
             SELECT 1 FROM public.effect_resolutions WHERE effect_id = NEW.id AND to_state = NEW.state) THEN
@@ -41,5 +48,5 @@ BEGIN
     END IF;
     RETURN NEW;
 END $$;
-CREATE TRIGGER effects_resolution_guard BEFORE UPDATE ON effects
+CREATE TRIGGER effects_resolution_guard BEFORE INSERT OR UPDATE ON effects
     FOR EACH ROW EXECUTE FUNCTION fabric_effects_resolution_guard();
