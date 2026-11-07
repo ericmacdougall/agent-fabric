@@ -1633,5 +1633,148 @@
     "\tif cmd.Submission < 0 {\n"
    ]
   ]
+ },
+ {
+  "id": "M125_grant_clock_is_tx_start",
+  "invariant": "dispatch_grant_0012",
+  "pkg": "./internal/store",
+  "file": "internal/store/dispatch.go",
+  "expect": "TestAuthorizeDispatchUsesDBTimeAfterLocks",
+  "edits": [
+   [
+    "\"SELECT clock_timestamp()\"",
+    "\"SELECT now()\""
+   ]
+  ]
+ },
+ {
+  "id": "M126_grant_state_unchecked",
+  "invariant": "dispatch_grant_0012",
+  "pkg": "./internal/store",
+  "file": "internal/store/dispatch.go",
+  "expect": "TestAuthorizeDispatchDenials",
+  "edits": [
+   [
+    "case domain.AttemptState(state) != domain.AttemptRunning:",
+    "case state == \"\":"
+   ]
+  ]
+ },
+ {
+  "id": "M127_grant_lease_unchecked",
+  "invariant": "dispatch_grant_0012",
+  "pkg": "./internal/store",
+  "file": "internal/store/dispatch.go",
+  "expect": "TestAuthorizeDispatchDenials",
+  "edits": [
+   [
+    "case leaseUntil == nil || !leaseUntil.After(at):",
+    "case leaseUntil == nil:"
+   ]
+  ]
+ },
+ {
+  "id": "M128_grant_revision_unchecked",
+  "invariant": "dispatch_grant_0012",
+  "pkg": "./internal/store",
+  "file": "internal/store/dispatch.go",
+  "expect": "TestAuthorizeDispatchDenials",
+  "edits": [
+   [
+    "case revision != intentRevision:",
+    "case revision < 0:"
+   ]
+  ]
+ },
+ {
+  "id": "M129_grant_expiry_unchecked",
+  "invariant": "dispatch_grant_0012",
+  "pkg": "./internal/store",
+  "file": "internal/store/dispatch.go",
+  "expect": "TestAuthorizeDispatchUsesDBTimeAfterLocks",
+  "edits": [
+   [
+    "if !h.expires.After(at) {",
+    "if h.expires.IsZero() {"
+   ]
+  ]
+ },
+ {
+  "id": "M130_grant_not_replayed",
+  "invariant": "dispatch_grant_0012",
+  "pkg": "./internal/store",
+  "file": "internal/store/dispatch.go",
+  "expect": "TestAuthorizeDispatchGrantsOnceAndReplays",
+  "edits": [
+   [
+    "if g, ok, err := loadGrant(ctx, tx, attempt); err != nil || ok {",
+    "if g, ok, err := loadGrant(ctx, tx, attempt); err != nil {"
+   ]
+  ]
+ },
+ {
+  "id": "M131_grant_fence_unchecked",
+  "invariant": "dispatch_grant_0012",
+  "pkg": "./internal/store",
+  "file": "internal/store/dispatch.go",
+  "expect": "TestAuthorizeDispatchGrantsOnceAndReplays",
+  "edits": [
+   [
+    "\tif cur != fence {\n",
+    "\tif cur < 0 {\n"
+   ]
+  ]
+ },
+ {
+  "id": "M132_grants_mutable",
+  "invariant": "dispatch_grant_0012",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0012_dispatch_grants.sql",
+  "expect": "TestAuthorizeDispatchGrantsOnceAndReplays",
+  "edits": [
+   [
+    "CREATE TRIGGER dispatch_grants_append_only BEFORE UPDATE OR DELETE ON dispatch_grants\n    FOR EACH ROW EXECUTE FUNCTION fabric_reject_mutation();",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M133_denied_dispatch_starts",
+  "invariant": "dispatch_grant_0012",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestDispatchGateDenialsNeverStart",
+  "edits": [
+   [
+    "\t\tcase !gr.Granted:\n",
+    "\t\tcase !gr.Granted && gr.Reason == \"never\":\n"
+   ]
+  ]
+ },
+ {
+  "id": "M134_holds_kept_after_finish",
+  "invariant": "dispatch_grant_0012",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestDispatchGateDenialsNeverStart",
+  "edits": [
+   [
+    "\t\tdefer s.releaseHolds(ctx, attempt)\n",
+    "\t\t_ = attempt\n"
+   ]
+  ]
+ },
+ {
+  "id": "M135_sweep_ungated",
+  "invariant": "dispatch_grant_0012",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestTickSweepsReservationsOnlyWhenGated",
+  "edits": [
+   [
+    "\tif s.gated() {\n\t\tif _, err := s.st.ExpireReservations",
+    "\tif s != nil {\n\t\tif _, err := s.st.ExpireReservations"
+   ]
+  ]
  }
 ]

@@ -47,6 +47,7 @@ type hooks struct {
 
 	// Reservation barriers (reservations_test.go).
 	holdLocked       func(resource string) // after each capacity row lock in Hold
+	grantLocked      func()                // after the locks in AuthorizeDispatch, before the clock read
 	beforeHoldCommit func() error          // returning an error aborts the hold transaction
 	reclaimLocked    func(id string)       // after the reservation row lock in release/expire/settle
 
@@ -752,7 +753,7 @@ func (s *Store) Truncate(ctx context.Context) error {
 	for _, q := range []string{
 		"SET LOCAL fabric.allow_truncate = 'on'",
 		`TRUNCATE commands, events, outbox, outbox_cursors, attempts, stale_observations, missions,
-		usage_receipts, reservation_events, reservations, hold_commands, resource_capacities RESTART IDENTITY CASCADE`,
+		dispatch_grants, usage_receipts, reservation_events, reservations, hold_commands, resource_capacities RESTART IDENTITY CASCADE`,
 		"UPDATE slots SET cap = 4 WHERE id = 1",
 	} {
 		if _, err := tx.Exec(ctx, q); err != nil {

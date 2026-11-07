@@ -55,6 +55,13 @@ type Config struct {
 	Launch       claude.Launch
 	Backoff      time.Duration // backstop timer; doubles up to MaxBackoff
 	MaxBackoff   time.Duration
+	// Holds turns on the C5 dispatch gate (0012). Empty (the default) keeps
+	// today's behaviour: no reservation, no grant. When set, each attempt
+	// holds these items after START, and the runner starts only on a stored
+	// GRANTED decision taken after ACK_START; holds are released at finish
+	// and swept at expiry.
+	Holds   []store.HoldItem
+	HoldTTL time.Duration // default 2 x Wall, at most store.MaxHoldTTL
 }
 
 // Scheduler owns one host's dispatch loop.
@@ -65,6 +72,8 @@ type Scheduler struct {
 	// afterRead is a test barrier between reading the mission and starting
 	// its attempt (owner_test.go); nil in production.
 	afterRead func()
+	// afterAck is a test cutpoint after ACK_START, before the dispatch grant.
+	afterAck func()
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired int
 }
@@ -76,8 +85,16 @@ func New(st *store.Store, cfg Config, ln Launcher) *Scheduler {
 	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = 30 * time.Second
 	}
+	if len(cfg.Holds) > 0 && cfg.HoldTTL <= 0 {
+		cfg.HoldTTL = 2 * cfg.Wall
+	}
+	if cfg.HoldTTL > store.MaxHoldTTL {
+		cfg.HoldTTL = store.MaxHoldTTL
+	}
 	return &Scheduler{st: st, cfg: cfg, ln: ln}
 }
+
+func (s *Scheduler) gated() bool { return len(s.cfg.Holds) > 0 }
 
 // Tick runs one pass of every sweep and reports whether it did any work.
 func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
@@ -92,6 +109,11 @@ func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 		fmt.Fprintln(os.Stderr, "fabd: lease sweep:", err) // per-row failures never stop the loop (review H10)
 	}
 	s.Expired += len(exp)
+	if s.gated() {
+		if _, err := s.st.ExpireReservations(ctx, 50); err != nil {
+			fmt.Fprintln(os.Stderr, "fabd: reservation sweep:", err)
+		}
+	}
 	if n, err := s.startRequestedJobs(ctx); err != nil {
 		return false, err
 	} else if n > 0 {
@@ -278,6 +300,13 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		return nil
 	}
 	fence := resp.Events[0].Fence
+	if s.gated() {
+		// C5: hold before any preparation; a refusal launches nothing.
+		if _, err := s.st.Hold(ctx, store.HoldRequest{Key: "hold:" + string(attempt), Attempt: attempt, Fence: fence,
+			Items: s.cfg.Holds, TTL: s.cfg.HoldTTL}); err != nil {
+			return s.finish(ctx, mission, attempt, fence, "abandoned", "", "hold refused: "+err.Error())
+		}
+	}
 
 	worktree := filepath.Join(s.cfg.WorkRoot, "wt", string(mission))
 	runDir := filepath.Join(s.cfg.WorkRoot, "run", string(attempt))
@@ -314,6 +343,26 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	// ownership boundary is durable first. A failed ACK launches nothing.
 	if _, err := s.st.Execute(ctx, "fabd", domain.CommandID("ack:"+string(attempt)), domain.Command{Kind: domain.CmdAckStart, Mission: mission, Attempt: attempt, Fence: fence}); err != nil {
 		return err
+	}
+	if s.gated() {
+		// C5: the final grant, after ACK and before any runner byte. A
+		// denial is definite (nothing started), so the attempt is abandoned.
+		need := make([]string, len(s.cfg.Holds))
+		for i, h := range s.cfg.Holds {
+			need[i] = h.Resource
+		}
+		if s.afterAck != nil {
+			s.afterAck()
+		}
+		gr, err := s.st.AuthorizeDispatch(ctx, attempt, fence, need)
+		switch {
+		case err != nil:
+			return s.finish(ctx, mission, attempt, fence, "abandoned", "", "dispatch not authorized: "+err.Error())
+		case gr.Replayed:
+			return nil // decided by an earlier call, which owns the launch
+		case !gr.Granted:
+			return s.finish(ctx, mission, attempt, fence, "abandoned", "", "dispatch denied: "+gr.Reason)
+		}
 	}
 	out, err := os.Create(filepath.Join(runDir, "stream.jsonl"))
 	if err != nil {
@@ -398,6 +447,9 @@ func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attemp
 // finish ends the attempt and, when the stream and exit agree, verifies it.
 func (s *Scheduler) finish(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, outcome, waitKey, reason string) error {
 	cmd := domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence, Outcome: outcome, WaitKey: waitKey, Reason: reason}
+	if s.gated() {
+		defer s.releaseHolds(ctx, attempt)
+	}
 	if _, err := s.st.Execute(ctx, "fabd", domain.CommandID("finish:"+string(attempt)), cmd); err != nil {
 		if errors.As(err, new(*store.Refusal)) {
 			return nil
@@ -412,6 +464,23 @@ func (s *Scheduler) finish(ctx context.Context, mission domain.MissionID, attemp
 		return err
 	}
 	return nil
+}
+
+// releaseHolds closes the attempt's held reservations; the expiry sweep is
+// the backstop when this fails.
+func (s *Scheduler) releaseHolds(ctx context.Context, attempt domain.AttemptID) {
+	rs, err := s.st.Reservations(ctx, attempt)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fabd: release holds:", err)
+		return
+	}
+	for _, r := range rs {
+		if r.State == store.ResHeld {
+			if _, err := s.st.Release(ctx, r.ID); err != nil {
+				fmt.Fprintln(os.Stderr, "fabd: release", r.ID+":", err)
+			}
+		}
+	}
 }
 
 func randomToken() string {
