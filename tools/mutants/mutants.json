@@ -3608,5 +3608,187 @@
     "VALUES ($1, $2, now() + $3::interval)`,"
    ]
   ]
+ },
+ {
+  "id": "M281_publish_no_lease",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishStaleExpectedHeadRefused",
+  "edits": [
+   [
+    "\"push\", \"--porcelain\", \"--force-with-lease=\"+ref+\":\"+r.ExpectedHead, r.Remote",
+    "\"push\", \"--porcelain\", r.Remote"
+   ]
+  ]
+ },
+ {
+  "id": "M282_publish_plain_force",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishHeadMovesDuringDispatch",
+  "edits": [
+   [
+    "\"--force-with-lease=\"+ref+\":\"+r.ExpectedHead, r.Remote",
+    "\"--force\", r.Remote"
+   ]
+  ]
+ },
+ {
+  "id": "M283_publish_no_ff_recheck",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishRefusesNonFastForward",
+  "edits": [
+   [
+    "through.\n\tdetail, err := p.fastForward(ctx, dir, r)",
+    "through.\n\tdetail, err := \"\", error(nil)"
+   ]
+  ]
+ },
+ {
+  "id": "M284_publish_no_head_compare",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishMovedHeadQuarantined",
+  "edits": [
+   [
+    "\tif head != r.ExpectedHead {\n\t\treturn false, \"\", fmt.Errorf",
+    "\tif false && head != r.ExpectedHead {\n\t\treturn false, \"\", fmt.Errorf"
+   ]
+  ]
+ },
+ {
+  "id": "M285_reconcile_conflict_not_applied",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishHeadMovesDuringDispatch",
+  "edits": [
+   [
+    "\tdefault:\n\t\treturn ObsConflict,",
+    "\tdefault:\n\t\treturn ObsNotApplied,"
+   ]
+  ]
+ },
+ {
+  "id": "M286_broker_conflict_ignored",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestPublishMovedHeadQuarantined",
+  "edits": [
+   [
+    "conflict := errors.Is(err, ErrPreconditionConflict)",
+    "conflict := false"
+   ]
+  ]
+ },
+ {
+  "id": "M287_guard_quarantine_any_kind",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0024_publish_quarantine.sql",
+  "expect": "TestEffectTransitionsAllowListed",
+  "edits": [
+   [
+    "'NOT_APPLIED')\n                                      OR (NEW.state = 'QUARANTINED' AND OLD.kind = 'publish')\n        WHEN 'APPROVAL_REQUIRED'",
+    "'NOT_APPLIED')\n                                      OR (NEW.state = 'QUARANTINED')\n        WHEN 'APPROVAL_REQUIRED'"
+   ]
+  ]
+ },
+ {
+  "id": "M288_guard_publish_born_intent",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0024_publish_quarantine.sql",
+  "expect": "TestPublishQuarantineGuard",
+  "edits": [
+   [
+    "IF NEW.kind = 'publish' AND NEW.state <> 'APPROVAL_REQUIRED' THEN",
+    "IF false THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M289_runner_guard_no_quarantine",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0024_publish_quarantine.sql",
+  "expect": "TestPublishQuarantineGuard",
+  "edits": [
+   [
+    "AND NEW.state = 'QUARANTINED' AND OLD.kind = 'publish'\n           AND NEW.dispatches",
+    "AND NEW.state = 'QUARANTINED' AND OLD.kind = 'none'\n           AND NEW.dispatches"
+   ]
+  ]
+ },
+ {
+  "id": "M290_git_hooks_on",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishGitHelpersDisabled",
+  "edits": [
+   [
+    "\t\"-c\", \"core.hooksPath=/dev/null\",\n",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M291_git_env_inherited",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishGitHelpersDisabled",
+  "edits": [
+   [
+    "if strings.HasPrefix(k, \"GIT_\") || k == \"SSH_ASKPASS\" {",
+    "if k == \"SSH_ASKPASS\" {"
+   ]
+  ]
+ },
+ {
+  "id": "M292_runcommand_env_dropped",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/command_unix.go",
+  "expect": "TestPublishGitHelpersDisabled",
+  "edits": [
+   [
+    "\tcmd.Env = env\n",
+    "\tcmd.Env = nil\n"
+   ]
+  ]
+ },
+ {
+  "id": "M293_repo_root_unchecked",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishValidate",
+  "edits": [
+   [
+    "if err != nil || rel == \".\" || rel == \"..\" || strings.HasPrefix(rel, \"..\"+string(filepath.Separator)) {",
+    "if err != nil || rel == \"\" {"
+   ]
+  ]
+ },
+ {
+  "id": "M294_publish_without_approval",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishValidate",
+  "edits": [
+   [
+    "if !spec.NeedsApproval {",
+    "if false {"
+   ]
+  ]
  }
 ]
