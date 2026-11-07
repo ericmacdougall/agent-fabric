@@ -101,7 +101,7 @@ func TestDispatchRefusesRequestThatNoLongerMatchesItsHash(t *testing.T) {
 
 // A receipt settles only the dispatch it came from: if the row moved on to a
 // later dispatch meanwhile (recovery, reconcile, retry), the stale receipt
-// does not overwrite it.
+// does not overwrite it, and the broker reports it.
 func TestStaleReceiptDoesNotSettleLaterDispatch(t *testing.T) {
 	ctx, st, b, fake := setup(t)
 	e, _ := b.Submit(ctx, fake, spec("ki4", "hello"))
@@ -119,7 +119,11 @@ func TestStaleReceiptDoesNotSettleLaterDispatch(t *testing.T) {
 			}
 		}
 	}
-	got, err := b.Dispatch(ctx, fake, e.ID)
+	// Review U1: the late outcome is reported (ErrSettleLost), not dropped.
+	if _, err := b.Dispatch(ctx, fake, e.ID); !errors.Is(err, ErrSettleLost) {
+		t.Fatalf("stale receipt: %v, want ErrSettleLost", err)
+	}
+	got, err := b.Load(ctx, e.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3309,8 +3309,8 @@
   "expect": "TestStaleDispatchedRecovers",
   "edits": [
    [
-    "(state IN ($1, $2) OR (state = $5 AND `+staleAttempt+`))",
-    "(state IN ($1, $2) OR ($5 = '' AND `+staleAttempt+`))"
+    "(state IN ($1, $2) OR (state = $5 AND `+staleAttempt+`\n",
+    "(state IN ($1, $2) OR ($5 = '' AND `+staleAttempt+`\n"
    ]
   ]
  },
@@ -3337,6 +3337,62 @@
    [
     "\trc.Dispatch = dispatch\n",
     ""
+   ]
+  ]
+ },
+ {
+  "id": "M259_dispatch_no_lock",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestInFlightDispatchNotReconciled",
+  "edits": [
+   [
+    "\tif !got {\n\t\tunlock = func() { c.Release() }",
+    "\tif false && !got {\n\t\tunlock = func() { c.Release() }"
+   ],
+   [
+    "`SELECT pg_try_advisory_lock($1, hashtext($2))`, effectLockNS, id).Scan(&got); err != nil {\n\t\treturn Effect{}, err",
+    "`SELECT pg_try_advisory_lock($1, hashtext($2 || 'x'))`, effectLockNS, id).Scan(&got); err != nil {\n\t\treturn Effect{}, err"
+   ]
+  ]
+ },
+ {
+  "id": "M260_stale_ignores_lock",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestInFlightDispatchNotReconciled",
+  "edits": [
+   [
+    "\tif !got {\n\t\t// Review U1: its dispatcher is still in flight; not stale.",
+    "\tif false && !got {\n\t\t// Review U1: its dispatcher is still in flight; not stale."
+   ]
+  ]
+ },
+ {
+  "id": "M261_unresolved_ignores_lock",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestInFlightDispatchNotReconciled",
+  "edits": [
+   [
+    "AND l.objsubid = 2)))",
+    "AND l.objsubid = 7)))"
+   ]
+  ]
+ },
+ {
+  "id": "M262_settle_lost_silent",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestInFlightDispatchNotReconciled",
+  "edits": [
+   [
+    "\tif tag.RowsAffected() != 1 {\n\t\t// Review U1",
+    "\tif tag.RowsAffected() > 1 {\n\t\t// Review U1"
    ]
   ]
  }

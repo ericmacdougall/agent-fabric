@@ -54,6 +54,9 @@ var (
 	// ErrSettleRunEnded: the runner role may settle only a live run's
 	// dispatch (migration 0019); the outcome stays DISPATCHED for readback.
 	ErrSettleRunEnded = errors.New("dispatch outcome not recorded: run ended; reconcile with the app role")
+	// ErrSettleLost: a transport outcome arrived for a row that had already
+	// moved on; it is reported, never dropped silently (review U1).
+	ErrSettleLost = errors.New("dispatch outcome not recorded: the effect had moved on")
 )
 
 // Intent is what a caller submits.
@@ -141,6 +144,7 @@ type Broker struct {
 	// settleRefused counts dispatch outcomes the database refused to record
 	// because the run had ended (ErrSettleRunEnded).
 	settleRefused atomic.Int64
+	settleLost    atomic.Int64
 
 	// Crash cutpoints for tests: after the dispatch row commits but before
 	// transport, and after transport but before the receipt commits.
@@ -269,70 +273,116 @@ func (b *Broker) Approve(ctx context.Context, id, requestSHA, by string) error {
 // fence, one live effect per subject), commits DISPATCHED, then transports.
 // A transport error or ambiguous result is UNKNOWN, never a retry.
 func (b *Broker) Dispatch(ctx context.Context, exec Executor, id string) (Effect, error) {
-	tx, err := b.pool.Begin(ctx)
+	// Review U1 on 75e4e4d: this session holds the effect's advisory lock
+	// from before the DISPATCHED commit until its outcome is recorded, so a
+	// reconciler treats the dispatch as stale only once this process (or its
+	// connection) is gone. One connection does it all, so a dispatch never
+	// waits on the pool while holding one.
+	c, err := b.pool.Acquire(ctx)
 	if err != nil {
 		return Effect{}, err
+	}
+	unlock := lockRelease(c, id)
+	defer func() { unlock() }() // the latest unlock, run once
+	var got bool
+	if err := c.QueryRow(ctx, `SELECT pg_try_advisory_lock($1, hashtext($2))`, effectLockNS, id).Scan(&got); err != nil {
+		return Effect{}, err
+	}
+	if !got {
+		unlock = func() { c.Release() }
+		return Effect{}, fmt.Errorf("%w: effect %s is being dispatched or reconciled", ErrNotDispatchable, id)
+	}
+	if err := b.dispatchOn(ctx, c, exec, id); err != nil {
+		return Effect{}, err
+	}
+	unlock()
+	unlock = func() {}
+	return b.Load(ctx, id)
+}
+
+// effectLockNS is the first key of the per-effect advisory lock
+// (pg_advisory_lock(effectLockNS, hashtext(effect id))). A hash collision
+// only makes an unrelated effect look in flight, which is the safe side.
+const effectLockNS = 4011
+
+// lockRelease returns a func that drops the effect lock and returns the
+// connection; if the unlock cannot be confirmed the connection is closed,
+// which ends the session and with it the lock.
+func lockRelease(c *pgxpool.Conn, id string) func() {
+	return func() {
+		var ok bool
+		if err := c.QueryRow(context.Background(), `SELECT pg_advisory_unlock($1, hashtext($2))`, effectLockNS, id).Scan(&ok); err != nil || !ok {
+			c.Hijack().Close(context.Background()) //nolint:errcheck
+			return
+		}
+		c.Release()
+	}
+}
+
+// dispatchOn is Dispatch on one connection that holds the effect lock; the
+// caller reloads the effect.
+func (b *Broker) dispatchOn(ctx context.Context, c *pgxpool.Conn, exec Executor, id string) error {
+	tx, err := c.Begin(ctx)
+	if err != nil {
+		return err
 	}
 	defer tx.Rollback(context.Background()) //nolint:errcheck
 	e, err := b.loadTx(ctx, tx, "id", id)
 	if err != nil {
-		return Effect{}, err
+		return err
 	}
 	if e.Kind != exec.Kind() {
-		return Effect{}, fmt.Errorf("%w: executor %s for effect kind %s", domain.ErrInvalidTransition, exec.Kind(), e.Kind)
+		return fmt.Errorf("%w: executor %s for effect kind %s", domain.ErrInvalidTransition, exec.Kind(), e.Kind)
 	}
 	// What is sent is what was hashed and approved: recompute before transport.
 	if sha, err := domain.EffectBase(e.Kind, e.Request); err != nil || sha != e.RequestSHA {
-		return Effect{}, fmt.Errorf("%w: effect %s", ErrRequestTampered, id)
+		return fmt.Errorf("%w: effect %s", ErrRequestTampered, id)
 	}
 	switch e.State {
 	case Intent:
 		if e.ApprovalSHA != "" {
 			// Review S2: an effect that carries an approval dispatches only
 			// as APPROVED (the 0020 guard holds the state machine).
-			return Effect{}, fmt.Errorf("%w: effect %s carries an approval but is INTENT", ErrApprovalRequired, id)
+			return fmt.Errorf("%w: effect %s carries an approval but is INTENT", ErrApprovalRequired, id)
 		}
 	case Approved:
 		if e.ApprovalSHA != e.RequestSHA {
-			return Effect{}, fmt.Errorf("%w: effect %s", ErrApprovalMismatch, id)
+			return fmt.Errorf("%w: effect %s", ErrApprovalMismatch, id)
 		}
 	case ApprovalRequired:
-		return Effect{}, fmt.Errorf("%w: effect %s", ErrApprovalRequired, id)
+		return fmt.Errorf("%w: effect %s", ErrApprovalRequired, id)
 	default:
-		return Effect{}, fmt.Errorf("%w: effect %s is %s", ErrNotDispatchable, id, e.State)
+		return fmt.Errorf("%w: effect %s is %s", ErrNotDispatchable, id, e.State)
 	}
 	if err := liveFence(ctx, tx, e.Mission, e.Attempt, e.Fence); err != nil {
-		return Effect{}, err
+		return err
 	}
 	ok, detail, err := exec.Precondition(ctx, e)
 	if err != nil {
-		return Effect{}, err
+		return err
 	}
 	// Review O3: Precondition may take a network round trip; the attempt
 	// can end meanwhile. Re-check (the 0020 trigger holds it from here).
 	if err := liveFence(ctx, tx, e.Mission, e.Attempt, e.Fence); err != nil {
-		return Effect{}, err
+		return err
 	}
 	if !ok {
 		if _, err := tx.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now() WHERE id = $1`, id, string(FailedDefinite), "precondition: "+detail); err != nil {
-			return Effect{}, err
+			return err
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return Effect{}, err
-		}
-		return b.Load(ctx, id)
+		return tx.Commit(ctx)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE effects SET state = $2, dispatches = dispatches + 1, updated_at = now() WHERE id = $1`, id, string(Dispatched)); err != nil {
 		if store.IsUniqueViolation(err) {
-			return Effect{}, fmt.Errorf("%w: %s", ErrSubjectBusy, e.Subject)
+			return fmt.Errorf("%w: %s", ErrSubjectBusy, e.Subject)
 		}
-		return Effect{}, err
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		if store.IsUniqueViolation(err) {
-			return Effect{}, fmt.Errorf("%w: %s", ErrSubjectBusy, e.Subject)
+			return fmt.Errorf("%w: %s", ErrSubjectBusy, e.Subject)
 		}
-		return Effect{}, err
+		return err
 	}
 	e.State = Dispatched
 	e.Dispatches++
@@ -346,12 +396,12 @@ func (b *Broker) Dispatch(ctx context.Context, exec Executor, id string) (Effect
 	if b.afterTransport != nil {
 		b.afterTransport(e, rc)
 	}
-	return b.settle(ctx, id, e.Dispatches, rc)
+	return b.settle(ctx, c, id, e.Dispatches, rc)
 }
 
 // settle records a transport receipt only on the dispatch it came from: a
 // row that moved on to a later dispatch keeps its state.
-func (b *Broker) settle(ctx context.Context, id string, dispatch int, rc Receipt) (Effect, error) {
+func (b *Broker) settle(ctx context.Context, c *pgxpool.Conn, id string, dispatch int, rc Receipt) error {
 	var state State
 	switch rc.Outcome {
 	case OutcomeConfirmed:
@@ -363,16 +413,23 @@ func (b *Broker) settle(ctx context.Context, id string, dispatch int, rc Receipt
 	}
 	rc.Dispatch = dispatch
 	rcJSON, _ := json.Marshal(rc)
-	if _, err := b.pool.Exec(ctx, `UPDATE effects SET state = $2, receipt = $3, last_error = $4, updated_at = now() WHERE id = $1 AND state = $5 AND dispatches = $6`,
-		id, string(state), rcJSON, rc.Detail, string(Dispatched), dispatch); err != nil {
+	tag, err := c.Exec(ctx, `UPDATE effects SET state = $2, receipt = $3, last_error = $4, updated_at = now() WHERE id = $1 AND state = $5 AND dispatches = $6`,
+		id, string(state), rcJSON, rc.Detail, string(Dispatched), dispatch)
+	if err != nil {
 		var pe *pgconn.PgError
 		if errors.As(err, &pe) && pe.Code == "42501" {
 			b.settleRefused.Add(1)
-			return Effect{}, fmt.Errorf("%w: effect %s (%s)", ErrSettleRunEnded, id, pe.Message)
+			return fmt.Errorf("%w: effect %s (%s)", ErrSettleRunEnded, id, pe.Message)
 		}
-		return Effect{}, err
+		return err
 	}
-	return b.Load(ctx, id)
+	if tag.RowsAffected() != 1 {
+		// Review U1: the row moved on under this dispatch (only a raw write
+		// can, while the lock is held). Report the outcome, never drop it.
+		b.settleLost.Add(1)
+		return fmt.Errorf("%w: effect %s dispatch %d outcome %s (%s)", ErrSettleLost, id, dispatch, rc.Outcome, rc.Detail)
+	}
+	return nil
 }
 
 // Reconcile is a token-free readback for an UNKNOWN effect (plan invariant
@@ -426,9 +483,24 @@ const staleAttempt = `NOT EXISTS (SELECT 1 FROM attempts a WHERE a.id = effects.
 // or lost its lease, so its outcome is unknown and only a readback may
 // settle it. A live attempt's dispatch is left to its dispatcher.
 func (b *Broker) markStaleDispatched(ctx context.Context, id string) error {
-	_, err := b.pool.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now()
+	c, err := b.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	var got bool
+	if err := c.QueryRow(ctx, `SELECT pg_try_advisory_lock($1, hashtext($2))`, effectLockNS, id).Scan(&got); err != nil {
+		c.Release()
+		return err
+	}
+	if !got {
+		// Review U1: its dispatcher is still in flight; not stale.
+		c.Release()
+		return nil
+	}
+	defer lockRelease(c, id)()
+	_, err = c.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now()
 		WHERE id = $1 AND state = $4 AND `+staleAttempt,
-		id, string(Unknown), "stale dispatch: its attempt ended before the outcome was recorded", string(Dispatched))
+		id, string(Unknown), "stale dispatch: its dispatcher ended before the outcome was recorded", string(Dispatched))
 	return err
 }
 
@@ -497,7 +569,10 @@ func (b *Broker) loadTx(ctx context.Context, tx pgx.Tx, col, val string) (Effect
 func (b *Broker) Unresolved(ctx context.Context, age time.Duration, limit int) ([]string, error) {
 	// Review T1: a DISPATCHED effect whose attempt is no longer live is
 	// unresolved too; Reconcile moves it to UNKNOWN and reads it back.
-	rows, err := b.pool.Query(ctx, `SELECT id FROM effects WHERE (state IN ($1, $2) OR (state = $5 AND `+staleAttempt+`))
+	// Review U1: and whose dispatcher no longer holds the effect lock.
+	rows, err := b.pool.Query(ctx, `SELECT id FROM effects WHERE (state IN ($1, $2) OR (state = $5 AND `+staleAttempt+`
+		AND NOT EXISTS (SELECT 1 FROM pg_locks l WHERE l.locktype = 'advisory' AND l.granted
+			AND l.classid = `+fmt.Sprint(effectLockNS)+` AND l.objid = hashtext(effects.id)::oid AND l.objsubid = 2)))
 		AND updated_at < now() - $3::interval ORDER BY updated_at LIMIT $4`,
 		string(Unknown), string(Reconciling), fmt.Sprintf("%d milliseconds", age.Milliseconds()), limit, string(Dispatched))
 	if err != nil {
@@ -518,6 +593,10 @@ func (b *Broker) Unresolved(ctx context.Context, age time.Duration, limit int) (
 // SettleRefused is how many dispatch outcomes this broker could not record
 // because their run had ended.
 func (b *Broker) SettleRefused() int64 { return b.settleRefused.Load() }
+
+// SettleLost is how many dispatch outcomes arrived after their row had
+// moved on (ErrSettleLost).
+func (b *Broker) SettleLost() int64 { return b.settleLost.Load() }
 
 // ResolveQuarantined is the operator exit for a QUARANTINED effect (review
 // N2 on aecf3fa): an app-role actor who has established the outcome by

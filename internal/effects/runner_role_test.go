@@ -150,7 +150,12 @@ func TestRunnerRoleBrokerFlows(t *testing.T) {
 		}
 	}
 	// Review nit on 2afeffe: the refused settle names the remedy.
-	if _, err := rb.settle(ctx, "e_crash", 1, Receipt{Outcome: OutcomeConfirmed}); !errors.Is(err, ErrSettleRunEnded) {
+	rc, err := rb.pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Release()
+	if err := rb.settle(ctx, rc, "e_crash", 1, Receipt{Outcome: OutcomeConfirmed}); !errors.Is(err, ErrSettleRunEnded) {
 		t.Errorf("settle after the run ended: %v, want ErrSettleRunEnded", err)
 	}
 	if n := rb.SettleRefused(); n != 1 {

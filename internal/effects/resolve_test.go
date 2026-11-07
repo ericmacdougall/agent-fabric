@@ -695,3 +695,70 @@ func TestStaleDispatchedRecovers(t *testing.T) {
 		t.Fatalf("recovery sent again: remote writes %d", fake.Count())
 	}
 }
+
+// parkedSend parks the transport until release closes, after the effect
+// is committed DISPATCHED (review U1).
+type parkedSend struct {
+	*Fake
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (p parkedSend) Dispatch(ctx context.Context, sub Submission) (Receipt, error) {
+	close(p.entered)
+	<-p.release
+	return p.Fake.Dispatch(ctx, sub)
+}
+
+// Review U1 on 75e4e4d: a transport still in flight when its attempt ends
+// is not stale. Unresolved skips it and Reconcile refuses it while the
+// dispatcher holds the effect's lock; the real outcome is then recorded.
+// A settle that finds the row moved on is reported, not dropped.
+func TestInFlightDispatchNotReconciled(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	runnerBroker(t, ctx, st)
+	ab := appBroker(t, ctx, st)
+	park := func(key string) (Effect, parkedSend, chan error) {
+		t.Helper()
+		e, err := b.Submit(ctx, fake, uspec(key))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ps := parkedSend{Fake: fake, entered: make(chan struct{}), release: make(chan struct{})}
+		done := make(chan error, 1)
+		go func() { _, err := b.Dispatch(ctx, ps, e.ID); done <- err }()
+		<-ps.entered
+		return e, ps, done
+	}
+	// A concurrent raw move under the dispatcher: its settle is reported.
+	f, ps2, done2 := park("u1b")
+	if _, err := st.Pool().Exec(ctx, "UPDATE effects SET state = 'UNKNOWN' WHERE id = $1", f.ID); err != nil {
+		t.Fatal(err)
+	}
+	close(ps2.release)
+	if err := <-done2; !errors.Is(err, ErrSettleLost) {
+		t.Errorf("settle on a moved row: %v, want ErrSettleLost", err)
+	}
+	if b.SettleLost() != 1 {
+		t.Errorf("settle lost count %d, want 1", b.SettleLost())
+	}
+	e, ps, done := park("u1a")
+	if _, err := st.Pool().Exec(ctx, "UPDATE attempts SET state = 'UNKNOWN' WHERE id = 'r_1'"); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := ab.Unresolved(ctx, 0, 10)
+	if err != nil || len(ids) != 1 || ids[0] != f.ID {
+		t.Errorf("unresolved: %v %v, want only the UNKNOWN %s, not the in-flight %s", ids, err, f.ID, e.ID)
+	}
+	if _, err := ab.Reconcile(ctx, fake, e.ID); !errors.Is(err, ErrNotReconcilable) {
+		t.Errorf("reconcile under an in-flight dispatch: %v, want ErrNotReconcilable", err)
+	}
+	close(ps.release)
+	if err := <-done; err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if got, _ := ab.Load(ctx, e.ID); got.State != Confirmed || fake.Count() != 2 {
+		t.Fatalf("after the transport landed: %s remote=%d, want CONFIRMED 2", got.State, fake.Count())
+	}
+}

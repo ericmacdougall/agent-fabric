@@ -10,7 +10,7 @@
 --   T2: an abandoned effect (an audited move to NOT_APPLIED) is final; a
 --       retry would lose its approval requirement.
 CREATE FUNCTION fabric_effects_settle_guard() RETURNS trigger LANGUAGE plpgsql
-SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
     IF OLD.state = 'DISPATCHED' AND NEW.state IN ('CONFIRMED', 'FAILED_DEFINITE')
        AND (NEW.receipt->>'dispatch' IS DISTINCT FROM NEW.dispatches::text
@@ -24,6 +24,5 @@ BEGIN
     END IF;
     RETURN NEW;
 END $$;
-REVOKE ALL ON FUNCTION fabric_effects_settle_guard() FROM PUBLIC;
 CREATE TRIGGER effects_zz_settle_guard BEFORE UPDATE ON effects
     FOR EACH ROW EXECUTE FUNCTION fabric_effects_settle_guard();

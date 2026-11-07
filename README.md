@@ -32,8 +32,15 @@ production readiness.
   live attempt row. A never-sent intent left by an ended attempt is settled
   with `fab effect abandon --reason --evidence`, only if it was never
   dispatched, audited in the same table. State moves follow an allow-list of the broker's
-  own steps. Limit: the app role is the reconciler, so a RECONCILING effect
-  settles to whatever readback the app reports.
+  own steps. A dispatcher holds the effect's advisory lock from before the
+  DISPATCHED commit until its outcome is recorded; a dispatch whose
+  dispatcher is gone (lock free, attempt no longer live) is listed by
+  `fab effect unresolved` and read back by `fab effect reconcile`. A late
+  outcome for a row that moved on is reported (`ErrSettleLost`), not dropped.
+  Limits: the app role is the reconciler, so a RECONCILING effect settles to
+  whatever readback the app reports; a DISPATCHED settle needs a receipt
+  naming its dispatch number and outcome, which the app role can still forge
+  by hand. No daemon sweeps unresolved effects yet.
 - Done means live-tested: `fab done` is refused until `fab live-test` records a
   receipt for the deployed commit of the current candidate, and while any of
   the mission's effects (reducer or broker) is unsettled.
