@@ -2296,5 +2296,57 @@
     "if fi, err := os.Stat(slice); err != nil && fi != nil {"
    ]
   ]
+ },
+ {
+  "id": "M176_runner_keeps_gate_writes",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/roles.go",
+  "expect": "TestRolesLeastPrivilege",
+  "edits": [
+   [
+    "REVOKE INSERT, UPDATE, DELETE ON %s FROM %s\", id(tb), runner",
+    "REVOKE INSERT, UPDATE, DELETE ON %s FROM %s\", id(tb), sched"
+   ]
+  ]
+ },
+ {
+  "id": "M177_gate_skips_runner_check",
+  "invariant": "roles",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestGateConfigValidated",
+  "edits": [
+   [
+    "if s.gated() && !s.runnerChecked {",
+    "if s.gated() && s.runnerChecked {"
+   ]
+  ]
+ },
+ {
+  "id": "M178_scheduler_member_refused",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0016_scheduler_role.sql",
+  "expect": "TestRolesLeastPrivilege",
+  "edits": [
+   [
+    "IF sched_role IS NOT NULL AND EXISTS",
+    "IF sched_role IS NULL AND EXISTS"
+   ]
+  ]
+ },
+ {
+  "id": "M179_runner_made_scheduler",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/roles.go",
+  "expect": "TestRolesLeastPrivilege",
+  "edits": [
+   [
+    "fmt.Sprintf(\"GRANT %s TO %s\", sched, app),",
+    "fmt.Sprintf(\"GRANT %s TO %s\", sched, runner),"
+   ]
+  ]
  }
 ]

@@ -56,6 +56,8 @@ func main() {
 		err = jobMain(os.Args[2:])
 	case "daemon":
 		err = daemonMain(os.Args[2:])
+	case "db":
+		err = dbMain(os.Args[2:])
 	case "migrate":
 		err = withStore(func(ctx context.Context, st *store.Store) error { return st.Migrate(ctx) })
 	default:
@@ -75,6 +77,9 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: fab <command> [flags]
   migrate                              apply migrations
+  db roles [--prefix P --app-password-file F --runner-password-file F]   least-privilege roles (after migrate)
+  db check-runner [--dsn-env E]        verify the runner role cannot act as the scheduler
+  db capacity --resource R --unit U --capacity N   set a dispatch-gate resource
   mission new|list                     register / list missions
   admit|release|wake --mission M [--token T] --key K
   status                               missions, slots, open asks

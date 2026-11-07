@@ -9,6 +9,7 @@ import (
 
 	"fabric/internal/domain"
 	"fabric/internal/store"
+	"fabric/internal/storetest"
 )
 
 // C5 (0012), ported by intent from Kimi's dispatch-gate tests: with holds
@@ -24,7 +25,7 @@ func gatedSetup(t *testing.T, id domain.MissionID, capacity int64) (*store.Store
 	}
 	cfg.Holds = []store.HoldItem{{Resource: "slot.h_t2", Unit: "slots", Amount: 1}}
 	cfg.HoldTTL = time.Minute
-	cfg.RunnerDSN = "postgres://fabric_runner@runner.invalid/fabric" // never dialled by the fake launcher
+	cfg.RunnerDSN = storetest.RunnerDSN(t, st) // a real least-privilege runner role (G2)
 	return st, ln, cfg
 }
 
@@ -211,7 +212,8 @@ func TestGateConfigValidated(t *testing.T) {
 		{"no wall-clock limit", func(c *Config) { c.Wall = 0 }, "wall"},
 		{"wall longer than half the hold cap", func(c *Config) { c.Wall = store.MaxHoldTTL/2 + time.Minute; c.HoldTTL = 0 }, "wall"},
 		{"hold ttl out of range", func(c *Config) { c.HoldTTL = store.MaxHoldTTL + time.Hour }, "hold ttl"},
-		{"runners share the scheduler role", func(c *Config) { c.RunnerDSN = "" }, "runner"},
+		{"no runner role", func(c *Config) { c.RunnerDSN = "" }, "runner"},
+		{"runners share the scheduler role", func(c *Config) { c.RunnerDSN = storetest.DSN }, "runner role"},
 	} {
 		cfg := base
 		c.edit(&cfg)

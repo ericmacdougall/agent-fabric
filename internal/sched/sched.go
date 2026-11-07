@@ -88,11 +88,13 @@ type Scheduler struct {
 	beforeRun func(domain.MissionID) error
 	// parked are missions a sweep step failed on, with when to try again
 	// (red-team F1, D1): an unreadable log stays parked until restart.
-	mu         sync.Mutex
-	parked     map[domain.MissionID]time.Time
-	cfgErr     error // gateErr at New; Tick refuses to run with it
-	prober     Prober
-	waitLogged map[domain.MissionID]bool // capacity waits already named in the log
+	mu     sync.Mutex
+	parked map[domain.MissionID]time.Time
+	cfgErr error // gateErr at New; Tick refuses to run with it
+	// runnerChecked: the RunnerDSN role passed CheckRunnerRole (G2).
+	runnerChecked bool
+	prober        Prober
+	waitLogged    map[domain.MissionID]bool // capacity waits already named in the log
 
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired, CapacityWaits int
@@ -132,6 +134,20 @@ func (c Config) gateErr() error {
 	return nil
 }
 
+// checkRunnerRole connects as the runner once and refuses a role that could
+// act as the scheduler (red-team G2): otherwise 0015 would be vacuous.
+func (s *Scheduler) checkRunnerRole(ctx context.Context) error {
+	rs, err := store.Open(ctx, s.cfg.RunnerDSN)
+	if err != nil {
+		return fmt.Errorf("sched: runner database role: %w", err)
+	}
+	defer rs.Close()
+	if err := rs.CheckRunnerRole(ctx); err != nil {
+		return fmt.Errorf("sched: the dispatch gate refuses this runner role: %w", err)
+	}
+	return nil
+}
+
 // runnerDSN is what a runner and its jobs connect with.
 func (s *Scheduler) runnerDSN() string {
 	if s.cfg.RunnerDSN != "" {
@@ -149,6 +165,12 @@ func (s *Scheduler) gated() bool { return len(s.cfg.Holds) > 0 }
 func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 	if s.cfgErr != nil {
 		return false, s.cfgErr // a configuration fault is global: stop before any write
+	}
+	if s.gated() && !s.runnerChecked {
+		if err := s.checkRunnerRole(ctx); err != nil {
+			return false, err
+		}
+		s.runnerChecked = true
 	}
 	worked := false
 	if n, err := s.consumeOutbox(ctx); err != nil {

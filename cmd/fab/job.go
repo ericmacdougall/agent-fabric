@@ -162,6 +162,9 @@ func daemonMain(args []string) error {
 	hostID := fs.String("host", "h_"+hostname(), "host id")
 	trustProvider := fs.Bool("trust-provider", false, "the provider is a trusted recorded fake; skip the containment gate")
 	workerUser := fs.String("worker-user", os.Getenv("FABRIC_WORKER_USER"), "dedicated worker account (Linux); empty means same-UID shadow mode")
+	var holds holdFlags
+	fs.Var(&holds, "hold", "turn on the dispatch gate: hold resource:unit:amount per attempt (repeatable)")
+	runnerDSNEnv := fs.String("runner-dsn-env", "FABRIC_RUNNER_DSN", "environment variable holding the runner role DSN (required with --hold)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -195,6 +198,8 @@ func daemonMain(args []string) error {
 	cfg := sched.Config{Host: domain.HostID(*hostID), Model: model, Effort: effort, Rung: *rung, TierTableSHA: sha, Profile: *profile,
 		MaxTurns: 40, MaxBudgetUSD: 2, Wall: 45 * time.Minute, WorkRoot: *workRoot, FabBin: selfPath()}
 	cfg.Launch.Binary = *provider
+	cfg.Holds = holds
+	cfg.RunnerDSN = os.Getenv(*runnerDSNEnv)
 	cfg.Launch.SchemaPath = filepath.Join(*workRoot, "checkpoint.schema.json")
 	cfg.Launch.SettingSources = ""
 	cfg.Launch.StrictMCP, cfg.Launch.DisableSlash = true, true

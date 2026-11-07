@@ -73,3 +73,29 @@ func Open(t *testing.T) *store.Store {
 	}
 	return st
 }
+
+// RunnerDSN gives the test database least-privilege roles (goodqa#14929)
+// and returns a DSN whose sessions run as the runner role. The roles are
+// cluster-wide, so they carry this process's id and are dropped at the end
+// of the test.
+func RunnerDSN(t *testing.T, st *store.Store) string {
+	t.Helper()
+	r := store.Roles{Prefix: fmt.Sprintf("fabric_s%d", os.Getpid())}
+	if err := st.ApplyRoles(context.Background(), r, "", ""); err != nil {
+		t.Fatalf("roles: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, n := range []string{r.App(), r.Runner(), r.Scheduler()} {
+			st.Pool().Exec(context.Background(), "DROP OWNED BY "+n) //nolint:errcheck
+			st.Pool().Exec(context.Background(), "DROP ROLE "+n)     //nolint:errcheck
+		}
+	})
+	u, err := url.Parse(DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	q.Set("role", r.Runner())
+	u.RawQuery = q.Encode()
+	return u.String()
+}
