@@ -102,6 +102,9 @@ type Scheduler struct {
 	waitLogged    map[domain.MissionID]bool // capacity waits already named in the log
 	// beforeHeartbeat is a test cutpoint that can fail one heartbeat (H2).
 	beforeHeartbeat func() error
+	// settleBackoff is the first wait between settle tries (goodqa#15082
+	// T6); zero means the default.
+	settleBackoff time.Duration
 
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired, CapacityWaits int
@@ -582,13 +585,20 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	go s.heartbeat(ctx, attempt, fence, done)
 	go func() {
 		code, werr := s.ln.Wait(h)
-		close(done)
 		out.Close()
 		if errf != nil {
 			errf.Close()
 		}
+		if werr != nil {
+			close(done) // the exit is unknown: stop beating so the lease expires
+		}
+		// T6: with an observed exit the heartbeat keeps the lease while the
+		// settle (and its retries) persist it.
 		if err := s.afterWait(context.Background(), mission, attempt, fence, runDir, code, werr); err != nil {
 			fmt.Fprintln(os.Stderr, "fabd: settle:", err)
+		}
+		if werr == nil {
+			close(done)
 		}
 		Notify(context.Background(), s.st)
 	}()
@@ -602,8 +612,38 @@ func (s *Scheduler) afterWait(ctx context.Context, mission domain.MissionID, att
 	if werr != nil {
 		return fmt.Errorf("wait for %s failed, left to lease expiry: %w", attempt, werr)
 	}
-	return s.settle(ctx, mission, attempt, fence, runDir, code)
+	// goodqa#15082 T6: the exit is observed; a transient store error must
+	// not drop it. settle is idempotent (finish:/verify: command ids), so it
+	// is retried with backoff while the caller keeps the heartbeat going.
+	wait := s.settleBackoff
+	if wait <= 0 {
+		wait = time.Second
+	}
+	var err error
+	for try := 1; try <= settleTries; try++ {
+		if err = s.settle(ctx, mission, attempt, fence, runDir, code); err == nil {
+			return nil
+		}
+		if try == settleTries || ctx.Err() != nil {
+			break
+		}
+		fmt.Fprintf(os.Stderr, "fabd: settle %s try %d failed, retrying: %v\n", attempt, try, err)
+		select {
+		case <-ctx.Done():
+		case <-time.After(wait):
+		}
+		if max := s.st.Lease / 3; max > 0 && wait*2 > max {
+			wait = max
+		} else {
+			wait *= 2
+		}
+	}
+	return err
 }
+
+// settleTries bounds the settle retries; after them the lease expires into
+// UNKNOWN and the prober reconciles, as before.
+const settleTries = 6
 
 // heartbeat keeps a launched attempt's lease alive while its runner runs
 // (red-team G1): without it every run longer than the lease went UNKNOWN.
