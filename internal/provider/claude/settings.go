@@ -358,6 +358,16 @@ func checkPath(p, label string, workerUID *int, wantDir bool) (string, error) {
 // its last component: a symlink there could be repointed by its owner, so
 // it must be root's or fabric's and never the worker's.
 func checkWritten(p, label string, workerUID *int) error {
+	return checkWrittenHops(p, label, workerUID, 0)
+}
+
+// maxHops bounds symlink following, as the kernel's own limit does.
+const maxHops = 40
+
+// checkWrittenHops is checkWritten that also walks each symlink's target
+// the same way, so every hop of a chain is checked, not only the first
+// (re-inspection d0196c0 N2).
+func checkWrittenHops(p, label string, workerUID *int, hops int) error {
 	for cur := p; ; {
 		fi, err := os.Lstat(cur)
 		if err != nil {
@@ -371,6 +381,19 @@ func checkWritten(p, label string, workerUID *int) error {
 		case fi.Mode()&os.ModeSymlink != 0:
 			if (workerUID != nil && uid == *workerUID) || (uid != 0 && uid != os.Getuid()) {
 				return refuse("%s: a symlink on its path is owned by uid %d, not root or fabric", label, uid)
+			}
+			if hops >= maxHops {
+				return refuse("%s: too many symlinks on its path", label)
+			}
+			target, err := os.Readlink(cur)
+			if err != nil {
+				return refuse("%s: a symlink on its path cannot be read", label)
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(cur), target)
+			}
+			if err := checkWrittenHops(filepath.Clean(target), label, workerUID, hops+1); err != nil {
+				return err
 			}
 		case fi.IsDir():
 			if err := checkDir(fi, uid, label, workerUID); err != nil {
@@ -414,6 +437,12 @@ func checkAncestors(dir, label string, workerUID *int) error {
 func checkDir(fi os.FileInfo, uid int, label string, workerUID *int) error {
 	if workerUID != nil && uid == *workerUID {
 		return refuse("%s: a directory on its path is owned by the worker user", label)
+	}
+	// Any other owner could rename a component too, and production passes
+	// no worker uid, so only root and fabric may own one (re-inspection
+	// d0196c0 N1).
+	if uid != 0 && uid != os.Getuid() {
+		return refuse("%s: a directory on its path is owned by uid %d, not root or fabric", label, uid)
 	}
 	if fi.Mode().Perm()&0o022 != 0 && !(fi.Mode()&os.ModeSticky != 0 && uid == 0) {
 		return refuse("%s: a directory on its path is writable by group or others (%v)", label, fi.Mode())

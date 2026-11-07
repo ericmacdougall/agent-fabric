@@ -433,11 +433,39 @@ func TestPathRules(t *testing.T) {
 	if err := checkWritten(script, "S", nil); err != nil {
 		t.Fatalf("own script on its own path: %v", err)
 	}
+	// Re-inspection d0196c0 N1: with no worker uid known (production), a
+	// directory owned by a third uid is still refused.
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want("directory owned by a third uid", checkDir(fi, me+12345, "D", nil), "not root or fabric")
+	// N2: a later hop of a symlink chain through a world-writable directory.
+	ww := filepath.Join(t.TempDir(), "ww")
+	if err := os.Mkdir(ww, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dir, filepath.Join(ww, "hop")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(ww, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	first := filepath.Join(filepath.Dir(ww), "first") // a relative first hop
+	if err := os.Symlink("ww/hop", first); err != nil {
+		t.Fatal(err)
+	}
+	want("world-writable directory at the second hop", checkWritten(first, "H", nil), "writable by group or others")
+	loop := filepath.Join(t.TempDir(), "loop")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Fatal(err)
+	}
+	want("symlink loop", checkWritten(loop, "L", nil), "too many symlinks")
 	if err := os.Chmod(dir, 0o770); err != nil {
 		t.Fatal(err)
 	}
 	want("group-writable hooks dir", checkOwned(dir, "D", nil, true), "writable by group or others")
-	_, err := checkHooksDir(dir, nil)
+	_, err = checkHooksDir(dir, nil)
 	want("checkHooksDir on a group-writable hooks dir", err, "writable by group or others")
 	if fi, err := os.Stat("/tmp"); err == nil && fi.Mode()&os.ModeSticky != 0 && fi.Mode().Perm()&0o002 != 0 {
 		if err := checkAncestors("/tmp", "T", nil); err != nil {
