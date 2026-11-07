@@ -312,9 +312,14 @@ at all. An operator-only role for these commands is follow-up work.
     `~/.config`, `~/Library`, `~/.docker` or `~/.config/fabric`). Each
     launch resolves the provider name again and runs the resolved file,
     not a symlink in a denied bin directory, so a provider update that
-    repoints the symlink is followed. The control
+    repoints the symlink is followed; a name that does not resolve (or a
+    symlink that cannot be followed) refuses that launch by name, never
+    falling back to the symlink or an older file. The control
     `provider_starts_under_profile` runs the file resolved at fabd start
-    with `--version`. Any other
+    with `--version`. If `--provider` does not resolve to a file when fabd
+    starts, `fab daemon` refuses to start (`provider "…" cannot be
+    resolved to a file; refusing to start fabd`), on every host and even
+    with `--trust-provider`, so the control is never skipped. Any other
     tool on `PATH` under a home is unreadable, so install toolchains
     outside `$HOME` or list them there;
   - the worker's git uses the run's own global config

@@ -97,6 +97,15 @@ func daemonMain(args []string) error {
 	if err != nil {
 		return err
 	}
+	// goodqa#15161 review R1: the provider is resolved once, here, before
+	// anything else. An unresolvable provider refuses fabd's start with a
+	// named cause on every host and trust level: the containment control
+	// (provider_starts_under_profile) would otherwise have no file to run
+	// and be skipped, and every later launch would be refused one by one.
+	startProvider, err := resolveStartProvider(*provider)
+	if err != nil {
+		return err
+	}
 	os.Setenv("FABRIC_WORKER_USER", *workerUser)
 	os.Setenv("FABRIC_RUNNER_DSN_ENV", *runnerDSNEnv) // its port joins the worker's TCP allow-list (goodqa#15161)
 	// The schema is written before the profile and the controls, so the
@@ -110,11 +119,12 @@ func daemonMain(args []string) error {
 	if err := os.WriteFile(schemaPath, []byte(checkpointSchema), 0o644); err != nil {
 		return err
 	}
-	darwinLaunchRO = launchInputs(*provider, os.Getenv("FABRIC_HOOKS_DIR"), schemaPath)
-	// The control starts the provider file resolved now; each launch
-	// resolves the name again (cfg.Launch.Resolve), so an update that
-	// repoints the symlink is followed (goodqa#15161 reviews C and N1).
-	darwinProvider = providerPath(*provider)
+	// The read-allow-back and the control use the same start-time
+	// resolution; each launch resolves the name again (productionLaunch),
+	// so an update that repoints the symlink is followed (goodqa#15161
+	// reviews C and N1).
+	darwinLaunchRO = launchInputs(startProvider, os.Getenv("FABRIC_HOOKS_DIR"), schemaPath)
+	darwinProvider = startProvider
 	ln, err := launcherForThisHost()
 	if err != nil {
 		return err
@@ -139,8 +149,7 @@ func daemonMain(args []string) error {
 	cfg.Holds = holds
 	cfg.RunnerDSN = os.Getenv(*runnerDSNEnv)
 	// goodqa#15087 AC-6: the same launch the AC-6 (f) live check runs.
-	cfg.Launch = claude.ProductionLaunch(*provider, schemaPath, os.Getenv("FABRIC_HOOKS_DIR"))
-	cfg.Launch.Resolve = providerPath
+	cfg.Launch = productionLaunch(*provider, schemaPath, os.Getenv("FABRIC_HOOKS_DIR"))
 	return withStore(func(ctx context.Context, st *store.Store) error {
 		s := sched.New(st, cfg, ln)
 		if p, ok := runnerProber(*workerUser); ok {
@@ -174,6 +183,30 @@ const checkpointSchema = `{"type":"object","required":["end"],"properties":{"nex
 // hostname is the shared default host name (goodqa#15087: fabd and the
 // native runner name a host the same way).
 func hostname() string { return hostid.Name() }
+
+// resolveStartProvider resolves the provider when fabd starts. It refuses
+// with a named cause when the name does not resolve to a file (a typo, a
+// PATH without it, an install mid-update): fabd then does not start,
+// rather than start with the provider control skipped (goodqa#15161 R1).
+func resolveStartProvider(provider string) (string, error) {
+	p := providerPath(provider)
+	if p == "" {
+		return "", fmt.Errorf("provider %q cannot be resolved to a file; refusing to start fabd (the provider control would have nothing to run)", provider)
+	}
+	return p, nil
+}
+
+// productionLaunch is the launch fabd hands the scheduler. Binary keeps
+// the operator's name and Resolve maps it to a file at every launch, so a
+// provider update that repoints the symlink and prunes the old version is
+// followed (goodqa#15161 N1), the launch never execs through a symlink in
+// a directory the Darwin profile denies (review C), and a name that does
+// not resolve refuses the launch (review R3: this wiring is tested).
+func productionLaunch(provider, schemaPath, hooksDir string) claude.Launch {
+	l := claude.ProductionLaunch(provider, schemaPath, hooksDir)
+	l.Resolve = providerPath
+	return l
+}
 
 // resolveRung reads the tier table file and returns (model, effort, sha256 of the file).
 func resolveRung(path, rung string) (string, string, string, error) {

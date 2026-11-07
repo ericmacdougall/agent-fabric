@@ -82,9 +82,12 @@ func dsnPorts(dsn string) []string {
 }
 
 // providerPath is the provider binary as an absolute path with symlinks
-// resolved ("" when it cannot be found). The launch line runs this file:
-// a symlink such as ~/.local/bin/claude sits in a directory the Darwin
-// profile denies, so exec through it fails (review 716fc04 C).
+// resolved ("" when it cannot be found or its symlinks cannot be
+// resolved). The launch line runs this file: a symlink such as
+// ~/.local/bin/claude sits in a directory the Darwin profile denies, so
+// exec through it fails (review 716fc04 C). A symlink that LookPath saw
+// but EvalSymlinks cannot follow (dangling, or swapped by an updater in
+// between) is "", never the symlink path itself (goodqa#15161 R4).
 func providerPath(provider string) string {
 	path, err := exec.LookPath(provider)
 	if err != nil {
@@ -94,11 +97,16 @@ func providerPath(provider string) string {
 	if err != nil {
 		return ""
 	}
-	if r, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = r
+	r, err := evalSymlinks(abs)
+	if err != nil {
+		return ""
 	}
-	return abs
+	return r
 }
+
+// evalSymlinks is filepath.EvalSymlinks; a test swaps it to replay an
+// updater that removes the symlink between LookPath and the resolution.
+var evalSymlinks = filepath.EvalSymlinks
 
 // launchInputs lists the read-only inputs a real launch needs that may sit
 // under a home the Darwin profile denies (goodqa#15161 review F4): the
