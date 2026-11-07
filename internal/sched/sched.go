@@ -105,6 +105,8 @@ type Scheduler struct {
 	// settleBackoff is the first wait between settle tries (goodqa#15082
 	// T6); zero means the default.
 	settleBackoff time.Duration
+	// afterSettleTry is a test cutpoint after a failed settle try.
+	afterSettleTry func()
 
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired, CapacityWaits int
@@ -613,21 +615,37 @@ func (s *Scheduler) afterWait(ctx context.Context, mission domain.MissionID, att
 		return fmt.Errorf("wait for %s failed, left to lease expiry: %w", attempt, werr)
 	}
 	// goodqa#15082 T6: the exit is observed; a transient store error must
-	// not drop it. settle is idempotent (finish:/verify: command ids), so it
-	// is retried with backoff while the caller keeps the heartbeat going.
+	// not drop it. The finish command is decided once from the stream and its
+	// store calls are idempotent (finish:/verify: command ids), so they
+	// are retried with backoff while the caller keeps the heartbeat going.
 	wait := s.settleBackoff
 	if wait <= 0 {
 		wait = time.Second
 	}
 	var err error
+	var cmd *domain.Command
+	decided := false
 	for try := 1; try <= settleTries; try++ {
-		if err = s.settle(ctx, mission, attempt, fence, runDir, code); err == nil {
-			return nil
+		if !decided {
+			if cmd, err = settleCommand(mission, attempt, fence, runDir, code); err == nil {
+				decided = true
+			}
+		}
+		if decided {
+			if cmd == nil {
+				return nil
+			}
+			if err = s.finishCmd(ctx, *cmd); err == nil {
+				return nil
+			}
 		}
 		if try == settleTries || ctx.Err() != nil {
 			break
 		}
 		fmt.Fprintf(os.Stderr, "fabd: settle %s try %d failed, retrying: %v\n", attempt, try, err)
+		if s.afterSettleTry != nil {
+			s.afterSettleTry()
+		}
 		select {
 		case <-ctx.Done():
 		case <-time.After(wait):
@@ -769,14 +787,29 @@ func (s *Scheduler) noteCapacityWait(ctx context.Context, mission domain.Mission
 
 // settle reads the finished worker's stream and ends the attempt.
 func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, runDir string, code int) error {
+	cmd, err := settleCommand(mission, attempt, fence, runDir, code)
+	if err != nil || cmd == nil {
+		return err
+	}
+	return s.finishCmd(ctx, *cmd)
+}
+
+// settleCommand reads the stream once and decides the finish command; nil
+// means no result event (lease expiry to UNKNOWN). Retries reuse the command
+// it returns, so a stream that changes between tries can never produce a
+// second, conflicting finish under the same command id (T6 review N1).
+func settleCommand(mission domain.MissionID, attempt domain.AttemptID, fence int64, runDir string, code int) (*domain.Command, error) {
+	fin := func(outcome, waitKey, reason string) (*domain.Command, error) {
+		return &domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence, Outcome: outcome, WaitKey: waitKey, Reason: reason}, nil
+	}
 	f, err := os.Open(filepath.Join(runDir, "stream.jsonl"))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	run, perr := claude.Parse(f, true)
 	f.Close()
 	if perr != nil {
-		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "stream unreadable: "+perr.Error())
+		return fin("abandoned", "", "stream unreadable: "+perr.Error())
 	}
 	usage, _ := json.Marshal(map[string]any{"session": run.SessionID, "turns": run.Turns, "context_last_turn": run.LastTurn.Context(), "cost_usd": run.TotalCostUSD, "exit": code})
 	os.WriteFile(filepath.Join(runDir, "usage.json"), usage, 0o644) //nolint:errcheck
@@ -786,10 +819,10 @@ func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attemp
 		// the stream to be coherent; otherwise the run is abandoned, never
 		// verified on the strength of its last event.
 		if code != 0 {
-			return s.finish(ctx, mission, attempt, fence, "abandoned", "", fmt.Sprintf("exit %d with a success result", code))
+			return fin("abandoned", "", fmt.Sprintf("exit %d with a success result", code))
 		}
 		if len(run.Contradictions) > 0 {
-			return s.finish(ctx, mission, attempt, fence, "abandoned", "", "contradictory stream: "+run.Contradictions[0])
+			return fin("abandoned", "", "contradictory stream: "+run.Contradictions[0])
 		}
 		var cp struct {
 			End struct {
@@ -798,24 +831,24 @@ func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attemp
 			} `json:"end"`
 		}
 		if err := json.Unmarshal(run.StructuredOutput, &cp); err != nil || cp.End.Kind == "" {
-			return s.finish(ctx, mission, attempt, fence, "abandoned", "", "checkpoint without an end kind")
+			return fin("abandoned", "", "checkpoint without an end kind")
 		}
 		switch cp.End.Kind {
 		case "wait":
-			return s.finish(ctx, mission, attempt, fence, "wait", cp.End.Event, "")
+			return fin("wait", cp.End.Event, "")
 		case "checkpoint", "ready_for_review", "blocked":
-			return s.finish(ctx, mission, attempt, fence, cp.End.Kind, "", "")
+			return fin(cp.End.Kind, "", "")
 		default:
-			return s.finish(ctx, mission, attempt, fence, "abandoned", "", "unknown end kind "+cp.End.Kind)
+			return fin("abandoned", "", "unknown end kind "+cp.End.Kind)
 		}
 	case claude.EndAbandoned:
-		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "no structured output")
+		return fin("abandoned", "", "no structured output")
 	case claude.EndFailed:
-		return s.finish(ctx, mission, attempt, fence, "abandoned", "", "result "+run.ResultSubtype)
+		return fin("abandoned", "", "result "+run.ResultSubtype)
 	default:
 		// No result event: the host and provider do not agree; the attempt
 		// goes UNKNOWN through lease expiry, never to a relaunch (3.4).
-		return nil
+		return nil, nil
 	}
 }
 

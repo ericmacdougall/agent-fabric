@@ -54,6 +54,11 @@ func TestSettleSurvivesOneTransientFailure(t *testing.T) {
 	})
 	s := New(st, cfg, ln)
 	s.settleBackoff = 10 * time.Millisecond
+	// T6 review N1: the stream changes between tries; the retry must reuse
+	// the decided command, not re-derive a conflicting one.
+	s.afterSettleTry = func() {
+		os.WriteFile(filepath.Join(dir, "stream.jsonl"), []byte(initEv+"\n"+badRes+"\n"), 0o600) //nolint:errcheck
+	}
 	if err := s.afterWait(ctx, m, a, fence, dir, 0, nil); err != nil {
 		t.Errorf("settle gave up: %v", err)
 	}
