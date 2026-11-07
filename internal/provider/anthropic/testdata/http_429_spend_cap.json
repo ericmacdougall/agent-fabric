@@ -1,0 +1,26 @@
+{
+ "scenario": "http_429_spend_cap",
+ "provenance": "synthetic-from-docs: platform.claude.com/docs/en/build-with-claude/streaming and api/errors, read 2026-11-06; replace with real captures when a Console API key exists",
+ "anthropic_version": "2026-10-21",
+ "status": 429,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "fixture-model",
+  "max_tokens": 64,
+  "stream": true,
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "fixture"
+     }
+    ]
+   }
+  ]
+ },
+ "response": "{\"type\": \"error\", \"error\": {\"type\": \"rate_limit_error\", \"message\": \"You have reached your specified API usage limits\"}, \"request_id\": \"req_synCap\"}"
+}

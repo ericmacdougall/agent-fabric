@@ -1,0 +1,26 @@
+{
+ "scenario": "http_529",
+ "provenance": "synthetic-from-docs: platform.claude.com/docs/en/build-with-claude/streaming and api/errors, read 2026-11-06; replace with real captures when a Console API key exists",
+ "anthropic_version": "2026-10-21",
+ "status": 529,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "fixture-model",
+  "max_tokens": 64,
+  "stream": true,
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "fixture"
+     }
+    ]
+   }
+  ]
+ },
+ "response": "{\"type\": \"error\", \"error\": {\"type\": \"overloaded_error\", \"message\": \"Overloaded\"}, \"request_id\": \"req_syn529\"}"
+}

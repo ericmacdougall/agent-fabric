@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -355,5 +357,57 @@ func TestKeyNotInErrors(t *testing.T) {
 	}
 	if strings.Contains(all, canary) {
 		t.Fatal("key leaked into error text")
+	}
+}
+
+func TestKeyFromCommand(t *testing.T) {
+	dir := t.TempDir()
+	good := dir + "/good.sh"
+	if err := os.WriteFile(good, []byte("#!/bin/sh\nprintf '%s\\n' '"+canary+"'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bad := dir + "/bad.sh"
+	if err := os.WriteFile(bad, []byte("#!/bin/sh\necho '"+canary+"'\nexit 3\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	multi := dir + "/multi.sh"
+	if err := os.WriteFile(multi, []byte("#!/bin/sh\necho 'two words'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ks, err := KeyFromCommand([]string{good}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k, err := ks(context.Background()); err != nil || k != canary {
+		t.Fatalf("key %q err %v", k, err)
+	}
+	kb, _ := KeyFromCommand([]string{bad}, time.Minute)
+	if _, err := kb(context.Background()); err == nil || strings.Contains(err.Error(), canary) {
+		t.Fatalf("failing command: err=%v (must fail and not echo the output)", err)
+	}
+	km, _ := KeyFromCommand([]string{multi}, time.Minute)
+	if _, err := km(context.Background()); err == nil {
+		t.Fatal("multi-token output accepted as a key")
+	}
+	if _, err := KeyFromCommand(nil, time.Minute); err == nil {
+		t.Fatal("empty command accepted")
+	}
+}
+
+func TestCaptureNeverSeesKey(t *testing.T) {
+	s := fakeapi.New(ok("captured"))
+	defer s.Close()
+	var got []Capture
+	c, _ := New(Config{BaseURL: s.URL, Version: "v", Key: func(context.Context) (string, error) { return canary, nil },
+		Capture: func(cp Capture) { got = append(got, cp) }})
+	if _, _, err := c.Send(context.Background(), body(t), Hooks{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Status != 200 || got[0].RequestID == "" || !strings.Contains(string(got[0].ResponseBody), "message_stop") {
+		t.Fatalf("capture %+v", got)
+	}
+	all := fmt.Sprint(got[0].Header) + string(got[0].RequestBody) + string(got[0].ResponseBody)
+	if strings.Contains(all, canary) || strings.Contains(strings.ToLower(all), "x-api-key") {
+		t.Fatal("capture contains credentials")
 	}
 }

@@ -1,0 +1,26 @@
+{
+ "scenario": "unknown_stop",
+ "provenance": "synthetic-from-docs: platform.claude.com/docs/en/build-with-claude/streaming and api/errors, read 2026-11-06; replace with real captures when a Console API key exists",
+ "anthropic_version": "2026-10-21",
+ "status": 200,
+ "headers": {
+  "Content-Type": "text/event-stream"
+ },
+ "request": {
+  "model": "fixture-model",
+  "max_tokens": 64,
+  "stream": true,
+  "messages": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "fixture"
+     }
+    ]
+   }
+  ]
+ },
+ "response": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_syn\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"fixture-model\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":25,\"output_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"x\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"future_reason_2027\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":5}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+}

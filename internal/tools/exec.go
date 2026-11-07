@@ -62,6 +62,30 @@ func BoundaryFromControls(hostName string, results []host.ControlResult) Boundar
 	return Boundary{Host: hostName, Contained: ok && len(results) > 0, FailedWith: failed}
 }
 
+// BoundaryFromControlsRequired is BoundaryFromControls plus a list of control
+// names that must be present and passing: a host that never ran, say, its
+// network-denied control has not shown that boundary, however many others passed.
+func BoundaryFromControlsRequired(hostName string, results []host.ControlResult, required []string) Boundary {
+	b := BoundaryFromControls(hostName, results)
+	seen := map[string]bool{}
+	for _, r := range results {
+		if r.Passed {
+			seen[r.Name] = true
+		}
+	}
+	for _, n := range required {
+		if !seen[n] {
+			b.Contained = false
+			b.FailedWith = append(b.FailedWith, "missing:"+n)
+		}
+	}
+	if len(required) == 0 {
+		b.Contained = false
+		b.FailedWith = append(b.FailedWith, "no required controls configured")
+	}
+	return b
+}
+
 // ErrUnadvertised refuses a native mission on a host that has not shown its
 // boundary (AC-7): confinement that was never demonstrated is not confinement.
 var ErrUnadvertised = errors.New("host has not advertised the native tool boundary")

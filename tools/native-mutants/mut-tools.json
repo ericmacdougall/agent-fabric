@@ -103,5 +103,33 @@
   "old": "d.Allow {\n\t\t\treturn fmt.Errorf(\"policy oracle self-test: %s probe",
   "new": "!d.Allow {\n\t\t\treturn fmt.Errorf(\"policy oracle self-test: %s probe",
   "cmd": "go test ./internal/policy -count=1 -run TestOracleSelfTest"
+ },
+ {
+  "id": "N1-boundary-not-required",
+  "file": "internal/native/native.go",
+  "old": "if err := tools.RequireBoundary(o.Boundary); err != nil {",
+  "new": "if false {",
+  "cmd": "go test ./internal/native -count=1 -run TestMissionRunRefusals"
+ },
+ {
+  "id": "N2-oracle-selftest-skipped",
+  "file": "internal/native/native.go",
+  "old": "if err := oracle.SelfTest(ctx); err != nil {",
+  "new": "if false {",
+  "cmd": "go test ./internal/native -count=1 -run TestMissionRunRefusals"
+ },
+ {
+  "id": "N3-month-ceiling-ignored",
+  "file": "internal/native/native.go",
+  "old": "g.Caps.Month > monthCapMicros ||",
+  "new": "",
+  "cmd": "go test ./internal/native -count=1 -run TestMissionRunRefusals"
+ },
+ {
+  "id": "N4-livetest-cap-ignored",
+  "file": "internal/native/native.go",
+  "old": "if g.LiveTest && g.Caps.Run > liveTestCapMicros {",
+  "new": "if false {",
+  "cmd": "go test ./internal/native -count=1 -run TestMissionRunRefusals"
  }
 ]

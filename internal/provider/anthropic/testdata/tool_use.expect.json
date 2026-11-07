@@ -1,0 +1,11 @@
+{
+ "outcome": "ok",
+ "blocks": [
+  "text",
+  "tool_use"
+ ],
+ "stop_reason": "tool_use",
+ "input": 472,
+ "output": 89,
+ "tool": "get_weather"
+}

@@ -49,7 +49,22 @@ type Config struct {
 	// Sleep and Jitter exist so tests run on a fake clock. Jitter returns [0,1).
 	Sleep  func(context.Context, time.Duration) error
 	Jitter func() float64
+	// Capture, when set, receives every attempt's raw response for fixture
+	// recording. It never receives request headers, so the key cannot reach it.
+	Capture func(Capture)
 }
+
+// Capture is one attempt as it crossed the wire, minus credentials.
+type Capture struct {
+	N            int
+	RequestBody  []byte
+	Status       int
+	RequestID    string
+	Header       http.Header // allow-listed response headers only
+	ResponseBody []byte      // raw SSE or the error JSON
+}
+
+var captureHeaders = []string{"Content-Type", "Request-Id", "Retry-After", "Anthropic-Ratelimit-Requests-Remaining"}
 
 type Client struct{ cfg Config }
 
@@ -238,6 +253,22 @@ func (c *Client) once(ctx context.Context, body []byte, n int, onEvent func(int)
 	defer resp.Body.Close()
 	rec.Status = resp.StatusCode
 	rec.RequestID = resp.Header.Get("request-id")
+	if c.cfg.Capture != nil {
+		var raw bytes.Buffer
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.TeeReader(io.LimitReader(resp.Body, 64<<20), &raw), resp.Body}
+		defer func() {
+			h := http.Header{}
+			for _, k := range captureHeaders {
+				if v := resp.Header.Get(k); v != "" {
+					h.Set(k, v)
+				}
+			}
+			c.cfg.Capture(Capture{N: n, RequestBody: body, Status: resp.StatusCode, RequestID: rec.RequestID, Header: h, ResponseBody: raw.Bytes()})
+		}()
+	}
 	if resp.StatusCode/100 != 2 {
 		rec.Outcome = "http_error"
 		// 4xx/5xx before a stream: the provider did not run the model.

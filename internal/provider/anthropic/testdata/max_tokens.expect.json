@@ -1,0 +1,9 @@
+{
+ "outcome": "ok",
+ "blocks": [
+  "text"
+ ],
+ "stop_reason": "max_tokens",
+ "input": 25,
+ "output": 5
+}

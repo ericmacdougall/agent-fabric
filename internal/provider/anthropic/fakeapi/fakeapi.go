@@ -34,6 +34,10 @@ type Step struct {
 	Stall time.Duration
 	// DieBeforeBody makes the server hang up with no response at all.
 	DieBeforeBody bool
+	// Raw replays a recorded response body verbatim (SSE text or error JSON)
+	// with Status (default 200) and Headers, bypassing the builders.
+	Raw     string
+	Headers map[string]string
 }
 
 // Recorded is one request as the server saw it.
@@ -92,6 +96,16 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 			c, _, _ := hj.Hijack()
 			c.Close()
 		}
+		return
+	}
+	if st.Raw != "" {
+		for k, v := range st.Headers {
+			w.Header().Set(k, v)
+		}
+		if st.Status != 0 {
+			w.WriteHeader(st.Status)
+		}
+		io.WriteString(w, st.Raw) //nolint:errcheck
 		return
 	}
 	if err := checkHistory(body, s); err != nil && st.Status == 0 {

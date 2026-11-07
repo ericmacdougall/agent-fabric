@@ -32,6 +32,8 @@ func main() {
 	switch os.Args[1] {
 	case "__sandbox":
 		err = sandboxMain(os.Args[2:])
+	case "provider":
+		err = providerMain(os.Args[2:])
 	case "mission":
 		err = missionMain(os.Args[2:])
 	case "admit", "release", "wake", "done":
@@ -93,6 +95,8 @@ func usage() {
   ask answer I --answer A --source S   answer; wakes the mission waiting on ask:I
   ask withdraw I --reason R | show I | repair
   mission show M                       snapshot and event log (JSON)
+  mission run --provider anthropic --grant F   run a native-loop mission (API key from the grant's key_command)
+  provider capture --grant F --out DIR [--scenarios text,tool,thinking,badauth,badrequest]   record real API streams
   import --slots F --queue F           one-off #14882 import (shadow)
   expire-leases [--limit N]            bounded lease sweep
   host controls --scratch DIR          run this host's negative controls
@@ -180,8 +184,10 @@ func missionMain(args []string) error {
 		return withStore(func(ctx context.Context, st *store.Store) error { return printMissions(ctx, st) })
 	case "show":
 		return missionShow(args[1:])
+	case "run":
+		return nativeRunMain(args[1:])
 	}
-	return errors.New("mission new|list|show")
+	return errors.New("mission new|list|show|run")
 }
 
 func printMissions(ctx context.Context, st *store.Store) error {

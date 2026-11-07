@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
 
 	"fabric/internal/agent"
 	"fabric/internal/domain"
+	"fabric/internal/provider/anthropic/fakeapi"
 )
 
 func TestRecordedMission(t *testing.T) {
@@ -165,5 +167,42 @@ func TestStaleFenceRefused(t *testing.T) {
 	}
 	if n := len(r.srv.Requests()); n != 0 {
 		t.Fatalf("stale runner sent %d requests", n)
+	}
+}
+
+func fixtureStep(t *testing.T, name string) fakeapi.Step {
+	t.Helper()
+	b, err := os.ReadFile("../provider/anthropic/testdata/" + name + ".json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Status   int    `json:"status"`
+		Response string `json:"response"`
+	}
+	if err := json.Unmarshal(b, &f); err != nil || f.Response == "" {
+		t.Fatalf("fixture %s: %v", name, err)
+	}
+	return fakeapi.Step{Raw: f.Response}
+}
+
+// A recorded stream (tool_use with fragmented input) drives a whole mission with
+// no claude/codex on PATH: the tool runs with the assembled input and its result
+// is in the next request (AC-1 over the recorded fixture).
+func TestRecordedMissionFixture(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent")
+	r := newRig(t, fixtureStep(t, "tool_use"), fixtureStep(t, "text"))
+	r.cfgMod = func(c *agent.Config) {
+		c.Tools = append(c.Tools, &fakeTool{name: "get_weather", mu: &r.mu, runs: &r.runs})
+	}
+	out, err, died := r.life()
+	if err != nil || died != nil || out.Kind != agent.OutcomeDone {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+	if len(r.runs) != 1 || r.runs[0] != `get_weather:{"location":"San Francisco, CA"}` {
+		t.Fatalf("runs %v", r.runs)
+	}
+	if !bytes.Contains(r.srv.Requests()[1].Body, []byte(`"tool_use_id":"toolu_syn1"`)) {
+		t.Fatal("tool_result not in the second request")
 	}
 }

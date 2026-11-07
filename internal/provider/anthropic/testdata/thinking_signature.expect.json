@@ -1,0 +1,12 @@
+{
+ "outcome": "ok",
+ "blocks": [
+  "thinking",
+  "redacted_thinking",
+  "text"
+ ],
+ "stop_reason": "end_turn",
+ "input": 25,
+ "output": 40,
+ "signature": "EqQBCgIYAhIM1gbcDa9GJwZA2b3hGgxBdjrkzLoky3dl1pkiMOYds"
+}

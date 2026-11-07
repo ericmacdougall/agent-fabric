@@ -1,0 +1,6 @@
+{
+ "outcome": "api_error",
+ "status": 429,
+ "retry": true,
+ "retry_after_s": 12
+}
