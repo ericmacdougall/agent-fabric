@@ -38,7 +38,7 @@
   "id": "P6-drop-signature",
   "file": "internal/provider/anthropic/stream.go",
   "old": "\t\tb.sig.WriteString(s)\n\t\tb.hasSig = true\n\t\treturn err",
-  "new": "\t\treturn err",
+  "new": "\t\t_ = s\n\t\treturn err",
   "cmd": "go test ./internal/provider/anthropic -run TestSSEToolUse -count=1"
  },
  {
