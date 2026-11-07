@@ -98,7 +98,7 @@ in-process `serve-metrics` in the daemon.
 | `fabric_sched_counter_total` | counter | name | `sched_counters` |
 | `fabric_resource_capacity`, `_held`, `_spent_month` | gauge | resource, unit | dispatch-gate resources; spent is settled usage this UTC month |
 | `fabric_native_spent_month_usd_micros` | gauge | | native provider cost this UTC month |
-| `fabric_budget_cap_usd_micros` | gauge | scope (month, job, live_test) | fixed ceilings (constants) |
+| `fabric_budget_cap_usd_micros` | gauge | scope (month, job, live_test) | fixed ceilings (constants): month USD 20, job USD 5, live test USD 1 |
 | `fabric_asks_open` | gauge | kind | open asks |
 | `fabric_asks_open_oldest_age_seconds` | gauge | | oldest open ask, 0 when none |
 

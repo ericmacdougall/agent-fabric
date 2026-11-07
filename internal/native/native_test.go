@@ -59,7 +59,7 @@ func newEnv(t *testing.T, steps ...fakeapi.Step) *env {
 		Worktree: wt, RunDir: run, BaseURL: srv.URL, AnthropicVersion: "test-version", KeyCommand: []string{script},
 		Prices: json.RawMessage(prices), LiveTest: true, MaxTurns: 6, WallSeconds: 60, RestartCap: 3,
 		ShellAllow: []string{`^(ls|cat|echo|wc)( [A-Za-z0-9_./=-]+)*$`}, OracleHooks: hooks(t), RequiredControls: []string{"x"}}
-	g.Caps.Month, g.Caps.Job, g.Caps.Run = 100_000_000, 5_000_000, 1_000_000
+	g.Caps.Month, g.Caps.Job, g.Caps.Run = 20_000_000, 5_000_000, 1_000_000
 	return &env{g: g, marker: marker, srv: srv}
 }
 
@@ -131,9 +131,9 @@ func TestMissionRunRefusals(t *testing.T) {
 	}
 	// Caps are fixed in code.
 	bad := newEnv(t)
-	bad.g.Caps.Month = 200_000_000
+	bad.g.Caps.Month = 25_000_000
 	if err := bad.g.Validate(); err == nil {
-		t.Error("month cap above USD 100 accepted")
+		t.Error("month cap above USD 20 accepted")
 	}
 	bad = newEnv(t)
 	bad.g.Caps.Job = 6_000_000
