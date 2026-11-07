@@ -256,3 +256,49 @@ func TestStaleFollowsStampedDeadline(t *testing.T) {
 		t.Fatalf("after the late transport: %s remote=%d", got.State, fake.Count())
 	}
 }
+
+// Review nit 4: a dispatch deadline is stamped only for the dispatch just
+// committed, within a bounded window, and never rewritten.
+func TestDispatchDeadlineRowGuarded(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	e, err := b.Submit(ctx, fake, uspec("dl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Dispatch(ctx, fake, e.ID); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := st.Pool().QueryRow(ctx, "SELECT count(*) FROM effect_dispatches WHERE effect_id = $1 AND dispatch = 1", e.ID).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("deadline rows %d %v, want 1", n, err)
+	}
+	for _, q := range []string{
+		"UPDATE effect_dispatches SET deadline = deadline + interval '1 second' WHERE effect_id = $1",
+		"DELETE FROM effect_dispatches WHERE effect_id = $1",
+		"INSERT INTO effect_dispatches (effect_id, dispatch, deadline) VALUES ($1, 2, now() + interval '1 minute')",
+	} {
+		if _, err := st.Pool().Exec(ctx, q, e.ID); err == nil {
+			t.Errorf("accepted: %s", q)
+		}
+	}
+	g, err := b.Submit(ctx, fake, uspec("dl2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Pool().Exec(ctx, "UPDATE effects SET state = 'DISPATCHED', dispatches = 1 WHERE id = $1", g.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Pool().Exec(ctx, "INSERT INTO effect_dispatches (effect_id, dispatch, deadline) VALUES ($1, 1, now() + interval '1 day')", g.ID); err == nil {
+		t.Error("a far deadline was accepted")
+	}
+	if _, err := st.Pool().Exec(ctx, "INSERT INTO effect_dispatches (effect_id, dispatch, deadline) VALUES ($1, 5, now() + interval '1 minute')", g.ID); err == nil {
+		t.Error("a deadline for another dispatch number was accepted")
+	}
+	if _, err := st.Pool().Exec(ctx, "INSERT INTO effect_dispatches (effect_id, dispatch, deadline) VALUES ($1, 1, now() + interval '1 minute')", g.ID); err != nil {
+		t.Fatalf("a valid deadline: %v", err)
+	}
+	if _, err := st.Pool().Exec(ctx, "UPDATE effect_dispatches SET deadline = deadline + interval '1 second' WHERE effect_id = $1", g.ID); err == nil {
+		t.Error("a valid deadline row was rewritten")
+	}
+}

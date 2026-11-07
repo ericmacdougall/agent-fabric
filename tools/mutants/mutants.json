@@ -128,12 +128,12 @@
   "expect": "TestCommandReplay",
   "edits": [
    [
-    "WHERE actor = $1 AND mission_id = $2 AND command_id = $3`, string(actor), string(cmd.Mission), string(commandID)).Scan(&storedHash, &storedResp)",
-    "WHERE false AND actor = $1 AND mission_id = $2 AND command_id = $3`, string(actor), string(cmd.Mission), string(commandID)).Scan(&storedHash, &storedResp)"
+    "WHERE actor = $1 AND mission_id = $2 AND command_id = $3`, string(actor), string(cmd.Mission), string(commandID)).Scan(&storedHash, &storedFormat, &storedResp, &storedBytes)",
+    "WHERE false AND actor = $1 AND mission_id = $2 AND command_id = $3`, string(actor), string(cmd.Mission), string(commandID)).Scan(&storedHash, &storedFormat, &storedResp, &storedBytes)"
    ],
    [
-    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,\n\t\tstring(actor), string(cmd.Mission), string(commandID), string(cmd.Kind), hash, resp.Status, respJSON, firstSeq, lastSeq); err != nil {",
-    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING`,\n\t\tstring(actor), string(cmd.Mission), string(commandID), string(cmd.Kind), hash, resp.Status, respJSON, firstSeq, lastSeq); err != nil {"
+    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'CANONICAL_V1')`,",
+    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'CANONICAL_V1') ON CONFLICT DO NOTHING`,"
    ]
   ]
  },
@@ -171,12 +171,8 @@
   "expect": "TestStaleFence",
   "edits": [
    [
-    "WHERE id = $1 AND fence = $2 AND state IN ('LEASED', 'PREPARING', 'RUNNING')`,\n\t\tstring(attempt), fence, pgInterval(s.Lease))",
-    "WHERE id = $1 AND state IN ('LEASED', 'PREPARING', 'RUNNING')`,\n\t\tstring(attempt), pgInterval(s.Lease))"
-   ],
-   [
-    "now() + $3::interval\n\t\tWHERE id = $1 AND state IN",
-    "now() + $2::interval\n\t\tWHERE id = $1 AND state IN"
+    "WHERE id = $1 AND fence = $2 AND state IN ('LEASED', 'PREPARING', 'RUNNING')`,",
+    "WHERE id = $1 AND $2::bigint IS NOT NULL AND state IN ('LEASED', 'PREPARING', 'RUNNING')`,"
    ]
   ]
  },
@@ -547,8 +543,8 @@
   "expect": "TestReplayBytesExact",
   "edits": [
    [
-    "\t\traw := storedBytes\n\t\tif raw == nil {",
-    "\t\traw := storedBytes\n\t\tif true {"
+    "raw, err := replayBytes(storedFormat, storedResp, storedBytes)",
+    "raw, err := replayBytes(storedFormat, storedResp, nil)"
    ]
   ]
  },
@@ -651,8 +647,8 @@
   "expect": "TestHoldFenceBinding",
   "edits": [
    [
-    "\tif !leaseOK {",
-    "\tif false {"
+    "\tif leaseUntil != nil && !leaseUntil.After(decidedAt) {",
+    "\tif false && leaseUntil != nil && !leaseUntil.After(decidedAt) {"
    ]
   ]
  },
@@ -1768,8 +1764,8 @@
   "expect": "TestTickSweepsReservationsOnlyWhenGated",
   "edits": [
    [
-    "\tif s.gated() {\n\t\tif _, err := s.st.ExpireReservations",
-    "\tif s != nil {\n\t\tif _, err := s.st.ExpireReservations"
+    "\tif s.gated() {\n\t\tif _, err := s.st.ExpireEndedReservations",
+    "\tif s != nil {\n\t\tif _, err := s.st.ExpireEndedReservations"
    ]
   ]
  },
@@ -1833,8 +1829,8 @@
   "expect": "TestUnknownEventKindMissionGetsNoWrites",
   "edits": [
    [
-    "\t\t\t\ts.park(id, err)\n\t\t\t\tcontinue\n",
-    "\t\t\t\ts.park(id, err)\n\t\t\t\tn++\n\t\t\t\tcontinue\n"
+    "\t\t\ts.park(id, err)\n\t\t\tcontinue\n",
+    "\t\t\ts.park(id, err)\n\t\t\tn++\n\t\t\tcontinue\n"
    ]
   ]
  },
@@ -2223,8 +2219,8 @@
   "expect": "TestOwnerHeartbeatsLiveRun",
   "edits": [
    [
-    "s.st.Heartbeat(ctx, attempt, fence); err != nil {",
-    "s.st.Heartbeat(ctx, attempt, fence+1); err != nil {"
+    "err = s.st.Heartbeat(ctx, attempt, fence)",
+    "err = s.st.Heartbeat(ctx, attempt, fence+1)"
    ]
   ]
  },
@@ -2301,8 +2297,8 @@
   "expect": "TestRolesLeastPrivilege",
   "edits": [
    [
-    "REVOKE INSERT, UPDATE, DELETE ON %s FROM %s\", id(tb), runner",
-    "REVOKE INSERT, UPDATE, DELETE ON %s FROM %s\", id(tb), sched"
+    "stmts = append(stmts, fmt.Sprintf(\"GRANT %s ON %s TO %s\", privs, id(tb), runner))",
+    "stmts = append(stmts, fmt.Sprintf(\"GRANT ALL ON %[2]s TO %[3]s /* %[1]s */\", privs, id(tb), runner))"
    ]
   ]
  },
@@ -2733,8 +2729,8 @@
   "expect": "TestDoneRefusedWhileEffectUnsettled",
   "edits": [
    [
-    "\t\tif n := m.UnsettledEffects(); n > 0 {",
-    "\t\tif n := m.UnsettledEffects(); n > 99 {"
+    "\t\tif n := m.UnsettledEffects() + env.UnsettledEffects; n > 0 {",
+    "\t\tif n := m.UnsettledEffects() + env.UnsettledEffects; n > 99 {"
    ]
   ]
  },
@@ -3305,8 +3301,8 @@
   "expect": "TestStaleDispatchedRecovers",
   "edits": [
    [
-    "(state = $5 AND updated_at < now() - $6::interval AND `",
-    "($5 = '' AND updated_at < now() - $6::interval AND `"
+    "(state = $5 AND `+staleAge(6)+` AND `",
+    "($5 = '' AND `+staleAge(6)+` AND `"
    ]
   ]
  },
@@ -3387,8 +3383,8 @@
   "expect": "TestInFlightDispatchNotReconciled",
   "edits": [
    [
-    "\tif tag.RowsAffected() != 1 {\n\t\t// Review U1",
-    "\tif tag.RowsAffected() > 1 {\n\t\t// Review U1"
+    "\tif tag.RowsAffected() != 1 {\n\t\t// Review nit 2",
+    "\tif tag.RowsAffected() > 1 {\n\t\t// Review nit 2"
    ]
   ]
  },
@@ -3400,7 +3396,7 @@
   "expect": "TestDispatcherSessionLossKeepsOutcome",
   "edits": [
    [
-    "WHERE id = $1 AND state = $4 AND updated_at < now() - $5::interval AND `+staleAttempt,",
+    "WHERE id = $1 AND state = $4 AND `+staleAge(5)+` AND `+staleAttempt,",
     "WHERE id = $1 AND state = $4 AND $5::interval IS NOT NULL AND `+staleAttempt,"
    ]
   ]
@@ -3413,7 +3409,7 @@
   "expect": "TestDispatcherSessionLossKeepsOutcome",
   "edits": [
    [
-    "(state = $5 AND updated_at < now() - $6::interval AND `",
+    "(state = $5 AND `+staleAge(6)+` AND `",
     "(state = $5 AND $6::interval IS NOT NULL AND `"
    ]
   ]
@@ -3435,12 +3431,12 @@
   "id": "M266_dispatch_unbounded",
   "invariant": "done_effects",
   "pkg": "./internal/effects",
-  "file": "internal/effects/broker.go",
+  "file": "internal/store/store.go",
   "expect": "TestSlowDispatchesDoNotStarvePool",
   "edits": [
    [
-    "\tn := int(st.Pool().Config().MaxConns) / 2\n",
-    "\tn := int(st.Pool().Config().MaxConns) * 4\n"
+    "\t\tn := int(s.pool.Config().MaxConns) / 2\n",
+    "\t\tn := int(s.pool.Config().MaxConns) * 4\n"
    ]
   ]
  },
@@ -3467,6 +3463,140 @@
    [
     "\trc, terr := exec.Dispatch(tctx, Submission",
     "\trc, terr := exec.Dispatch(ctx, Submission"
+   ]
+  ]
+ },
+ {
+  "id": "M269_command_no_group",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/command_unix.go",
+  "expect": "TestRunCommandKillsProcessGroup",
+  "edits": [
+   [
+    "\tcmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}\n",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M270_command_leader_only",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/command_unix.go",
+  "expect": "TestRunCommandKillsProcessGroup",
+  "edits": [
+   [
+    "\tcmd.Cancel = func() error { return stopGroup(cmd.Process.Pid) }\n",
+    ""
+   ],
+   [
+    "\t\tstopGroup(cmd.Process.Pid) //nolint:errcheck\n",
+    "\t\t_ = 0\n"
+   ]
+  ]
+ },
+ {
+  "id": "M271_overrun_uncounted",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestExecutorOverrunCounted",
+  "edits": [
+   [
+    "\t\tb.executorOverruns.Add(1)\n",
+    "\t\t_ = 0\n"
+   ]
+  ]
+ },
+ {
+  "id": "M272_settle_ignores_own_commit",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestSettleRecognisesItsOwnCommit",
+  "edits": [
+   [
+    "Scan(&cur, &rDispatch, &rOutcome); err == nil && cur == string(state) &&",
+    "Scan(&cur, &rDispatch, &rOutcome); err == nil && cur == \"never\" &&"
+   ]
+  ]
+ },
+ {
+  "id": "M273_resettle_holds_dead_conn",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestResettleWithFullPool",
+  "edits": [
+   [
+    "\t\tunlock()\n\t\tunlock = func() {}\n\t\terr = b.resettle(ctx, id, rs)",
+    "\t\terr = b.resettle(ctx, id, rs)"
+   ]
+  ]
+ },
+ {
+  "id": "M274_slots_per_broker",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestDispatchCapSharedAcrossBrokers",
+  "edits": [
+   [
+    "slots: st.DispatchSlots(),",
+    "slots: make(chan struct{}, cap(st.DispatchSlots())),"
+   ]
+  ]
+ },
+ {
+  "id": "M275_stale_ignores_stamp",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestStaleFollowsStampedDeadline",
+  "edits": [
+   [
+    "(SELECT d.deadline + (d.deadline - d.at) FROM effect_dispatches d",
+    "(SELECT NULL::timestamptz FROM effect_dispatches d"
+   ]
+  ]
+ },
+ {
+  "id": "M276_deadline_unbounded",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0023_effect_dispatch_deadlines.sql",
+  "expect": "TestDispatchDeadlineRowGuarded",
+  "edits": [
+   [
+    "NEW.deadline > now() + interval '15 minutes'",
+    "NEW.deadline > now() + interval '15 years'"
+   ]
+  ]
+ },
+ {
+  "id": "M277_deadline_rewritable",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0023_effect_dispatch_deadlines.sql",
+  "expect": "TestDispatchDeadlineRowGuarded",
+  "edits": [
+   [
+    "    IF TG_OP <> 'INSERT' THEN\n",
+    "    IF TG_OP = 'DELETE' THEN\n"
+   ]
+  ]
+ },
+ {
+  "id": "M278_deadline_any_dispatch",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0023_effect_dispatch_deadlines.sql",
+  "expect": "TestDispatchDeadlineRowGuarded",
+  "edits": [
+   [
+    "\n                   AND e.dispatches = NEW.dispatch) THEN",
+    "\n                   AND NEW.dispatch > 0) THEN"
    ]
   ]
  }

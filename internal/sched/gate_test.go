@@ -192,6 +192,13 @@ func TestTickSweepsReservationsOnlyWhenGated(t *testing.T) {
 		Attempt: "r_gs_1", Fence: rs[0].Fence, Outcome: "abandoned"}); err != nil {
 		t.Fatal(err)
 	}
+	// An ungated scheduler leaves even an ended attempt's hold alone.
+	if _, err := New(st, off, ln).Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h := heldNow(t, st); h != 1 {
+		t.Fatalf("an ungated tick swept an ended attempt's hold: held %d", h)
+	}
 	if _, err := gated.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
