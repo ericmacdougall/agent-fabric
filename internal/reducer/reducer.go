@@ -68,6 +68,11 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		if m.Execution != domain.ExecAdmitted && m.Execution != domain.ExecRunning {
 			return nil, fmt.Errorf("%w: cannot start an attempt while %s", domain.ErrInvalidTransition, m.Execution)
 		}
+		if m.ParkedReason != "" {
+			// A park reached while another attempt was live still holds
+			// (goodqa#15082 T2); only a re-admission clears it.
+			return nil, fmt.Errorf("%w: mission is parked: %s", domain.ErrInvalidTransition, m.ParkedReason)
+		}
 		if _, dup := m.Attempts[cmd.Attempt]; dup {
 			return nil, fmt.Errorf("%w: attempt %s", domain.ErrDuplicate, cmd.Attempt)
 		}
@@ -572,6 +577,21 @@ func fenceCheck(m domain.Mission, a domain.Attempt, fence int64) error {
 // Apply folds one event into the state and returns the new state. It is total
 // over events Decide can emit; an unknown kind is returned unchanged so a
 // replay of a newer log by an older binary cannot invent state.
+// applyPendingPark finishes a park that was reached while another attempt
+// was live (goodqa#15082 T2): once nothing is live or unresolved, a running,
+// admitted or waiting mission becomes BLOCKED. A paused mission stays paused
+// (the quarantine is the operator's first concern).
+func applyPendingPark(s *domain.Mission) {
+	if s.ParkedReason == "" || s.LiveAttempts() != 0 || s.UnresolvedAttempts() != 0 {
+		return
+	}
+	switch s.Execution {
+	case domain.ExecRunning, domain.ExecAdmitted, domain.ExecWaiting:
+		s.Execution = domain.ExecBlocked
+		s.WaitKey = ""
+	}
+}
+
 func Apply(m domain.Mission, e domain.Event) domain.Mission {
 	s := m.Clone()
 	if e.Seq > 0 {
@@ -626,11 +646,12 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		if e.Kind == domain.EvAttemptReconciled && e.AttemptTo == domain.AttemptQuarantined && s.Execution.HoldsSlot() {
 			s.Execution = domain.ExecPaused
 		}
+		applyPendingPark(&s)
 	case domain.EvAttemptFinished:
 		a := s.Attempts[e.Attempt]
 		a.State = e.AttemptTo
 		s.Attempts[e.Attempt] = a
-		if !e.Prelaunch {
+		if !e.Prelaunch && s.ParkedReason == "" {
 			s.PrelaunchFailures, s.CapacityWaits, s.DeferMS = 0, 0, 0 // a runner ran: the run of failures is over
 		}
 		switch e.Outcome {
@@ -652,6 +673,7 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 				s.Execution = domain.ExecAdmitted
 			}
 		}
+		applyPendingPark(&s)
 	case domain.EvEvidenceRecorded:
 		if s.Evidence == nil {
 			s.Evidence = map[string]domain.Evidence{}
