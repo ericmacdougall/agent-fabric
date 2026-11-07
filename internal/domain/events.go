@@ -50,8 +50,13 @@ type Command struct {
 	Head       string    `json:"head,omitempty"`
 	Host       HostID    `json:"host,omitempty"`
 	Role       string    `json:"role,omitempty"`
-	Receipt    string    `json:"receipt,omitempty"`
-	Outcome    string    `json:"outcome,omitempty"` // FINISH_ATTEMPT: checkpoint|wait|ready_for_review|blocked|abandoned
+	// START_ATTEMPT (goodqa#15087): the launcher's own path, set from the
+	// caller's identity and never copied from the mission; and, for an
+	// anthropic-api attempt, the native runner's liveness lock file.
+	Path     Provider `json:"path,omitempty"`
+	LockPath string   `json:"lock_path,omitempty"`
+	Receipt  string   `json:"receipt,omitempty"`
+	Outcome  string   `json:"outcome,omitempty"` // FINISH_ATTEMPT: checkpoint|wait|ready_for_review|blocked|abandoned
 	// FINISH_ATTEMPT abandoned: the runner was never started (red-team F1).
 	Prelaunch bool `json:"prelaunch,omitempty"`
 	// With Prelaunch: the cause is a full resource, a wait not a failure (red-team D2).
@@ -158,6 +163,8 @@ type Event struct {
 	Head       string       `json:"head,omitempty"`
 	Host       HostID       `json:"host,omitempty"`
 	Role       string       `json:"role,omitempty"`
+	Path       Provider     `json:"path,omitempty"`      // ATTEMPT_STARTED (goodqa#15087)
+	LockPath   string       `json:"lock_path,omitempty"` // ATTEMPT_STARTED, anthropic-api only
 	Receipt    string       `json:"receipt,omitempty"`
 	Outcome    string       `json:"outcome,omitempty"`
 	Prelaunch  bool         `json:"prelaunch,omitempty"`  // ATTEMPT_FINISHED: abandoned before the runner started

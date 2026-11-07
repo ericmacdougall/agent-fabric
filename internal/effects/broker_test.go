@@ -67,7 +67,7 @@ func setup(t *testing.T) (context.Context, *store.Store, *Broker, *Fake) {
 	if err := st.Truncate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateMission(ctx, "m_1", "GoodQA goodqa#14791", "fabric", "main"); err != nil {
+	if err := st.CreateMission(ctx, "m_1", domain.ProviderClaudeCode, "GoodQA goodqa#14791", "fabric", "main"); err != nil {
 		t.Fatal(err)
 	}
 	must := func(key string, cmd domain.Command) {
@@ -76,7 +76,7 @@ func setup(t *testing.T) (context.Context, *store.Store, *Broker, *Fake) {
 		}
 	}
 	must("admit", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_1"})
-	must("start", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_1", Attempt: "r_1", Host: "h_t2", Role: "writer"})
+	must("start", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_1", Attempt: "r_1", Host: "h_t2", Role: "writer"})
 	return ctx, st, New(st), NewFake()
 }
 

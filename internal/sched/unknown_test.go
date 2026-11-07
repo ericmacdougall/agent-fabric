@@ -59,7 +59,7 @@ func crashMidRun(t *testing.T, p *fakeProber) (*store.Store, *fakeLauncher, *Sch
 	st, ln, cfg := gatedSetup(t, "m_ga", 1)
 	st.Lease = 500 * time.Millisecond
 	ctx := context.Background()
-	if err := st.CreateMission(ctx, "m_gb", "GoodQA goodqa#14922", "fabric", "main"); err != nil {
+	if err := st.CreateMission(ctx, "m_gb", domain.ProviderClaudeCode, "GoodQA goodqa#14922", "fabric", "main"); err != nil {
 		t.Fatal(err)
 	}
 	// The first scheduler starts m_ga's runner, then dies: its context ends,

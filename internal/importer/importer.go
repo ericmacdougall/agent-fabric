@@ -37,6 +37,9 @@ type SlotsFile struct {
 		Slot   int    `json:"slot"`
 		Name   string `json:"name"`
 		Ticket string `json:"ticket"`
+		// Provider: absent or claude-code; anything else refuses the
+		// import (goodqa#15087, main WAL wbdc1146b5e3).
+		Provider *string `json:"provider"`
 	} `json:"slots"`
 	QueuedInOrder []json.RawMessage `json:"queued_in_order"`
 }
@@ -182,7 +185,11 @@ func Run(ctx context.Context, st *store.Store, exec Executor, o Options, sf Slot
 		}
 		seen[s.Slot] = true
 		id := domain.MissionID(fmt.Sprintf("m_slot%d", s.Slot))
-		e, err := st.EnsureMissionSpec(ctx, store.MissionSpec{ID: id, Name: s.Name, Ticket: TicketRef(s.Ticket, fallback), Priority: s.Slot, Source: src})
+		prov, err := importProvider(string(id), s.Provider)
+		if err != nil {
+			return res, err
+		}
+		e, err := st.EnsureMissionSpec(ctx, store.MissionSpec{ID: id, Name: s.Name, Ticket: TicketRef(s.Ticket, fallback), Priority: s.Slot, Source: src, Provider: prov})
 		if err != nil {
 			return res, err
 		}
@@ -205,7 +212,15 @@ func Run(ctx context.Context, st *store.Store, exec Executor, o Options, sf Slot
 	for i, raw := range sf.QueuedInOrder {
 		name, ticket := QueuedItem(raw)
 		id := domain.MissionID(fmt.Sprintf("m_q%02d", i+1))
-		e, err := st.EnsureMissionSpec(ctx, store.MissionSpec{ID: id, Name: name, Ticket: TicketRef(ticket, fallback), Priority: 10 + i, Source: src})
+		var o struct {
+			Provider *string `json:"provider"`
+		}
+		_ = json.Unmarshal(raw, &o) // a plain string item has no provider
+		prov, err := importProvider(string(id), o.Provider)
+		if err != nil {
+			return res, err
+		}
+		e, err := st.EnsureMissionSpec(ctx, store.MissionSpec{ID: id, Name: name, Ticket: TicketRef(ticket, fallback), Priority: 10 + i, Source: src, Provider: prov})
 		if err != nil {
 			return res, err
 		}
@@ -253,6 +268,17 @@ func TicketRef(raw, fallback string) string {
 
 // QueuedItem reads a queue entry that is either a string or an object with
 // name/item and ticket.
+// importProvider: an import row is a claude-code mission. A row with no
+// provider field, or with provider claude-code, is accepted; any other
+// value (anthropic-api included) refuses the import, naming the row
+// (goodqa#15087, main WAL wbdc1146b5e3).
+func importProvider(row string, p *string) (domain.Provider, error) {
+	if p == nil || domain.Provider(*p) == domain.ProviderClaudeCode {
+		return domain.ProviderClaudeCode, nil
+	}
+	return "", fmt.Errorf("%w: import row %s has provider %q; imports create claude-code missions only", domain.ErrInvalidProvider, row, *p)
+}
+
 func QueuedItem(raw json.RawMessage) (name, ticket string) {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {

@@ -18,7 +18,7 @@ func TestSettleSurvivesOneTransientFailure(t *testing.T) {
 	a := domain.AttemptID("r_t6_1")
 	st, ln, cfg := ownerSetup(t, m)
 	ctx := context.Background()
-	resp, err := st.Execute(ctx, "fabd", domain.CommandID("start:"+string(a)), domain.Command{Kind: domain.CmdStartAttempt, Mission: m, Attempt: a, Host: cfg.Host, Role: "writer"})
+	resp, err := st.Execute(ctx, "fabd", domain.CommandID("start:"+string(a)), domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: m, Attempt: a, Host: cfg.Host, Role: "writer"})
 	if err != nil {
 		t.Fatal(err)
 	}

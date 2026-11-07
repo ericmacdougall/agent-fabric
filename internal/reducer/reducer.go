@@ -30,6 +30,9 @@ type Env struct {
 	// clears a park (goodqa#15082 T2, main decision: the park after a run of
 	// prelaunch failures is for a human to look at).
 	Operator bool
+	// Provider: START_ATTEMPT only, the mission's stored provider, which the
+	// store reads from missions.provider (goodqa#15087). Empty refuses.
+	Provider domain.Provider
 }
 
 // Decide returns the events a command produces, or a refusal. A refusal is a
@@ -151,6 +154,25 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		return out, nil
 
 	case domain.CmdStartAttempt:
+		// goodqa#15087: the launcher states its path; it must be the
+		// mission's provider. The 0026 trigger checks the same in the
+		// database, for binaries that predate this check.
+		if _, err := domain.ParseProvider(string(cmd.Path)); err != nil {
+			return nil, fmt.Errorf("%w: start attempt: %v", domain.ErrInvalidTransition, err)
+		}
+		if env.Provider == "" || cmd.Path != env.Provider {
+			return nil, fmt.Errorf("%w: attempt path %s differs from mission provider %q", domain.ErrInvalidTransition, cmd.Path, env.Provider)
+		}
+		switch cmd.Path {
+		case domain.ProviderAnthropicAPI:
+			if err := domain.ValidLockPath(cmd.Attempt, cmd.LockPath); err != nil {
+				return nil, fmt.Errorf("%w: %v", domain.ErrInvalidTransition, err)
+			}
+		default:
+			if cmd.LockPath != "" {
+				return nil, fmt.Errorf("%w: a claude-code attempt has no lock path", domain.ErrInvalidTransition)
+			}
+		}
 		if m.Execution != domain.ExecAdmitted && m.Execution != domain.ExecRunning {
 			return nil, fmt.Errorf("%w: cannot start an attempt while %s", domain.ErrInvalidTransition, m.Execution)
 		}
@@ -182,6 +204,8 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		e.Generation = m.Version.CandidateGeneration
 		e.Host = cmd.Host
 		e.Role = cmd.Role
+		e.Path = cmd.Path
+		e.LockPath = cmd.LockPath
 		e.AttemptTo = domain.AttemptLeased
 		return []domain.Event{e}, nil
 

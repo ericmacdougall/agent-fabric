@@ -88,11 +88,18 @@ func exitCode(err error) int {
 		return 0
 	}
 	var ref *store.Refusal
-	if errors.As(err, &ref) {
+	var ue usageError
+	if errors.As(err, &ref) || errors.As(err, &ue) {
 		return 3
 	}
 	return 1
 }
+
+// usageError is a refused invocation, exit 3 like a refusal: a required
+// flag is missing or holds an invalid value (goodqa#15087).
+type usageError struct{ error }
+
+func (e usageError) Unwrap() error { return e.error }
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: fab <command> [flags]
@@ -191,12 +198,17 @@ func missionMain(args []string) error {
 		prio := fs.Int("priority", 100, "queue position (lower first)")
 		needs := fs.String("needs", "", "host label needed, e.g. heavy")
 		source := fs.String("source", "", "provenance of this mission (R12 grammar)")
+		provider := fs.String("provider", "", "claude-code (fabd runs it on the Claude Code binary) or anthropic-api (only `fab mission run --grant` runs it); required, never changes")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
+		prov, err := domain.ParseProvider(*provider)
+		if err != nil {
+			return usageError{fmt.Errorf("mission new: --provider: %w", err)}
+		}
 		return withStore(func(ctx context.Context, st *store.Store) error {
 			err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: domain.MissionID(*id), Name: *name, Ticket: *ticket, Repo: *repo,
-				Branch: *branch, Priority: *prio, HostNeeds: *needs, Source: *source})
+				Branch: *branch, Priority: *prio, HostNeeds: *needs, Source: *source, Provider: prov})
 			if err == nil {
 				fmt.Println("mission", *id, "registered (IDLE)")
 			}

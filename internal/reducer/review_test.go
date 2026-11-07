@@ -27,10 +27,10 @@ func reviewed(t *testing.T, f *fleet, id domain.MissionID, a domain.AttemptID, f
 // beside the writer and both stay addressable; RELEASE is reachable after both end.
 func TestRV1_LiveAttemptsStayAddressable(t *testing.T) {
 	f, id, a, fence := startedMission(t)
-	if _, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_w2", Host: "h_t2", Role: "writer"}); !errors.Is(err, domain.ErrAttemptLive) {
+	if _, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_w2", Host: "h_t2", Role: "writer"}); !errors.Is(err, domain.ErrAttemptLive) {
 		t.Fatalf("second writer: want ErrAttemptLive, got %v", err)
 	}
-	ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_rev", Host: "h_t2", Role: "reviewer"})
+	ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_rev", Host: "h_t2", Role: "reviewer"})
 	f2 := ev[0].Fence
 	mustStep(t, f, domain.Command{Kind: domain.CmdFinishAttempt, Mission: id, Attempt: a, Fence: fence, Outcome: "checkpoint"})
 	mustStep(t, f, domain.Command{Kind: domain.CmdReconcileAttempt, Mission: id, Attempt: a, Fence: fence, Result: "VERIFIED"})

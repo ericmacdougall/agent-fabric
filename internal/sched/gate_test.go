@@ -241,7 +241,7 @@ func TestGateConfigValidated(t *testing.T) {
 func TestGateSweepKeepsLiveAttemptHolds(t *testing.T) {
 	st, ln, cfg := gatedSetup(t, "m_keep", 1)
 	ctx := context.Background()
-	resp, err := st.Execute(ctx, "fabd", "start:r_keep_1", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_keep", Attempt: "r_keep_1", Host: "h_t2", Role: "writer"})
+	resp, err := st.Execute(ctx, "fabd", "start:r_keep_1", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_keep", Attempt: "r_keep_1", Host: "h_t2", Role: "writer"})
 	if err != nil {
 		t.Fatal(err)
 	}

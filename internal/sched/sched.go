@@ -470,7 +470,10 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	if s.afterRead != nil {
 		s.afterRead()
 	}
-	resp, err := s.st.Execute(ctx, "fabd", domain.CommandID("start:"+string(attempt)), domain.Command{Kind: domain.CmdStartAttempt, Mission: mission, Attempt: attempt, Host: s.cfg.Host, Role: "writer"})
+	// fabd launches the Claude Code binary only: its path is claude-code,
+	// from its own identity, never read from the mission (goodqa#15087 F1).
+	resp, err := s.st.Execute(ctx, "fabd", domain.CommandID("start:"+string(attempt)), domain.Command{Kind: domain.CmdStartAttempt, Mission: mission, Attempt: attempt, Host: s.cfg.Host, Role: "writer",
+		Path: domain.ProviderClaudeCode})
 	if err != nil {
 		var ref *store.Refusal
 		if errors.As(err, &ref) {

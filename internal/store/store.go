@@ -75,7 +75,55 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		pool.Close()
 		return nil, err
 	}
-	return &Store{pool: pool, Lease: 5 * time.Minute}, nil
+	st := &Store{pool: pool, Lease: 5 * time.Minute}
+	if err := st.refuseNewerSchema(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return st, nil
+}
+
+// ErrNewerSchema: the database holds a migration this binary does not embed.
+var ErrNewerSchema = errors.New("database schema is newer than this binary")
+
+// embeddedMigrations is the binary's own migration list, in apply order.
+func embeddedMigrations() ([]string, error) {
+	names, err := fs.Glob(migrationFS, "migrations/*.sql")
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// refuseNewerSchema is the forward guard (goodqa#15087, main WAL
+// w5a7fb2daf13): a binary refuses a database that a newer binary has
+// migrated, naming its own latest migration and the first foreign one, so
+// an old fabd never runs against rules it does not know. It binds at
+// Open and Migrate only; a binary already running is stopped by the
+// database's own triggers instead.
+func (s *Store) refuseNewerSchema(ctx context.Context) error {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, "SELECT to_regclass('public.fabric_schema') IS NOT NULL").Scan(&exists); err != nil || !exists {
+		return err
+	}
+	names, err := embeddedMigrations()
+	if err != nil {
+		return err
+	}
+	var foreign string
+	err = s.pool.QueryRow(ctx, "SELECT name FROM fabric_schema WHERE NOT (name = ANY($1)) ORDER BY name LIMIT 1", names).Scan(&foreign)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	latest := ""
+	if len(names) > 0 {
+		latest = names[len(names)-1]
+	}
+	return fmt.Errorf("%w: it holds %s, which this binary (latest %s) does not embed; upgrade this binary", ErrNewerSchema, foreign, latest)
 }
 
 // Close releases the pool.
@@ -101,7 +149,11 @@ const migrationLock = 7_431_902_001 // arbitrary, fixed advisory lock key for mi
 
 // Migrate applies embedded migrations in name order under an advisory lock.
 // It is idempotent and roll-forward only.
-func (s *Store) Migrate(ctx context.Context) error {
+func (s *Store) Migrate(ctx context.Context) error { return s.migrateUpTo(ctx, "") }
+
+// migrateUpTo applies migrations whose name sorts at or before upTo (all of
+// them when upTo is empty). Tests use it to build an older schema.
+func (s *Store) migrateUpTo(ctx context.Context, upTo string) error {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return err
@@ -121,12 +173,17 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if _, err := conn.Exec(ctx, `ALTER TABLE fabric_schema ADD COLUMN IF NOT EXISTS sha256 text`); err != nil {
 		return err
 	}
-	names, err := fs.Glob(migrationFS, "migrations/*.sql")
+	if err := s.refuseNewerSchema(ctx); err != nil {
+		return err
+	}
+	names, err := embeddedMigrations()
 	if err != nil {
 		return err
 	}
-	sort.Strings(names)
 	for _, name := range names {
+		if upTo != "" && name > upTo {
+			break
+		}
 		sql, err := migrationFS.ReadFile(name)
 		if err != nil {
 			return err
@@ -169,9 +226,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
-// CreateMission registers a mission in IDLE. Idempotent on the id.
-func (s *Store) CreateMission(ctx context.Context, id domain.MissionID, ticket, repo, branch string) error {
+// CreateMission registers a mission in IDLE with its provider, which never
+// changes (goodqa#15087). Idempotent on the id; a second call naming another
+// provider for an existing id is refused.
+func (s *Store) CreateMission(ctx context.Context, id domain.MissionID, provider domain.Provider, ticket, repo, branch string) error {
 	if _, err := domain.ParseMissionID(string(id)); err != nil {
+		return err
+	}
+	if _, err := domain.ParseProvider(string(provider)); err != nil {
 		return err
 	}
 	if ticket == "" {
@@ -181,9 +243,24 @@ func (s *Store) CreateMission(ctx context.Context, id domain.MissionID, ticket, 
 	if err != nil {
 		return err
 	}
-	_, err = s.pool.Exec(ctx, `INSERT INTO missions (id, ticket, repo, branch, state)
-		VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`, string(id), ticket, repo, branch, state)
-	return err
+	tag, err := s.pool.Exec(ctx, `INSERT INTO missions (id, ticket, repo, branch, state, provider)
+		VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING`, string(id), ticket, repo, branch, state, string(provider))
+	if err != nil || tag.RowsAffected() == 1 {
+		return err
+	}
+	return s.checkProvider(ctx, id, provider)
+}
+
+// checkProvider refuses an existing mission whose provider differs.
+func (s *Store) checkProvider(ctx context.Context, id domain.MissionID, provider domain.Provider) error {
+	var have string
+	if err := s.pool.QueryRow(ctx, "SELECT provider FROM missions WHERE id = $1", string(id)).Scan(&have); err != nil {
+		return err
+	}
+	if domain.Provider(have) != provider {
+		return fmt.Errorf("%w: mission %s is %s, not %s", domain.ErrInvalidProvider, id, have, provider)
+	}
+	return nil
 }
 
 // SetCap changes the fleet cap (R1). The scheduler reads it under lock.
@@ -320,7 +397,8 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	}
 
 	var stateJSON []byte
-	err = tx.QueryRow(ctx, "SELECT state FROM missions WHERE id = $1 FOR UPDATE", string(cmd.Mission)).Scan(&stateJSON)
+	var provider string
+	err = tx.QueryRow(ctx, "SELECT state, provider FROM missions WHERE id = $1 FOR UPDATE", string(cmd.Mission)).Scan(&stateJSON, &provider)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Response{}, fmt.Errorf("%w: mission %s", domain.ErrNotFound, cmd.Mission)
 	}
@@ -406,7 +484,7 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		}
 	}
 
-	env := reducer.Env{Cap: cap, Operator: domain.IsOperator(actor)}
+	env := reducer.Env{Cap: cap, Operator: domain.IsOperator(actor), Provider: domain.Provider(provider)}
 	if cmd.Kind == domain.CmdCompleteMission || cmd.Kind == domain.CmdUnpauseMission {
 		// Review N1: the broker's effects for this mission that are not
 		// settled, in this transaction. A new intent or dispatch holds its
@@ -533,10 +611,12 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 func (s *Store) applyAttemptRow(ctx context.Context, tx pgx.Tx, e domain.Event) error {
 	switch e.Kind {
 	case domain.EvAttemptStarted:
-		_, err := tx.Exec(ctx, `INSERT INTO attempts (id, mission_id, fence, revision, generation, host, role, state, lease_until)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + $9::interval)`,
+		// path and lock_path come from the launcher's command (goodqa#15087);
+		// the attempts_path trigger checks them against missions.provider.
+		_, err := tx.Exec(ctx, `INSERT INTO attempts (id, mission_id, fence, revision, generation, host, role, state, lease_until, path, lock_path)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + $9::interval, $10, NULLIF($11, ''))`,
 			string(e.Attempt), string(e.Mission), e.Fence, e.Revision, e.Generation, string(e.Host), e.Role,
-			string(domain.AttemptLeased), pgInterval(s.Lease))
+			string(domain.AttemptLeased), pgInterval(s.Lease), string(e.Path), e.LockPath)
 		return err
 	case domain.EvAttemptAcked:
 		tag, err := tx.Exec(ctx, `UPDATE attempts SET state = $3, lease_until = now() + $4::interval

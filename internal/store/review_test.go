@@ -81,7 +81,7 @@ func TestRV2_SweepReachesEveryExpiredLease(t *testing.T) {
 	ok(t, st, ctx, "chat", "a1", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_1"})
 	ok(t, st, ctx, "chat", "a2", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_2"})
 	startAttempt(t, st, ctx, "m_1", "r_1")
-	ok(t, st, ctx, "fabd", "start:r_rev", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_1", Attempt: "r_rev", Host: "h_t2", Role: "reviewer"})
+	ok(t, st, ctx, "fabd", "start:r_rev", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_1", Attempt: "r_rev", Host: "h_t2", Role: "reviewer"})
 	startAttempt(t, st, ctx, "m_2", "r_3")
 	time.Sleep(250 * time.Millisecond)
 	total := 0
@@ -107,9 +107,9 @@ func TestRV21_LongAttemptIDDoesNotStallSweep(t *testing.T) {
 	ok(t, st, ctx, "chat", "a1", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_1"})
 	ok(t, st, ctx, "chat", "a2", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_2"})
 	long := domain.AttemptID("r_" + strings.Repeat("a", 60))
-	ok(t, st, ctx, "fabd", "s1", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_1", Attempt: long, Host: "h_t2", Role: "writer"})
-	ok(t, st, ctx, "fabd", "s2", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_2", Attempt: "r_ok", Host: "h_t2", Role: "writer"})
-	if _, err := st.Execute(ctx, "fabd", "s3", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_2", Attempt: "not an id/../x", Host: "h_t2"}); !errors.Is(err, domain.ErrInvalidID) {
+	ok(t, st, ctx, "fabd", "s1", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_1", Attempt: long, Host: "h_t2", Role: "writer"})
+	ok(t, st, ctx, "fabd", "s2", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_2", Attempt: "r_ok", Host: "h_t2", Role: "writer"})
+	if _, err := st.Execute(ctx, "fabd", "s3", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_2", Attempt: "not an id/../x", Host: "h_t2"}); !errors.Is(err, domain.ErrInvalidID) {
 		t.Fatalf("invalid attempt id: want ErrInvalidID, got %v", err)
 	}
 	time.Sleep(150 * time.Millisecond)

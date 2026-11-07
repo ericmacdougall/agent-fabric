@@ -254,7 +254,15 @@ func ensureAttempt(ctx context.Context, st *store.Store, g Grant) (int64, error)
 	if err == nil {
 		return fence, nil
 	}
-	if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: domain.MissionID(g.Mission), Name: "native " + g.Mission, Ticket: g.Ticket, Priority: 100, Source: "ticket:" + g.Ticket}); err != nil {
+	// The native runner creates anthropic-api missions only (goodqa#15087,
+	// main WAL w5a7fb2daf13); an existing mission of another provider is
+	// refused here.
+	if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: domain.MissionID(g.Mission), Name: "native " + g.Mission, Ticket: g.Ticket, Priority: 100,
+		Source: "ticket:" + g.Ticket, Provider: domain.ProviderAnthropicAPI}); err != nil {
+		return 0, err
+	}
+	lockPath, err := LockPath(domain.AttemptID(g.Attempt))
+	if err != nil {
 		return 0, err
 	}
 	key := func(s string) domain.CommandID { return domain.CommandID("native-" + shortID(g.Attempt) + "-" + s) }
@@ -262,7 +270,7 @@ func ensureAttempt(ctx context.Context, st *store.Store, g Grant) (int64, error)
 		return 0, fmt.Errorf("admit: %w", err)
 	}
 	resp, err := st.Execute(ctx, "native-runner", key("start"), domain.Command{Kind: domain.CmdStartAttempt, Mission: domain.MissionID(g.Mission),
-		Attempt: domain.AttemptID(g.Attempt), Host: "h_local", Role: "writer"})
+		Attempt: domain.AttemptID(g.Attempt), Host: "h_local", Role: "writer", Path: domain.ProviderAnthropicAPI, LockPath: lockPath})
 	if err != nil {
 		return 0, fmt.Errorf("start attempt: %w", err)
 	}

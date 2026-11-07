@@ -56,7 +56,7 @@ func ownerSetup(t *testing.T, id domain.MissionID) (*store.Store, *fakeLauncher,
 	t.Helper()
 	st := storetest.Open(t)
 	ctx := context.Background()
-	if err := st.CreateMission(ctx, id, "GoodQA goodqa#14922", "fabric", "main"); err != nil {
+	if err := st.CreateMission(ctx, id, domain.ProviderClaudeCode, "GoodQA goodqa#14922", "fabric", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Execute(ctx, "chat", domain.CommandID("admit-"+string(id)), domain.Command{Kind: domain.CmdAdmitMission, Mission: id}); err != nil {

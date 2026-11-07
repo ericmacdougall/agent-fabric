@@ -392,7 +392,7 @@ func TestEffectColumnsImmutable(t *testing.T) {
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)
-	if err := st.CreateMission(ctx, "m_2", "GoodQA goodqa#14791", "fabric", "main"); err != nil {
+	if err := st.CreateMission(ctx, "m_2", domain.ProviderClaudeCode, "GoodQA goodqa#14791", "fabric", "main"); err != nil {
 		t.Fatal(err)
 	}
 	fake.LoseAfter = true
@@ -481,7 +481,7 @@ func TestFenceBelongsToMission(t *testing.T) {
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)
-	if err := st.CreateMission(ctx, "m_2", "GoodQA goodqa#14791", "fabric", "main"); err != nil {
+	if err := st.CreateMission(ctx, "m_2", domain.ProviderClaudeCode, "GoodQA goodqa#14791", "fabric", "main"); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {
@@ -489,7 +489,7 @@ func TestFenceBelongsToMission(t *testing.T) {
 		cmd domain.Command
 	}{
 		{"a2", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_2"}},
-		{"s2", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_2", Attempt: "r_2", Host: "h_t2", Role: "writer"}},
+		{"s2", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_2", Attempt: "r_2", Host: "h_t2", Role: "writer"}},
 		{"k2", domain.Command{Kind: domain.CmdAckStart, Mission: "m_2", Attempt: "r_2", Fence: 1}},
 	} {
 		if _, err := st.Execute(ctx, "fabd", domain.CommandID(c.key), c.cmd); err != nil {

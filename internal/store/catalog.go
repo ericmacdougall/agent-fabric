@@ -19,6 +19,9 @@ type MissionSpec struct {
 	Priority  int
 	HostNeeds string
 	Source    string
+	// Provider is required (goodqa#15087): CreateMission takes it explicitly,
+	// with no default.
+	Provider domain.Provider
 }
 
 // sourceGrammar is the provenance rule (R12): user:, ticket:, wal:, file:,
@@ -47,9 +50,14 @@ const (
 )
 
 // EnsureMissionSpec registers m once and reports whether an existing row
-// matches it. A differing row is never overwritten.
+// matches it. A differing row is never overwritten. A provider difference
+// is refused outright (goodqa#15087, main WAL wbdc1146b5e3); every other
+// difference keeps the first import, as before.
 func (s *Store) EnsureMissionSpec(ctx context.Context, m MissionSpec) (Ensured, error) {
 	if _, err := domain.ParseMissionID(string(m.ID)); err != nil {
+		return Created, err
+	}
+	if _, err := domain.ParseProvider(string(m.Provider)); err != nil {
 		return Created, err
 	}
 	if m.Ticket == "" {
@@ -64,11 +72,14 @@ func (s *Store) EnsureMissionSpec(ctx context.Context, m MissionSpec) (Ensured, 
 	}
 	var created bool
 	err = s.pool.QueryRow(ctx, `WITH ins AS (
-			INSERT INTO missions (id, ticket, repo, branch, state, name, priority, host_needs, source)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING RETURNING id)
+			INSERT INTO missions (id, ticket, repo, branch, state, name, priority, host_needs, source, provider)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO NOTHING RETURNING id)
 		SELECT EXISTS (SELECT 1 FROM ins)`,
-		string(m.ID), m.Ticket, m.Repo, m.Branch, state, m.Name, m.Priority, m.HostNeeds, m.Source).Scan(&created)
+		string(m.ID), m.Ticket, m.Repo, m.Branch, state, m.Name, m.Priority, m.HostNeeds, m.Source, string(m.Provider)).Scan(&created)
 	if err != nil || created {
+		return Created, err
+	}
+	if err := s.checkProvider(ctx, m.ID, m.Provider); err != nil {
 		return Created, err
 	}
 	var same bool

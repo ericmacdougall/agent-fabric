@@ -21,13 +21,13 @@ func preSpend(t *testing.T, st *store.Store, resource string, micros int64) {
 	t.Helper()
 	ctx := context.Background()
 	m, a := domain.MissionID("m_premonth"), domain.AttemptID("r_premonth")
-	if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: m, Name: "earlier run", Ticket: "GoodQA goodqa#15086", Priority: 100, Source: "ticket:GoodQA goodqa#15086"}); err != nil {
+	if err := st.CreateMissionSpec(ctx, store.MissionSpec{Provider: domain.ProviderClaudeCode, ID: m, Name: "earlier run", Ticket: "GoodQA goodqa#15086", Priority: 100, Source: "ticket:GoodQA goodqa#15086"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Execute(ctx, "native-runner", "pre-admit", domain.Command{Kind: domain.CmdAdmitMission, Mission: m}); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := st.Execute(ctx, "native-runner", "pre-start", domain.Command{Kind: domain.CmdStartAttempt, Mission: m, Attempt: a, Host: "h_local", Role: "writer"})
+	resp, err := st.Execute(ctx, "native-runner", "pre-start", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: m, Attempt: a, Host: "h_local", Role: "writer"})
 	if err != nil {
 		t.Fatal(err)
 	}

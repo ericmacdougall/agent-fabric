@@ -29,16 +29,16 @@ func TestRequestedJobNeverLaunched(t *testing.T) {
 	ctx := context.Background()
 	marker := filepath.Join(t.TempDir(), "escaped")
 	cfg.FabBin = "/bin/true" // before the fix, a configured binary is what made it launch
-	if _, err := st.Execute(ctx, "fabd", "start:r_job1", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_job1", Attempt: "r_job1", Host: cfg.Host, Role: "writer"}); err != nil {
+	if _, err := st.Execute(ctx, "fabd", "start:r_job1", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_job1", Attempt: "r_job1", Host: cfg.Host, Role: "writer"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateMission(ctx, "m_job2", "GoodQA goodqa#15082", "fabric", "main"); err != nil {
+	if err := st.CreateMission(ctx, "m_job2", domain.ProviderClaudeCode, "GoodQA goodqa#15082", "fabric", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Execute(ctx, "chat", "admit-m_job2", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_job2"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Execute(ctx, "fabd", "start:r_job2", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_job2", Attempt: "r_job2", Host: "h_other", Role: "writer"}); err != nil {
+	if _, err := st.Execute(ctx, "fabd", "start:r_job2", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_job2", Attempt: "r_job2", Host: "h_other", Role: "writer"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, q := range []string{
@@ -79,7 +79,7 @@ func TestRequestedJobNeverLaunched(t *testing.T) {
 func TestRequestJobRefused(t *testing.T) {
 	st, _, cfg := ownerSetup(t, "m_job3")
 	ctx := context.Background()
-	resp, err := st.Execute(ctx, "fabd", "start:r_job3", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_job3", Attempt: "r_job3", Host: cfg.Host, Role: "writer"})
+	resp, err := st.Execute(ctx, "fabd", "start:r_job3", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_job3", Attempt: "r_job3", Host: cfg.Host, Role: "writer"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,7 +17,7 @@ import (
 // attemptMain: `fab attempt start --mission M --id r_x --key K [--host H --role writer]`
 func attemptMain(args []string) error {
 	if len(args) == 0 || args[0] != "start" {
-		return errors.New("attempt start --mission M --id R --key K")
+		return errors.New("attempt start --mission M --id R --path claude-code|anthropic-api [--lock-path P] --key K")
 	}
 	fs := flag.NewFlagSet("attempt start", flag.ContinueOnError)
 	mission := fs.String("mission", "", "mission id")
@@ -25,12 +25,27 @@ func attemptMain(args []string) error {
 	hostID := fs.String("host", "h_local", "host id")
 	role := fs.String("role", "writer", "writer|reviewer")
 	key := fs.String("key", "", "idempotency key")
+	path := fs.String("path", "", "launcher path: claude-code or anthropic-api (required; must be the mission's provider)")
+	lockPath := fs.String("lock-path", "", "anthropic-api only: the attempt's liveness lock file, an absolute path ending in /native-locks/<id>.lock")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
+	p, err := domain.ParseProvider(*path)
+	if err != nil {
+		return usageError{fmt.Errorf("attempt start: --path: %w", err)}
+	}
+	if p == domain.ProviderAnthropicAPI {
+		// The CLI never takes or holds the flock, so such an attempt reads
+		// as gone until a native process holds it (spec AC-2).
+		if err := domain.ValidLockPath(domain.AttemptID(*id), *lockPath); err != nil {
+			return usageError{fmt.Errorf("attempt start: --lock-path: %w", err)}
+		}
+	} else if *lockPath != "" {
+		return usageError{errors.New("attempt start: --lock-path is for --path anthropic-api only")}
+	}
 	return withStore(func(ctx context.Context, st *store.Store) error {
 		resp, err := execute(ctx, st, actor(), *key, domain.Command{Kind: domain.CmdStartAttempt, Mission: domain.MissionID(*mission),
-			Attempt: domain.AttemptID(*id), Host: domain.HostID(*hostID), Role: *role})
+			Attempt: domain.AttemptID(*id), Host: domain.HostID(*hostID), Role: *role, Path: p, LockPath: *lockPath})
 		if err != nil {
 			return err
 		}

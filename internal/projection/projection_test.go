@@ -19,7 +19,7 @@ func longMission(t *testing.T, turns int) (domain.Mission, []domain.Event) {
 	m := domain.NewMission("m_long")
 	var log []domain.Event
 	step := func(cmd domain.Command) {
-		evs, err := reducer.Decide(m, cmd, reducer.Env{Cap: 4})
+		evs, err := reducer.Decide(m, cmd, reducer.Env{Provider: domain.ProviderClaudeCode, Cap: 4})
 		if err != nil {
 			t.Fatalf("%s: %v", cmd.Kind, err)
 		}
@@ -34,7 +34,7 @@ func longMission(t *testing.T, turns int) (domain.Mission, []domain.Event) {
 	fence := int64(0)
 	for i := 0; i < turns; i++ {
 		a := domain.AttemptID(fmt.Sprintf("r_%d", i))
-		step(domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_long", Attempt: a, Host: "h_t2", Role: "writer"})
+		step(domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_long", Attempt: a, Host: "h_t2", Role: "writer"})
 		fence++
 		step(domain.Command{Kind: domain.CmdAckStart, Mission: "m_long", Attempt: a, Fence: fence})
 		step(domain.Command{Kind: domain.CmdRecordEvidence, Mission: "m_long", Attempt: a, Fence: fence, Revision: 0, Generation: 1, Head: "sha_1",

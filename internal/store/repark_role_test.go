@@ -16,7 +16,7 @@ func TestReparkUnderAppRole(t *testing.T) {
 	app := openAs(t, ctx, r.App())
 	m := domain.MissionID("m_rp")
 	fence := liveAttempt(t, app, ctx, m, "r_rp_1")
-	rev := ok(t, app, ctx, "fabd", "start:r_rp_rev", domain.Command{Kind: domain.CmdStartAttempt, Mission: m, Attempt: "r_rp_rev", Host: "h_t2", Role: "reviewer"})
+	rev := ok(t, app, ctx, "fabd", "start:r_rp_rev", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: m, Attempt: "r_rp_rev", Host: "h_t2", Role: "reviewer"})
 	rfence := rev.Events[0].Fence
 	ok(t, app, ctx, "fabd", "ack:r_rp_rev", domain.Command{Kind: domain.CmdAckStart, Mission: m, Attempt: "r_rp_rev", Fence: rfence})
 	for n := 1; n <= domain.PrelaunchBudget; n++ {
