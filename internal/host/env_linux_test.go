@@ -3,6 +3,7 @@
 package host
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -36,6 +37,18 @@ func TestLinuxEnvOverrideAndKeep(t *testing.T) {
 			keep = args[i+1]
 			i++
 		}
+	}
+	// Every allow-listed name fabric leaves unset is overridden to empty,
+	// so the manager's value cannot reach the sandbox; --env-keep (below)
+	// then drops it.
+	for _, n := range WorkerEnvNames {
+		if _, set := want[n]; set || n == "HOME" || n == "PATH" {
+			continue
+		}
+		if len(got[n]) != 1 || got[n][0] != "" {
+			t.Fatalf("-E for unset allow-listed %s: %q, want exactly one empty override", n, got[n])
+		}
+		delete(got, n)
 	}
 	for n, v := range want {
 		if len(got[n]) != 1 || got[n][0] != v {
@@ -73,5 +86,10 @@ func TestLinuxEnvOverrideAndKeep(t *testing.T) {
 	}
 	if _, err := l.startArgs(g, "fab-x.service", []string{"env"}, []string{"NOT A NAME=x"}); err == nil {
 		t.Fatal("a malformed environment entry was accepted")
+	}
+	for _, e := range []string{"LD_PRELOAD=/x.so", "ANTHROPIC_API_KEY=k", "BASH_ENV=/x"} {
+		if _, err := l.startArgs(g, "fab-x.service", []string{"env"}, []string{e}); !errors.Is(err, ErrGrantInvalid) {
+			t.Fatalf("%s outside the allow-list: %v, want ErrGrantInvalid", e, err)
+		}
 	}
 }

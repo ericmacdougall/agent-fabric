@@ -230,10 +230,12 @@ Go 1.22, `pgx/v5` and `x/sys` only.
 1. Back up the database first (`pg_dump -Fc`), check the dump with
    `pg_restore --list`, and keep the previous `fab` binary for rollback.
 2. Build from a fresh `git clone` checked out at the release commit, with
-   `go build -buildvcs=true -o <path> ./cmd/fab`. Check that `git status
-   --porcelain` is empty and that `<path> version` prints the commit's
-   12-character prefix; refuse to install a build that prints `devel` or
-   ends in `-dirty`. We observed a build from a `git worktree` checkout
+   `CGO_ENABLED=0 go build -buildvcs=true -o <path> ./cmd/fab`. Check that
+   `git status --porcelain` is empty, that `go version -m <path>` shows
+   `build CGO_ENABLED=0` (a worker is a static fab, so it loads no shared
+   library a worker-user environment could redirect), and that `<path>
+   version` prints the commit's 12-character prefix; refuse to install a
+   build that fails any of these, prints `devel` or ends in `-dirty`. We observed a build from a `git worktree` checkout
    (Go 1.22.2) print `devel`; the version check catches it either way.
 3. Stop anything using the database, then run `fab migrate` as the owner.
 4. Run `fab db roles` as the owner after every migration, with the same

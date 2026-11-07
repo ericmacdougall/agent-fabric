@@ -106,6 +106,18 @@ func (l *Linux) startArgs(g Grant, unit string, argv, env []string) ([]string, e
 	for _, e := range pairs {
 		args = append(args, "-E", e)
 	}
+	// An allow-listed name fabric does not set is overridden to empty, so the
+	// manager's value never reaches systemd-run's child; --env-keep then
+	// drops it.
+	set := map[string]bool{}
+	for _, n := range names {
+		set[n] = true
+	}
+	for _, n := range WorkerEnvNames {
+		if !set[n] {
+			args = append(args, "-E", n+"=")
+		}
+	}
 	rw := []string{g.RunDir, os.TempDir()}
 	if g.Profile == "P1" {
 		rw = append(rw, g.Worktree) // review runs cannot write the worktree

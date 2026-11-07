@@ -45,6 +45,27 @@ func TestSettingSourcesAlwaysEmpty(t *testing.T) {
 	}
 }
 
+// nestedHooks makes an owner-only hooks dir with a guard.sh script inside a
+// parent directory of the given mode, and returns the hooks dir.
+func nestedHooks(t *testing.T, parentMode os.FileMode) string {
+	t.Helper()
+	parent := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(parent, "hooks")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "guard.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, parentMode); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // hooksDir makes an owner-only hooks dir holding one owner-only script.
 func hooksDir(t *testing.T) (dir, script string) {
 	t.Helper()
@@ -76,9 +97,9 @@ func hookSettings(cmd string) map[string]any {
 	}}}
 }
 
-// TestSettingsAllowList: the --settings file may hold only $schema,
-// permissions and single-path hooks under a hooks dir the worker cannot
-// write. Each refused case refuses the launch; the accepted case launches
+// TestSettingsAllowList: the --settings file may hold only permissions,
+// model and single-path hooks under a hooks dir the worker cannot write,
+// on a path no directory of which the worker owns or can write. Each refused case refuses the launch; the accepted case launches
 // with --settings.
 func TestSettingsAllowList(t *testing.T) {
 	g := validGrant(t)
@@ -102,7 +123,8 @@ func TestSettingsAllowList(t *testing.T) {
 	cases := []tc{
 		{"env block", map[string]any{"env": map[string]string{"ANTHROPIC_API_KEY": "x"}}, plain},
 		{"statusLine", map[string]any{"statusLine": map[string]string{"type": "command", "command": script}}, plain},
-		{"other top-level key", map[string]any{"model": "x"}, plain},
+		{"other top-level key", map[string]any{"outputStyle": "x"}, plain},
+		{"$schema key", map[string]any{"$schema": "https://json.schemastore.org/claude-code-settings.json"}, plain},
 		{"hook outside FABRIC_HOOKS_DIR", hookSettings(outside), plain},
 		{"hook with an argument", hookSettings(script + " --x"), plain},
 		{"hook with shell syntax", hookSettings(script + ";id"), plain},
@@ -119,6 +141,25 @@ func TestSettingsAllowList(t *testing.T) {
 		}},
 		{"hooks dir owned by the worker", hookSettings(script), func(*testing.T) (string, *int) { return dir, &me }},
 		{"no hooks dir", hookSettings(script), func(*testing.T) (string, *int) { return "", nil }},
+		{"group-writable ancestor of the hooks dir", nil, func(t *testing.T) (string, *int) {
+			return nestedHooks(t, 0o777), nil
+		}},
+		{"sticky ancestor not owned by root", nil, func(t *testing.T) (string, *int) {
+			if os.Getuid() == 0 {
+				t.Fatal("run as a non-root user")
+			}
+			return nestedHooks(t, 0o777|os.ModeSticky), nil
+		}},
+		{"ancestor owned by the worker", nil, func(t *testing.T) (string, *int) {
+			// The hooks dir and script are this process's; "/" is root's, so
+			// a worker uid of 0 owns an ancestor and nothing else.
+			if os.Getuid() == 0 {
+				t.Fatal("run as a non-root user")
+			}
+			d, _ := hooksDir(t)
+			root := 0
+			return d, &root
+		}},
 	}
 	for _, k := range helperKeys {
 		cases = append(cases, tc{"helper " + k, map[string]any{k: "/bin/true"}, plain})
@@ -127,7 +168,7 @@ func TestSettingsAllowList(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			hooks, worker := c.prep(t)
 			settings := c.settings
-			if c.name == "group-writable hooks dir" {
+			if settings == nil || c.name == "group-writable hooks dir" {
 				settings = hookSettings(filepath.Join(hooks, "guard.sh"))
 			}
 			p := filepath.Join(t.TempDir(), "settings.json")
@@ -139,11 +180,11 @@ func TestSettingsAllowList(t *testing.T) {
 		})
 	}
 	// Accepted: a single-path hook under an owner-only hooks dir, with a
-	// worker uid that is not the owner, plus permissions and $schema.
+	// worker uid that owns nothing on its path, plus permissions and model.
 	other := me + 1
 	ok := hookSettings(script)
 	ok["permissions"] = map[string]any{"deny": []string{"WebFetch"}}
-	ok["$schema"] = "https://json.schemastore.org/claude-code-settings.json"
+	ok["model"] = "x"
 	p := filepath.Join(t.TempDir(), "settings.json")
 	writeJSON(t, p, ok)
 	argv, _, err := Argv(g, Launch{Binary: "/usr/bin/claude", Prompt: "p", ManagedRoot: managed, SettingsPath: p, HooksDir: dir, WorkerUID: &other})
@@ -170,6 +211,7 @@ func TestManagedSettingsRefused(t *testing.T) {
 	}
 	harmless := t.TempDir()
 	writeJSON(t, filepath.Join(harmless, "managed-settings.json"), map[string]any{"permissions": map[string]any{"deny": []string{"WebFetch"}}})
+	writeJSON(t, filepath.Join(harmless, "managed-mcp.json"), map[string]any{"mcpServers": map[string]any{"s": map[string]any{"command": "/bin/true"}}})
 	if err := launch(harmless); err != nil {
 		t.Fatalf("harmless managed settings: %v", err)
 	}
@@ -195,6 +237,17 @@ func TestManagedSettingsRefused(t *testing.T) {
 		}},
 		{"unparsable managed file", func(root string) {
 			if err := os.WriteFile(filepath.Join(root, "managed-settings.json"), []byte("{not json"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"env on a managed MCP server", func(root string) {
+			writeJSON(t, filepath.Join(root, "managed-mcp.json"), map[string]any{"mcpServers": map[string]any{"s": map[string]any{"command": "/bin/true", "env": map[string]string{"X": "y"}}}})
+		}},
+		{"helper in managed-mcp.json", func(root string) {
+			writeJSON(t, filepath.Join(root, "managed-mcp.json"), map[string]any{"apiKeyHelper": "/bin/true"})
+		}},
+		{"unparsable managed-mcp.json", func(root string) {
+			if err := os.WriteFile(filepath.Join(root, "managed-mcp.json"), []byte("{"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}},

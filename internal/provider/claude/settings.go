@@ -28,7 +28,7 @@ var ErrSettings = errors.New("claude settings refused")
 var helperKeys = []string{"apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "gcpAuthRefresh", "otelHeadersHelper", "statusLine", "fileSuggestion"}
 
 // settingsKeys are the only top-level keys a --settings file may hold.
-var settingsKeys = map[string]bool{"$schema": true, "permissions": true, "hooks": true}
+var settingsKeys = map[string]bool{"permissions": true, "hooks": true, "model": true}
 
 // hookCommand is a single absolute path: no argument, no shell syntax.
 var hookCommand = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
@@ -117,11 +117,49 @@ func CheckManaged(root string) error {
 			return err
 		}
 	}
+	return checkManagedMCP(filepath.Join(root, "managed-mcp.json"))
+}
+
+// checkManagedMCP refuses a managed-mcp.json that cannot be read or parsed,
+// sets env or a helper at its top level, or gives any server an env block:
+// a managed MCP server is started for the worker whatever
+// --strict-mcp-config says. An absent file is accepted.
+func checkManagedMCP(path string) error {
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return refuse("%s cannot be checked: %v", path, errors.Unwrap(err))
+	}
+	m, err := readObject(path)
+	if err != nil {
+		return err
+	}
+	if err := checkNoEnvOrHelper(path, m); err != nil {
+		return err
+	}
+	raw, ok := m["mcpServers"]
+	if !ok {
+		return nil
+	}
+	var servers map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &servers); err != nil {
+		return refuse("%s: mcpServers is not a server map", path)
+	}
+	names := make([]string, 0, len(servers))
+	for n := range servers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if _, ok := servers[n]["env"]; ok {
+			return refuse("%s: server %s sets env", path, n)
+		}
+	}
 	return nil
 }
 
 // CheckSettingsFile refuses a --settings file with a top-level key outside
-// $schema, permissions and hooks (so env, every helper and statusLine are
+// permissions, hooks and model (so env, every helper and statusLine are
 // refused), or a hook that is not a single path inside hooksDir. hooksDir
 // must not be writable by group or others, nor owned by the worker
 // (workerUID, when known); it must be owned by root or by this process.
@@ -140,7 +178,7 @@ func CheckSettingsFile(path, hooksDir string, workerUID *int) error {
 	sort.Strings(keys)
 	for _, k := range keys {
 		if !settingsKeys[k] {
-			return refuse("%s sets %s, which is outside the allow-list ($schema, permissions, hooks)", path, k)
+			return refuse("%s sets %s, which is outside the allow-list (permissions, hooks, model)", path, k)
 		}
 	}
 	raw, ok := m["hooks"]
@@ -184,6 +222,9 @@ func CheckSettingsFile(path, hooksDir string, workerUID *int) error {
 				if err := checkOwned(real, workerUID, false); err != nil {
 					return err
 				}
+				if err := checkAncestors(filepath.Dir(real), workerUID); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -200,7 +241,39 @@ func checkHooksDir(dir string, workerUID *int) (string, error) {
 	if err != nil {
 		return "", refuse("FABRIC_HOOKS_DIR cannot be resolved")
 	}
-	return real, checkOwned(real, workerUID, true)
+	if err := checkOwned(real, workerUID, true); err != nil {
+		return "", err
+	}
+	return real, checkAncestors(filepath.Dir(real), workerUID)
+}
+
+// checkAncestors refuses when dir or any directory above it is owned by the
+// worker user, or is writable by group or others without being a sticky
+// root-owned directory such as /tmp: the worker could rename a component
+// and swap what a hook path reaches.
+func checkAncestors(dir string, workerUID *int) error {
+	for {
+		fi, err := os.Stat(dir)
+		if err != nil {
+			return refuse("%s cannot be checked", dir)
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return refuse("%s owner unknown", dir)
+		}
+		uid := int(st.Uid)
+		if workerUID != nil && uid == *workerUID {
+			return refuse("%s, above a hook, is owned by the worker user", dir)
+		}
+		if fi.Mode().Perm()&0o022 != 0 && !(fi.Mode()&os.ModeSticky != 0 && uid == 0) {
+			return refuse("%s, above a hook, is writable by group or others (%v)", dir, fi.Mode())
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
+	}
 }
 
 // checkOwned refuses a hooks directory or hook script that is writable by
