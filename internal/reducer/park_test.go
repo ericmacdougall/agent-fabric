@@ -46,3 +46,44 @@ func TestParkHeldWhileAnotherAttemptLive(t *testing.T) {
 			m.Execution, m.ParkedReason, m.PrelaunchFailures, parked.ParkedReason, parked.PrelaunchFailures)
 	}
 }
+
+// goodqa#15082 T2 review B1/B2: a log written before the fix (a park while
+// the reviewer was live, then the reviewer's finish and reconcile with no
+// re-park) replays exactly as it always did, and the wedged mission it
+// leaves (parked, slot held, nothing live) can be re-admitted at the cap.
+func TestOldParkLogReplaysAndCanBeReadmitted(t *testing.T) {
+	f, id, _, _ := startedMission(t)
+	m := f.missions[id]
+	rev := domain.Event{Kind: domain.EvAttemptStarted, Mission: id, Attempt: "r_rev", Fence: m.Version.AttemptFence + 1, Role: "reviewer", Host: "h_t2", AttemptTo: domain.AttemptLeased}
+	old := []domain.Event{
+		rev,
+		{Kind: domain.EvAttemptAcked, Mission: id, Attempt: "r_rev", AttemptTo: domain.AttemptRunning},
+		{Kind: domain.EvAttemptFinished, Mission: id, Attempt: "r_1", Outcome: "abandoned", Prelaunch: true, AttemptTo: domain.AttemptFailedDefinite},
+		{Kind: domain.EvMissionParked, Mission: id, Count: domain.PrelaunchBudget, Reason: "parked"},
+		{Kind: domain.EvAttemptFinished, Mission: id, Attempt: "r_rev", Outcome: "checkpoint", AttemptTo: domain.AttemptSucceededUnverified},
+		{Kind: domain.EvAttemptReconciled, Mission: id, Attempt: "r_rev", Result: "VERIFIED", AttemptTo: domain.AttemptVerified},
+	}
+	for _, e := range old {
+		m = Apply(m, e)
+	}
+	// The pre-fix projection: slot held, counts reset, park reason kept.
+	if m.Execution != domain.ExecAdmitted || m.PrelaunchFailures != 0 || m.ParkedReason != "parked" {
+		t.Fatalf("old log replayed differently: execution %s failures %d reason %q", m.Execution, m.PrelaunchFailures, m.ParkedReason)
+	}
+	if _, err := Decide(m, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_x", Host: "h_t2", Role: "writer"}, Env{Cap: 4}); !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Errorf("a wedged parked mission started an attempt: %v", err)
+	}
+	evs, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: id}, Env{Cap: 1, SlotsUsed: 1})
+	if err != nil {
+		t.Fatalf("re-admission of a wedged parked mission refused: %v", err)
+	}
+	for _, e := range evs {
+		m = Apply(m, e)
+	}
+	if m.Execution != domain.ExecAdmitted || m.ParkedReason != "" {
+		t.Errorf("re-admission did not clear the park: %s %q", m.Execution, m.ParkedReason)
+	}
+	if _, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: id}, Env{Cap: 4}); !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Errorf("an unparked admitted mission was admitted again: %v", err)
+	}
+}

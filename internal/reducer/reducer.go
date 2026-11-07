@@ -31,6 +31,52 @@ type Env struct {
 // recorded response: the caller stores it under the command's key.
 // Decide never mutates m.
 func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, error) {
+	out, err := decide(m, cmd, env)
+	if err != nil {
+		return out, err
+	}
+	switch cmd.Kind {
+	case domain.CmdFinishAttempt, domain.CmdReconcileAttempt:
+		out = withRepark(m, out)
+	}
+	return out, nil
+}
+
+// parkedIdle: a park is recorded, the mission still holds a slot (not
+// PAUSED, which is the operator's concern first) and nothing is live or
+// unresolved. Only re-admission leaves this state.
+func parkedIdle(m domain.Mission) bool {
+	if m.ParkedReason == "" || m.LiveAttempts() != 0 || m.UnresolvedAttempts() != 0 {
+		return false
+	}
+	switch m.Execution {
+	case domain.ExecAdmitted, domain.ExecRunning, domain.ExecWaiting:
+		return true
+	}
+	return false
+}
+
+// withRepark (goodqa#15082 T2): when the events end the last live or
+// unresolved attempt of a mission parked while another attempt ran, it
+// appends MISSION_PARKED again, so the existing Apply rule frees the slot
+// (BLOCKED) and restores the count. Apply itself is unchanged, so stored
+// logs replay to their stored snapshots.
+func withRepark(m domain.Mission, out []domain.Event) []domain.Event {
+	s := m
+	for _, e := range out {
+		s = Apply(s, e)
+	}
+	if !parkedIdle(s) {
+		return out
+	}
+	p := domain.Event{Kind: domain.EvMissionParked, Mission: m.ID, Reason: s.ParkedReason, Count: m.PrelaunchFailures}
+	if p.Count < domain.PrelaunchBudget {
+		p.Count = domain.PrelaunchBudget
+	}
+	return append(out, p)
+}
+
+func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, error) {
 	if cmd.Mission != m.ID {
 		return nil, fmt.Errorf("%w: command for %q applied to %q", domain.ErrInvalidTransition, cmd.Mission, m.ID)
 	}
@@ -43,6 +89,13 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 
 	switch cmd.Kind {
 	case domain.CmdAdmitMission:
+		if parkedIdle(m) {
+			// goodqa#15082 T2: a park recorded while another attempt was
+			// live (or before this fix, never applied) leaves a slot-holding
+			// mission that cannot start. Re-admission is the operator's
+			// reset; it keeps the slot it already holds, so no cap check.
+			return []domain.Event{ev(domain.EvMissionAdmitted)}, nil
+		}
 		if m.Execution.HoldsSlot() {
 			return nil, fmt.Errorf("%w: already %s", domain.ErrInvalidTransition, m.Execution)
 		}
@@ -577,21 +630,6 @@ func fenceCheck(m domain.Mission, a domain.Attempt, fence int64) error {
 // Apply folds one event into the state and returns the new state. It is total
 // over events Decide can emit; an unknown kind is returned unchanged so a
 // replay of a newer log by an older binary cannot invent state.
-// applyPendingPark finishes a park that was reached while another attempt
-// was live (goodqa#15082 T2): once nothing is live or unresolved, a running,
-// admitted or waiting mission becomes BLOCKED. A paused mission stays paused
-// (the quarantine is the operator's first concern).
-func applyPendingPark(s *domain.Mission) {
-	if s.ParkedReason == "" || s.LiveAttempts() != 0 || s.UnresolvedAttempts() != 0 {
-		return
-	}
-	switch s.Execution {
-	case domain.ExecRunning, domain.ExecAdmitted, domain.ExecWaiting:
-		s.Execution = domain.ExecBlocked
-		s.WaitKey = ""
-	}
-}
-
 func Apply(m domain.Mission, e domain.Event) domain.Mission {
 	s := m.Clone()
 	if e.Seq > 0 {
@@ -646,12 +684,11 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 		if e.Kind == domain.EvAttemptReconciled && e.AttemptTo == domain.AttemptQuarantined && s.Execution.HoldsSlot() {
 			s.Execution = domain.ExecPaused
 		}
-		applyPendingPark(&s)
 	case domain.EvAttemptFinished:
 		a := s.Attempts[e.Attempt]
 		a.State = e.AttemptTo
 		s.Attempts[e.Attempt] = a
-		if !e.Prelaunch && s.ParkedReason == "" {
+		if !e.Prelaunch {
 			s.PrelaunchFailures, s.CapacityWaits, s.DeferMS = 0, 0, 0 // a runner ran: the run of failures is over
 		}
 		switch e.Outcome {
@@ -673,7 +710,6 @@ func Apply(m domain.Mission, e domain.Event) domain.Mission {
 				s.Execution = domain.ExecAdmitted
 			}
 		}
-		applyPendingPark(&s)
 	case domain.EvEvidenceRecorded:
 		if s.Evidence == nil {
 			s.Evidence = map[string]domain.Evidence{}
