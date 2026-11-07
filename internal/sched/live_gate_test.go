@@ -100,8 +100,25 @@ func TestLiveGatedRestart(t *testing.T) {
 	if err := st.SetCapacity(ctx, "slot.live", "slots", 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, h, _ := st.Capacity(ctx, "slot.live"); h != 0 {
-		t.Fatalf("slot.live already holds %d: an earlier run left a hold", h)
+	uid := 0
+	if u, err := exec.Command("id", "-u", worker).Output(); err == nil {
+		uid, _ = strconv.Atoi(string(u[:len(u)-1]))
+	}
+	pr := probe.Cgroup{Root: "/sys/fs/cgroup", UID: uid}
+	// An earlier run's last attempt is left UNKNOWN with its hold: the
+	// restarted scheduler reads it back and frees the slot first.
+	pre, _ := liveSched(t, st, tag+"p")
+	pre.SetProber(pr)
+	for end := time.Now().Add(90 * time.Second); ; time.Sleep(time.Second) {
+		st.ExpireLeases(ctx, 10) //nolint:errcheck
+		if _, err := pre.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, h, _ := st.Capacity(ctx, "slot.live"); h == 0 {
+			break
+		} else if time.Now().After(end) {
+			t.Fatalf("slot.live still holds %d after reading back earlier runs", h)
+		}
 	}
 	for _, m := range []domain.MissionID{a, b} {
 		if err := st.CreateMission(ctx, m, "GoodQA goodqa#14922", "fabric", "main"); err != nil {
@@ -150,11 +167,6 @@ func TestLiveGatedRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	child.Wait() //nolint:errcheck
-	uid := 0
-	if u, err := exec.Command("id", "-u", worker).Output(); err == nil {
-		uid, _ = strconv.Atoi(string(u[:len(u)-1]))
-	}
-	pr := probe.Cgroup{Root: "/sys/fs/cgroup", UID: uid}
 	s, _ := liveSched(t, st, tag+"b")
 	s.SetProber(pr)
 	tick := func() {
@@ -178,6 +190,19 @@ func TestLiveGatedRestart(t *testing.T) {
 		tick()
 		n, _ := counts(t, st, b)
 		return n > 0 && s.Launched > 0
+	})
+	// B's run requests a host job as the runner role (0018 needs its attempt
+	// RUNNING), the scheduler starts it, the job's watcher records its exit
+	// as the runner (0017), and the wake reads the job's unit back.
+	attemptB := domain.AttemptID("r_lgb" + tag + "_1")
+	jobState := func() (state string, woken bool) {
+		st.Pool().QueryRow(ctx, "SELECT state, woken FROM jobs WHERE attempt_id = $1", string(attemptB)).Scan(&state, &woken) //nolint:errcheck
+		return
+	}
+	waitFor("B's host job requested, run and woken", 150*time.Second, func() bool {
+		tick()
+		js, woken := jobState()
+		return js == "EXITED" && woken
 	})
 	fmt.Printf("live gated restart: tag=%s launched_after_restart=%d capacity_waits=%d saw_live_unknown=%v\n", tag, s.Launched, s.CapacityWaits, sawLiveUnknown)
 }
