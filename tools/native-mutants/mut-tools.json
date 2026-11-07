@@ -1,0 +1,107 @@
+[
+ {
+  "id": "T1-read-follows-symlinks",
+  "file": "internal/tools/read.go",
+  "old": "unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK",
+  "new": "unix.O_RDONLY | unix.O_NONBLOCK",
+  "cmd": "go test ./internal/tools -count=1 -run 'TestReadConfinement|TestReadSwapRace'"
+ },
+ {
+  "id": "T2-read-hardlink-ok",
+  "file": "internal/tools/read.go",
+  "old": "if st.Nlink > 1 {",
+  "new": "if false {",
+  "cmd": "go test ./internal/tools -count=1 -run TestReadConfinement"
+ },
+ {
+  "id": "T3-read-blocks-on-fifo",
+  "file": "internal/tools/read.go",
+  "old": "unix.O_NOFOLLOW | unix.O_NONBLOCK",
+  "new": "unix.O_NOFOLLOW",
+  "cmd": "go test ./internal/tools -count=1 -run TestReadConfinement"
+ },
+ {
+  "id": "T5-child-inherits-env",
+  "file": "internal/tools/fakehost/fakehost.go",
+  "old": "\tcmd.Stdout, cmd.Stderr = stdout, stderr",
+  "new": "\tcmd.Env = append(cmd.Env, os.Environ()...)\n\tcmd.Stdout, cmd.Stderr = stdout, stderr",
+  "cmd": "go test ./internal/tools -count=1 -run TestShell"
+ },
+ {
+  "id": "T6-allowlist-ignored",
+  "file": "internal/tools/exec.go",
+  "old": "\tok := false\n\tfor _, re := range s.Allow {",
+  "new": "\tok := true\n\tfor _, re := range s.Allow {",
+  "cmd": "go test ./internal/tools -count=1 -run TestShell"
+ },
+ {
+  "id": "T7-shell-not-side-effecting",
+  "file": "internal/tools/exec.go",
+  "old": "func (s *Shell) SideEffecting() bool { return true }",
+  "new": "func (s *Shell) SideEffecting() bool { return false }",
+  "cmd": "go test ./internal/tools -count=1 -run TestShell"
+ },
+ {
+  "id": "T8-grep-follows-symlinks",
+  "file": "internal/tools/exec.go",
+  "old": "\"grep\", \"-rnI\"",
+  "new": "\"grep\", \"-RnI\"",
+  "cmd": "go test ./internal/tools -count=1 -run TestGrep"
+ },
+ {
+  "id": "T9-grep-pattern-is-option",
+  "file": "internal/tools/exec.go",
+  "old": "mode, \"-e\", in.Pattern, \"--\", p}",
+  "new": "mode, in.Pattern, \"--\", p}",
+  "cmd": "go test ./internal/tools -count=1 -run TestGrep"
+ },
+ {
+  "id": "T11-unadvertised-host-ok",
+  "file": "internal/tools/exec.go",
+  "old": "if !b.Contained {",
+  "new": "if false {",
+  "cmd": "go test ./internal/tools -count=1 -run TestRefuseUnadvertisedHost"
+ },
+ {
+  "id": "O1-oracle-fails-open",
+  "file": "internal/policy/oracle.go",
+  "old": "return agent.Decision{Reason: fmt.Sprintf(\"policy oracle %s failed (%v): denied\", h[len(h)-1], err)}",
+  "new": "_ = fmt.Sprint(err)\n\t\tcontinue",
+  "cmd": "go test ./internal/policy -count=1 -run TestOracleFailsClosed"
+ },
+ {
+  "id": "O2-no-hooks-allows",
+  "file": "internal/policy/oracle.go",
+  "old": "if len(o.Hooks) == 0 {\n\t\treturn agent.Decision{Reason: \"policy oracle not configured (fails closed)\"}",
+  "new": "if len(o.Hooks) == 0 {\n\t\treturn agent.Decision{Allow: true}",
+  "cmd": "go test ./internal/policy -count=1 -run TestOracleFailsClosed"
+ },
+ {
+  "id": "O3-literal-not-removed",
+  "file": "internal/policy/redact.go",
+  "old": "if len(l) >= 8 {",
+  "new": "if false {",
+  "cmd": "go test ./internal/policy -count=1 -run TestRedactorShapes"
+ },
+ {
+  "id": "O4-pem-kept",
+  "file": "internal/policy/redact.go",
+  "old": "loc := pemBegin.FindStringIndex(s)\n\t\tif loc == nil {",
+  "new": "loc := pemBegin.FindStringIndex(\"\")\n\t\tif loc == nil {",
+  "cmd": "go test ./internal/policy -count=1 -run TestRedactorShapes"
+ },
+ {
+  "id": "O5-exit2-not-deny",
+  "file": "internal/policy/oracle.go",
+  "old": "ee.ExitCode() == 2 {",
+  "new": "ee.ExitCode() == 99 {",
+  "cmd": "go test ./internal/policy -count=1 -run TestAlwaysOnSubset"
+ },
+ {
+  "id": "O6-selftest-toothless",
+  "file": "internal/policy/oracle.go",
+  "old": "d.Allow {\n\t\t\treturn fmt.Errorf(\"policy oracle self-test: %s probe",
+  "new": "!d.Allow {\n\t\t\treturn fmt.Errorf(\"policy oracle self-test: %s probe",
+  "cmd": "go test ./internal/policy -count=1 -run TestOracleSelfTest"
+ }
+]
