@@ -86,6 +86,45 @@ func TestParseClassifications(t *testing.T) {
 	}
 }
 
+// goodqa#15082: identity and ordering faults are recorded as contradictions,
+// the first init's model stands, and a later success never hides a failure.
+func TestParseContradictions(t *testing.T) {
+	const (
+		init1 = `{"type":"system","subtype":"init","session_id":"s","model":"m1"}`
+		init2 = `{"type":"system","subtype":"init","session_id":"s","model":"m2"}`
+		ok    = `{"type":"result","subtype":"success","session_id":"s","structured_output":{"x":1}}`
+		bad   = `{"type":"result","subtype":"error_max_budget_usd","is_error":true,"session_id":"s"}`
+		other = `{"type":"result","subtype":"success","session_id":"t","structured_output":{"x":1}}`
+	)
+	cases := []struct {
+		name          string
+		lines         []string
+		contradictory bool
+		end           EndKind
+	}{
+		{"init then result", []string{init1, ok}, false, EndCheckpoint},
+		{"result then init", []string{ok, init1}, true, EndCheckpoint},
+		{"init result init", []string{init1, ok, init1}, true, EndCheckpoint},
+		{"second init", []string{init1, init2, ok}, true, EndCheckpoint},
+		{"failure then success", []string{init1, bad, ok}, true, EndFailed},
+		{"two successes", []string{init1, ok, ok}, true, EndCheckpoint},
+		{"no init", []string{ok}, true, EndCheckpoint},
+		{"session change", []string{init1, other}, true, EndCheckpoint},
+	}
+	for _, c := range cases {
+		run, err := Parse(strings.NewReader(strings.Join(c.lines, "\n")+"\n"), true)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if (len(run.Contradictions) > 0) != c.contradictory || run.End != c.end {
+			t.Errorf("%s: contradictions %v end %s; want contradictory=%v end %s", c.name, run.Contradictions, run.End, c.contradictory, c.end)
+		}
+		if c.name == "second init" && run.Model != "m1" {
+			t.Errorf("second init replaced the model: %q", run.Model)
+		}
+	}
+}
+
 func validGrant(t *testing.T) host.Grant {
 	t.Helper()
 	dir := t.TempDir()

@@ -4453,5 +4453,57 @@
     "\t\treturn err\n"
    ]
   ]
+ },
+ {
+  "id": "M346_t1_exit_code_ignored",
+  "invariant": "settle-t1",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestSettleNeedsCleanExitAndCoherentStream",
+  "edits": [
+   [
+    "\t\tif code != 0 {\n",
+    "\t\tif false {\n"
+   ]
+  ]
+ },
+ {
+  "id": "M347_t1_wait_error_ignored",
+  "invariant": "settle-t1",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestSettleNeedsCleanExitAndCoherentStream",
+  "edits": [
+   [
+    "\tif werr != nil {\n",
+    "\tif false {\n"
+   ]
+  ]
+ },
+ {
+  "id": "M348_t1_contradictions_ignored",
+  "invariant": "settle-t1",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestSettleNeedsCleanExitAndCoherentStream",
+  "edits": [
+   [
+    "if len(run.Contradictions) > 0 {",
+    "if false {"
+   ]
+  ]
+ },
+ {
+  "id": "M349_t1_later_success_hides_failure",
+  "invariant": "settle-t1",
+  "pkg": "./internal/provider/claude",
+  "file": "internal/provider/claude/stream.go",
+  "expect": "TestParseContradictions",
+  "edits": [
+   [
+    "prevFailed := sawResult && run.End == EndFailed",
+    "prevFailed := false && run.End == EndFailed"
+   ]
+  ]
  }
 ]

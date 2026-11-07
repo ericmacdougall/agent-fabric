@@ -70,6 +70,11 @@ type Run struct {
 	RateLimited      bool
 	End              EndKind
 	ParseErrors      []string
+	// Contradictions are identity or ordering faults (goodqa#15082): a
+	// second init, a result before init, init after a result, a second
+	// result, a changed session id. The daemon never verifies a run that
+	// has any, whatever its last event says.
+	Contradictions []string
 }
 
 type envelope struct {
@@ -108,6 +113,10 @@ func Parse(r io.Reader, expectStructured bool) (Run, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64<<10), MaxLineBytes)
 	sawResult := false
+	inits := 0
+	contradict := func(format string, a ...any) {
+		run.Contradictions = append(run.Contradictions, fmt.Sprintf("event %d: ", run.Events)+fmt.Sprintf(format, a...))
+	}
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
@@ -124,12 +133,23 @@ func Parse(r io.Reader, expectStructured bool) (Run, error) {
 				run.SessionID = e.SessionID
 			} else if run.SessionID != e.SessionID {
 				run.ParseErrors = append(run.ParseErrors, fmt.Sprintf("event %d: session id changed %s -> %s", run.Events, run.SessionID, e.SessionID))
+				contradict("session id changed %s -> %s", run.SessionID, e.SessionID)
 			}
 		}
 		switch e.Type {
 		case "system":
 			switch e.Subtype {
 			case "init":
+				inits++
+				if sawResult {
+					contradict("init after a result")
+				}
+				if inits > 1 {
+					// The first init's identity stands; a later one never
+					// replaces it (goodqa#15082).
+					contradict("second init (model %q, first %q)", e.Model, run.Model)
+					continue
+				}
 				run.Model = e.Model
 				run.ToolCount = len(e.Tools)
 				run.MCPServers = len(e.MCPServers)
@@ -146,6 +166,15 @@ func Parse(r io.Reader, expectStructured bool) (Run, error) {
 		case "rate_limit_event":
 			run.RateLimited = true
 		case "result":
+			if inits == 0 {
+				contradict("result before init")
+			}
+			if sawResult {
+				// A later result never hides an earlier one: the run keeps the
+				// worst end seen (below) and is marked contradictory.
+				contradict("second result")
+			}
+			prevFailed := sawResult && run.End == EndFailed
 			sawResult = true
 			run.ResultSubtype = e.Subtype
 			run.Turns = e.NumTurns
@@ -159,7 +188,7 @@ func Parse(r io.Reader, expectStructured bool) (Run, error) {
 			}
 			run.StructuredOutput = e.StructuredOutput
 			switch {
-			case e.IsError || e.Subtype != "success":
+			case prevFailed || e.IsError || e.Subtype != "success":
 				run.End = EndFailed
 			case expectStructured && len(e.StructuredOutput) == 0:
 				run.End = EndAbandoned

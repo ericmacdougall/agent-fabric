@@ -570,18 +570,28 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	done := make(chan struct{})
 	go s.heartbeat(ctx, attempt, fence, done)
 	go func() {
-		code, _ := s.ln.Wait(h)
+		code, werr := s.ln.Wait(h)
 		close(done)
 		out.Close()
 		if errf != nil {
 			errf.Close()
 		}
-		if err := s.settle(context.Background(), mission, attempt, fence, runDir, code); err != nil {
+		if err := s.afterWait(context.Background(), mission, attempt, fence, runDir, code, werr); err != nil {
 			fmt.Fprintln(os.Stderr, "fabd: settle:", err)
 		}
 		Notify(context.Background(), s.st)
 	}()
 	return nil
+}
+
+// afterWait settles a finished worker. A failed Wait means the exit is not
+// known (goodqa#15082 T1): nothing is settled, the heartbeat has stopped,
+// and the lease expires into UNKNOWN for the prober to reconcile.
+func (s *Scheduler) afterWait(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, runDir string, code int, werr error) error {
+	if werr != nil {
+		return fmt.Errorf("wait for %s failed, left to lease expiry: %w", attempt, werr)
+	}
+	return s.settle(ctx, mission, attempt, fence, runDir, code)
 }
 
 // heartbeat keeps a launched attempt's lease alive while its runner runs
@@ -721,6 +731,15 @@ func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attemp
 	os.WriteFile(filepath.Join(runDir, "usage.json"), usage, 0o644) //nolint:errcheck
 	switch run.End {
 	case claude.EndCheckpoint:
+		// goodqa#15082 T1: success needs the process to agree (exit 0) and
+		// the stream to be coherent; otherwise the run is abandoned, never
+		// verified on the strength of its last event.
+		if code != 0 {
+			return s.finish(ctx, mission, attempt, fence, "abandoned", "", fmt.Sprintf("exit %d with a success result", code))
+		}
+		if len(run.Contradictions) > 0 {
+			return s.finish(ctx, mission, attempt, fence, "abandoned", "", "contradictory stream: "+run.Contradictions[0])
+		}
 		var cp struct {
 			End struct {
 				Kind  string `json:"kind"`
