@@ -31,6 +31,10 @@ var (
 // run. A second `fab mission run` on the same attempt fails fast instead of
 // sharing its fence, reaping its holds or marking its running tools
 // interrupted; a crash drops the connection and so the lock.
+//
+// The lock holds one pooled connection for the whole run and is a session
+// lock: it needs a direct (session-mode) Postgres connection. Behind a
+// transaction-pooling pgbouncer it would not exclude anyone.
 func (d *DB) Lock(ctx context.Context, attempt domain.AttemptID) (func(), error) {
 	conn, err := d.Pool.Acquire(ctx)
 	if err != nil {

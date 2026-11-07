@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"fabric/internal/agent"
 	"fabric/internal/provider/anthropic/fakeapi"
@@ -213,9 +214,21 @@ func TestSecondRunnerRefused(t *testing.T) {
 	}
 	done := make(chan agent.Outcome, 1)
 	go func() { o, _, _ := r.life(); done <- o }()
-	<-reached
+	select {
+	case <-reached:
+	case <-time.After(20 * time.Second):
+		t.Fatal("first runner never reached the hold")
+	}
 	r.crash = nil // the first loop already captured its own hook
-	_, err, _ := r.life()
+	second := make(chan error, 1)
+	go func() { _, err, _ := r.life(); second <- err }()
+	var err error
+	select {
+	case err = <-second:
+	case <-time.After(20 * time.Second):
+		close(hold) // let the first runner end so the test does not leak it
+		t.Fatal("second runner did not return: the attempt lock is missing")
+	}
 	if !errors.Is(err, agent.ErrAttemptBusy) {
 		t.Fatalf("second runner: %v", err)
 	}

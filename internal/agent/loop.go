@@ -42,6 +42,9 @@ type Config struct {
 
 	Prices      Prices
 	BillingMode string
+	// Pin is extra configuration the caller wants a resume to match (shell
+	// allowlist, oracle hooks, caps); it joins the config hash.
+	Pin string
 
 	// Crash is a test seam called at named points; production leaves it nil.
 	Crash func(point string)
@@ -115,6 +118,7 @@ func (l *Loop) configSHA() string {
 		w(string(t.Def()))
 		w(strconv.FormatBool(t.SideEffecting()))
 	}
+	w(c.Pin)
 	pj, _ := json.Marshal(c.Prices)
 	w(string(pj))
 	return hex.EncodeToString(h.Sum(nil))

@@ -226,7 +226,7 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		Attempt: domain.AttemptID(g.Attempt), Fence: fence,
 		Model: g.Model, MaxTokens: g.MaxTokens, System: g.System, Extra: g.Extra, Prompt: g.Prompt,
 		MaxTurns: g.MaxTurns, MaxTotalTokens: g.MaxTotalTokens, Wall: time.Duration(g.WallSeconds) * time.Second, RestartCap: restartCap(g.RestartCap),
-		Prices: prices, BillingMode: agent.BillingAPIKey,
+		Prices: prices, BillingMode: agent.BillingAPIKey, Pin: g.pin(),
 	})
 	if err != nil {
 		return nil, err
@@ -309,4 +309,17 @@ func restartCap(n int) int {
 		return 5
 	}
 	return n
+}
+
+// pin hashes the parts of the grant that bound what a resumed run may do.
+func (g Grant) pin() string {
+	b, _ := json.Marshal(struct {
+		Allow  []string
+		Hooks  [][]string
+		Caps   any
+		Wall   int
+		Turns  int
+		Tokens int64
+	}{g.ShellAllow, g.OracleHooks, g.Caps, g.WallSeconds, g.MaxTurns, g.MaxTotalTokens})
+	return string(b)
 }
