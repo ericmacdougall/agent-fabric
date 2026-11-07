@@ -2854,8 +2854,8 @@
   "expect": "TestResolveQuarantinedEffect",
   "edits": [
    [
-    "        IF OLD.state <> 'QUARANTINED' OR NOT EXISTS (",
-    "        IF OLD.state <> 'QUARANTINED' OR false AND NOT EXISTS ("
+    "        IF NOT EXISTS (\n            SELECT 1 FROM public.effect_resolutions WHERE effect_id = NEW.id AND to_state = NEW.state",
+    "        IF false AND NOT EXISTS (\n            SELECT 1 FROM public.effect_resolutions WHERE effect_id = NEW.id AND to_state = NEW.state"
    ]
   ]
  },
@@ -2880,8 +2880,8 @@
   "expect": "TestAppRoleCannotBypassEffectOutcomes",
   "edits": [
    [
-    "    IF OLD.state = 'QUARANTINED' THEN\n        RAISE",
-    "    IF false THEN\n        RAISE"
+    "        WHEN 'QUARANTINED'       THEN NEW.state IN ('RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED')",
+    "        WHEN 'QUARANTINED'       THEN true"
    ]
   ]
  },
@@ -2893,8 +2893,8 @@
   "expect": "TestAppRoleCannotBypassEffectOutcomes",
   "edits": [
    [
-    "    IF OLD.state IN ('CONFIRMED', 'RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN",
-    "    IF false THEN"
+    "        ELSE false\n    END) THEN",
+    "        ELSE true\n    END) THEN"
    ]
   ]
  },
@@ -3142,6 +3142,97 @@
    [
     "        RAISE EXCEPTION 'effect % approval changes only by approve', NEW.id USING ERRCODE = 'check_violation';",
     "        NULL;"
+   ]
+  ]
+ },
+ {
+  "id": "M244_transitions_fall_through",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestEffectTransitionsAllowListed",
+  "edits": [
+   [
+    "        RAISE EXCEPTION 'effect % may not move % -> %', NEW.id, OLD.state, NEW.state USING ERRCODE = 'check_violation';",
+    "        NULL;"
+   ]
+  ]
+ },
+ {
+  "id": "M245_unknown_rearmed",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestEffectTransitionsAllowListed",
+  "edits": [
+   [
+    "        WHEN 'UNKNOWN'           THEN NEW.state = 'RECONCILING'",
+    "        WHEN 'UNKNOWN'           THEN true"
+   ]
+  ]
+ },
+ {
+  "id": "M246_retry_drops_approval",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestEffectTransitionsAllowListed",
+  "edits": [
+   [
+    "        WHEN 'FAILED_DEFINITE'   THEN NEW.state = (CASE WHEN OLD.approval_sha IS NULL THEN 'INTENT' ELSE 'APPROVED' END)",
+    "        WHEN 'FAILED_DEFINITE'   THEN NEW.state IN ('INTENT', 'APPROVED')"
+   ]
+  ]
+ },
+ {
+  "id": "M247_dispatch_ignores_approval",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestDispatchRefusesUnapprovedIntentWithApproval",
+  "edits": [
+   [
+    "\t\tif e.ApprovalSHA != \"\" {\n\t\t\t// Review S2",
+    "\t\tif false {\n\t\t\t// Review S2"
+   ]
+  ]
+ },
+ {
+  "id": "M248_last_error_unfrozen",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestEffectTransitionsAllowListed",
+  "edits": [
+   [
+    "            RAISE EXCEPTION 'effect % is % and its record is frozen', NEW.id, OLD.state USING ERRCODE = 'check_violation';",
+    "            NULL;"
+   ]
+  ]
+ },
+ {
+  "id": "M249_approval_skip",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestEffectTransitionsAllowListed",
+  "edits": [
+   [
+    "        WHEN 'APPROVAL_REQUIRED' THEN NEW.state IN ('APPROVED', 'NOT_APPLIED')",
+    "        WHEN 'APPROVAL_REQUIRED' THEN NEW.state IN ('APPROVED', 'NOT_APPLIED', 'INTENT')"
+   ]
+  ]
+ },
+ {
+  "id": "M250_intent_confirmed",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestEffectTransitionsAllowListed",
+  "edits": [
+   [
+    "        WHEN 'INTENT'            THEN NEW.state IN ('DISPATCHED', 'FAILED_DEFINITE', 'NOT_APPLIED')",
+    "        WHEN 'INTENT'            THEN NEW.state IN ('DISPATCHED', 'FAILED_DEFINITE', 'NOT_APPLIED', 'CONFIRMED')"
    ]
   ]
  }
