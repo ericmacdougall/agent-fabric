@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -229,10 +230,21 @@ func printMissions(ctx context.Context, st *store.Store) error {
 	if err != nil {
 		return err
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "MISSION\tPRIO\tEXEC\tCAND\tDELIV\tREV/FENCE/GEN\tTICKET\tNAME")
+	return writeMissions(os.Stdout, rows)
+}
+
+// writeMissions is the mission table of `fab status` (goodqa#15087: with
+// each mission's provider, and the awaiting state of an admitted
+// anthropic-api mission that only `fab mission run --grant` starts).
+func writeMissions(out io.Writer, rows []store.MissionRow) error {
+	w := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(w, "MISSION\tPROVIDER\tPRIO\tEXEC\tCAND\tDELIV\tREV/FENCE/GEN\tTICKET\tNAME")
 	for _, r := range rows {
-		fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%d/%d/%d\t%s\t%s\n", r.ID, r.Priority, r.Execution, r.Candidate, r.Delivery,
+		exec := string(r.Execution)
+		if r.AwaitingGrant {
+			exec += " (awaiting mission run --grant)"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%d/%d/%d\t%s\t%s\n", r.ID, r.Provider, r.Priority, exec, r.Candidate, r.Delivery,
 			r.Version.IntentRevision, r.Version.AttemptFence, r.Version.CandidateGeneration, r.Ticket, r.Name)
 	}
 	return w.Flush()

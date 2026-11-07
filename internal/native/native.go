@@ -23,6 +23,7 @@ import (
 	"fabric/internal/host"
 	"fabric/internal/policy"
 	"fabric/internal/provider/anthropic"
+	"fabric/internal/settle"
 	"fabric/internal/store"
 	"fabric/internal/tools"
 )
@@ -289,13 +290,30 @@ func shortID(s string) string {
 	return s
 }
 
+// Test seams for the finish retry (goodqa#15087 AC-7); nil in production.
+// afterFinishExec sees each finish result and may replace its error, so a
+// test can lose the reply of a committed finish; settleClock runs the
+// backoff on fake time.
+var (
+	afterFinishExec func(resp store.Response, err error) error
+	settleClock     settle.Clock
+)
+
 func finishNative(ctx context.Context, st *store.Store, db *agent.DB, led *agent.Ledger, g Grant, fence int64, out agent.Outcome) (*Receipt, error) {
 	outcome := "blocked"
 	if out.Kind == agent.OutcomeDone {
 		outcome = "checkpoint"
 	}
-	if _, err := st.Execute(ctx, "native-runner", domain.CommandID("native-"+shortID(g.Attempt)+"-finish"), domain.Command{Kind: domain.CmdFinishAttempt,
-		Mission: domain.MissionID(g.Mission), Attempt: domain.AttemptID(g.Attempt), Fence: fence, Outcome: outcome}); err != nil {
+	// goodqa#15087 AC-7: the same finish-with-retry as the claude-code
+	// settle; the command id makes a retry after a lost reply a replay.
+	cmd := domain.Command{Kind: domain.CmdFinishAttempt, Mission: domain.MissionID(g.Mission), Attempt: domain.AttemptID(g.Attempt), Fence: fence, Outcome: outcome}
+	if err := settle.Finish(ctx, settle.Options{Clock: settleClock}, func(ctx context.Context) error {
+		resp, err := st.Execute(ctx, "native-runner", domain.CommandID("native-"+shortID(g.Attempt)+"-finish"), cmd)
+		if afterFinishExec != nil {
+			err = afterFinishExec(resp, err)
+		}
+		return err
+	}); err != nil {
 		return nil, fmt.Errorf("finish attempt: %w", err)
 	}
 	r := &Receipt{Mission: g.Mission, Attempt: g.Attempt, Fence: fence, Outcome: out.Kind, Note: out.Note, Turns: out.Turns, Billing: agent.BillingAPIKey, CostLabel: agent.LabelAPIEstimate}

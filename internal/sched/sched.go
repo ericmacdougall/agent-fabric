@@ -23,6 +23,7 @@ import (
 	"fabric/internal/host"
 	"fabric/internal/projection"
 	"fabric/internal/provider/claude"
+	"fabric/internal/settle"
 	"fabric/internal/store"
 )
 
@@ -107,6 +108,14 @@ type Scheduler struct {
 	settleBackoff time.Duration
 	// afterSettleTry is a test cutpoint after a failed settle try.
 	afterSettleTry func()
+	// settleClock runs the settle backoff on fake time in tests.
+	settleClock settle.Clock
+	// afterFinishExec sees each finish command's result and may replace
+	// its error, so a test can lose the reply of a committed finish
+	// (goodqa#15087 AC-7 fault 2); nil in production.
+	afterFinishExec func(resp store.Response, err error) error
+	// dispatchQueries counts dispatch selections (AC-3: one per tick).
+	dispatchQueries int
 
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired, CapacityWaits int
@@ -349,8 +358,13 @@ func (s *Scheduler) wakeExitedJobs(ctx context.Context) (int, error) {
 // worker runs to its end and its stream decides the finish. (fab-host will
 // run these concurrently; one at a time keeps the shadow slice legible.)
 func (s *Scheduler) dispatch(ctx context.Context) (int, error) {
+	s.dispatchQueries++
+	// goodqa#15087 AC-3: fabd launches claude-code only. The filter is in
+	// SQL, inside the LIMIT window, so a run of anthropic-api missions at
+	// higher priority can neither crowd a claude-code one out nor be
+	// started, parked or retried here; they wait for `fab mission run`.
 	rows, err := s.st.Pool().Query(ctx, `SELECT m.id FROM missions m
-		WHERE m.execution = 'ADMITTED' AND m.terminal = 'NONE'
+		WHERE m.execution = 'ADMITTED' AND m.terminal = 'NONE' AND m.provider = 'claude-code'
 		  AND NOT EXISTS (SELECT 1 FROM waits w WHERE w.mission_id = m.id)
 		  AND (m.not_before IS NULL OR m.not_before <= now())
 		  AND NOT (m.id = ANY($1))
@@ -617,54 +631,31 @@ func (s *Scheduler) afterWait(ctx context.Context, mission domain.MissionID, att
 	if werr != nil {
 		return fmt.Errorf("wait for %s failed, left to lease expiry: %w", attempt, werr)
 	}
-	// goodqa#15082 T6: the exit is observed; a transient store error must
-	// not drop it. The finish command is decided once from the stream and its
-	// store calls are idempotent (finish:/verify: command ids), so they
-	// are retried with backoff while the caller keeps the heartbeat going.
-	wait := s.settleBackoff
-	if wait <= 0 {
-		wait = time.Second
+	// goodqa#15082 T6, goodqa#15087 AC-7: the exit is observed; a transient
+	// store error must not drop it. The finish command is decided once from
+	// the stream (T1: an unreadable stream settles nothing and the lease
+	// expires into UNKNOWN), and its store calls are idempotent (finish: and
+	// verify: command ids), so settle.Finish retries them while the caller
+	// keeps the heartbeat going.
+	cmd, err := settleCommand(mission, attempt, fence, runDir, code)
+	if err != nil || cmd == nil {
+		return err
 	}
-	var err error
-	var cmd *domain.Command
-	decided := false
-	for try := 1; try <= settleTries; try++ {
-		if !decided {
-			if cmd, err = settleCommand(mission, attempt, fence, runDir, code); err == nil {
-				decided = true
-			}
-		}
-		if decided {
-			if cmd == nil {
-				return nil
-			}
-			if err = s.finishCmd(ctx, *cmd); err == nil {
-				return nil
-			}
-		}
-		if try == settleTries || ctx.Err() != nil {
-			break
-		}
-		fmt.Fprintf(os.Stderr, "fabd: settle %s try %d failed, retrying: %v\n", attempt, try, err)
-		if s.afterSettleTry != nil {
-			s.afterSettleTry()
-		}
-		select {
-		case <-ctx.Done():
-		case <-time.After(wait):
-		}
-		if max := s.st.Lease / 3; max > 0 && wait*2 > max {
-			wait = max
-		} else {
-			wait *= 2
-		}
-	}
-	return err
+	return s.finishRetry(ctx, *cmd)
 }
 
-// settleTries bounds the settle retries; after them the lease expires into
-// UNKNOWN and the prober reconciles, as before.
-const settleTries = 6
+// finishRetry is every FINISH_ATTEMPT fabd sends: one finishCmd under
+// settle.Finish, so a transient store error never drops an observed end
+// or a prelaunch abandon (goodqa#15087 AC-7).
+func (s *Scheduler) finishRetry(ctx context.Context, cmd domain.Command) error {
+	return settle.Finish(ctx, settle.Options{Clock: s.settleClock, Backoff: s.settleBackoff, Max: s.st.Lease / 3,
+		Log: func(try int, err error) {
+			fmt.Fprintf(os.Stderr, "fabd: settle %s try %d failed, retrying: %v\n", cmd.Attempt, try, err)
+			if s.afterSettleTry != nil {
+				s.afterSettleTry()
+			}
+		}}, func(ctx context.Context) error { return s.finishCmd(ctx, cmd) })
+}
 
 // heartbeat keeps a launched attempt's lease alive while its runner runs
 // (red-team G1): without it every run longer than the lease went UNKNOWN.
@@ -794,7 +785,7 @@ func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attemp
 	if err != nil || cmd == nil {
 		return err
 	}
-	return s.finishCmd(ctx, *cmd)
+	return s.finishRetry(ctx, *cmd)
 }
 
 // settleCommand reads the stream once and decides the finish command; nil
@@ -865,12 +856,12 @@ func (s *Scheduler) abandonPrelaunch(ctx context.Context, mission domain.Mission
 // abandonPrelaunchWait with wait set marks the cause as a full resource:
 // the mission backs off but the attempt does not count toward parking (D2).
 func (s *Scheduler) abandonPrelaunchWait(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, reason string, wait bool) error {
-	return s.finishCmd(ctx, domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence,
+	return s.finishRetry(ctx, domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence,
 		Outcome: "abandoned", Prelaunch: true, CapacityWait: wait, Reason: reason})
 }
 
 func (s *Scheduler) finish(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, outcome, waitKey, reason string) error {
-	return s.finishCmd(ctx, domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence, Outcome: outcome, WaitKey: waitKey, Reason: reason})
+	return s.finishRetry(ctx, domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence, Outcome: outcome, WaitKey: waitKey, Reason: reason})
 }
 
 func (s *Scheduler) finishCmd(ctx context.Context, cmd domain.Command) error {
@@ -878,7 +869,11 @@ func (s *Scheduler) finishCmd(ctx context.Context, cmd domain.Command) error {
 	if s.gated() {
 		defer s.releaseHolds(ctx, attempt)
 	}
-	if _, err := s.st.Execute(ctx, "fabd", domain.CommandID("finish:"+string(attempt)), cmd); err != nil {
+	resp, err := s.st.Execute(ctx, "fabd", domain.CommandID("finish:"+string(attempt)), cmd)
+	if s.afterFinishExec != nil {
+		err = s.afterFinishExec(resp, err)
+	}
+	if err != nil {
 		if errors.As(err, new(*store.Refusal)) {
 			return nil
 		}
@@ -887,7 +882,7 @@ func (s *Scheduler) finishCmd(ctx context.Context, cmd domain.Command) error {
 	if outcome == "abandoned" {
 		return nil // FAILED_DEFINITE already; AC-3 relaunch policy is the daemon's next step
 	}
-	_, err := s.st.Execute(ctx, "fabd", domain.CommandID("verify:"+string(attempt)), domain.Command{Kind: domain.CmdReconcileAttempt, Mission: mission, Attempt: attempt, Fence: fence, Result: "VERIFIED"})
+	_, err = s.st.Execute(ctx, "fabd", domain.CommandID("verify:"+string(attempt)), domain.Command{Kind: domain.CmdReconcileAttempt, Mission: mission, Attempt: attempt, Fence: fence, Result: "VERIFIED"})
 	if err != nil && !errors.As(err, new(*store.Refusal)) {
 		return err
 	}

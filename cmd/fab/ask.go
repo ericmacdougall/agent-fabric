@@ -138,7 +138,11 @@ func missionShow(args []string) error {
 		if err != nil {
 			return err
 		}
-		out := map[string]any{"mission": m}
+		prov, err := st.MissionProvider(ctx, domain.MissionID(id))
+		if err != nil {
+			return err
+		}
+		out := map[string]any{"mission": m, "provider": prov}
 		if *events {
 			evs, err := st.Events(ctx, domain.MissionID(id))
 			if err != nil {

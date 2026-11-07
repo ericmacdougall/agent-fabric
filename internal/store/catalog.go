@@ -109,12 +109,28 @@ type MissionRow struct {
 	Terminal  domain.TerminalState
 	Version   domain.Version
 	Seq       int64
+	Provider  domain.Provider
+	// AwaitingGrant: an admitted anthropic-api mission with no live or
+	// unresolved attempt. It holds a slot and only `fab mission run
+	// --grant` starts it; fabd never will (goodqa#15087 AC-3).
+	AwaitingGrant bool
+}
+
+// MissionProvider returns a mission's provider (goodqa#15087).
+func (s *Store) MissionProvider(ctx context.Context, id domain.MissionID) (domain.Provider, error) {
+	var p string
+	err := s.pool.QueryRow(ctx, "SELECT provider FROM missions WHERE id = $1", string(id)).Scan(&p)
+	return domain.Provider(p), err
 }
 
 // ListMissions returns every mission, slot holders first, then by priority.
 func (s *Store) ListMissions(ctx context.Context) ([]MissionRow, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, name, ticket, priority, host_needs, execution, candidate, delivery, terminal,
-		intent_revision, attempt_fence, candidate_generation, seq FROM missions
+		intent_revision, attempt_fence, candidate_generation, seq, provider,
+		(provider = 'anthropic-api' AND execution = 'ADMITTED' AND terminal = 'NONE'
+		 AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = missions.id
+		                 AND a.state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING')))
+		FROM missions
 		ORDER BY (execution IN ('ADMITTED','RUNNING','WAITING','PAUSED')) DESC, priority, id`)
 	if err != nil {
 		return nil, err
@@ -124,7 +140,7 @@ func (s *Store) ListMissions(ctx context.Context) ([]MissionRow, error) {
 	for rows.Next() {
 		var r MissionRow
 		if err := rows.Scan(&r.ID, &r.Name, &r.Ticket, &r.Priority, &r.HostNeeds, &r.Execution, &r.Candidate, &r.Delivery, &r.Terminal,
-			&r.Version.IntentRevision, &r.Version.AttemptFence, &r.Version.CandidateGeneration, &r.Seq); err != nil {
+			&r.Version.IntentRevision, &r.Version.AttemptFence, &r.Version.CandidateGeneration, &r.Seq, &r.Provider, &r.AwaitingGrant); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
