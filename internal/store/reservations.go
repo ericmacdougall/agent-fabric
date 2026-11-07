@@ -443,17 +443,21 @@ func (s *Store) ExpireReservations(ctx context.Context, limit int) (int, error) 
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
+	// goodqa#15082 T3: one bad row never blocks the rows after it; every
+	// failure is reported, each naming its reservation.
 	n := 0
+	var errs []error
 	for _, id := range ids {
 		res, err := s.closeReservation(ctx, id, ResExpired, nil)
 		if err != nil {
-			return n, err
+			errs = append(errs, fmt.Errorf("reservation %s: %w", id, err))
+			continue
 		}
 		if res.Changed {
 			n++
 		}
 	}
-	return n, nil
+	return n, errors.Join(errs...)
 }
 
 // ExpireEndedReservations is the dispatch gate's sweep (red-team F5): a
@@ -485,19 +489,21 @@ func (s *Store) ExpireEndedReservations(ctx context.Context, limit int) (int, er
 		return 0, err
 	}
 	n := 0
+	var errs []error
 	for _, id := range ids {
 		res, err := s.closeReservation(ctx, id, ResExpired, nil)
 		if err == nil && !res.Changed && res.Reservation.State == ResHeld {
 			res, err = s.closeReservation(ctx, id, ResReleased, nil) // ended before it was due
 		}
 		if err != nil {
-			return n, err
+			errs = append(errs, fmt.Errorf("reservation %s: %w", id, err)) // T3: keep sweeping
+			continue
 		}
 		if res.Changed {
 			n++
 		}
 	}
-	return n, nil
+	return n, errors.Join(errs...)
 }
 
 func (s *Store) closeReservation(ctx context.Context, id, to string, rcpt *UsageReceipt) (CloseResult, error) {
