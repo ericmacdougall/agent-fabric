@@ -156,8 +156,12 @@ not authenticated people.
 - **Paused missions.** A quarantined attempt pauses its mission, which keeps
   its slot. After checking that the quarantined runner is gone,
   `fab unpause --mission <id> --reason '<why>' --key <key>` returns it to ADMITTED. It is
-  refused while any attempt is live or unresolved, without a reason, or for
-  a non-operator actor (goodqa#15085). An older binary refuses to write to a
+  refused while any attempt is live or unresolved, while any broker effect
+  is unsettled (resolve it first), without a reason, or for a non-operator
+  actor (goodqa#15085). A parked mission that is unpaused goes straight to
+  BLOCKED with its park kept; `fab admit` then clears the park. The
+  quarantined attempt stays QUARANTINED: nothing checks by machine that its
+  runner is gone, so check the host before unpausing. An older binary refuses to write to a
   mission whose log has a `MISSION_UNPAUSED` event, so roll back with care.
 - **Final admission.** Every launch, gated or not, rechecks the attempt's
   fence, lease and intent revision against the database clock just before

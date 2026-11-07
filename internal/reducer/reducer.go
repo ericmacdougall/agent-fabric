@@ -41,7 +41,9 @@ func Decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		return out, err
 	}
 	switch cmd.Kind {
-	case domain.CmdFinishAttempt, domain.CmdReconcileAttempt:
+	// N1 on b37056a: an unpause of a mission parked while its reviewer ran
+	// would leave it ADMITTED, parked and idle; the re-park frees the slot.
+	case domain.CmdFinishAttempt, domain.CmdReconcileAttempt, domain.CmdUnpauseMission:
 		out = withRepark(m, out)
 	}
 	return out, nil
@@ -126,6 +128,10 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 			return nil, fmt.Errorf("%w: an attempt is live or unresolved", domain.ErrInvalidTransition)
 		case cmd.Reason == "":
 			return nil, fmt.Errorf("%w: unpause needs a reason", domain.ErrInvalidTransition)
+		case env.UnsettledEffects > 0:
+			// N2 on b37056a: a new attempt could dispatch a subject whose
+			// quarantined effect has an unknown outcome; resolve it first.
+			return nil, fmt.Errorf("%w: %d effects unsettled; resolve them first", domain.ErrInvalidTransition, env.UnsettledEffects)
 		}
 		e := ev(domain.EvMissionUnpaused)
 		e.Reason = cmd.Reason
