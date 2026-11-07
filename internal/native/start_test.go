@@ -380,6 +380,13 @@ func TestNativeChildHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
+	if l := os.Getenv("FABRIC_NATIVE_CHILD_LEASE"); l != "" { // TestNativeKilledQuarantined's short lease
+		d, err := time.ParseDuration(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.Lease = d
+	}
 	native.Run(context.Background(), st, g, opts(true)) //nolint:errcheck // killed mid-loop
 }
 

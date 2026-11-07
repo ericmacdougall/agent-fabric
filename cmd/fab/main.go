@@ -51,6 +51,8 @@ func main() {
 		err = importMain(os.Args[2:])
 	case "expire-leases":
 		err = expireMain(os.Args[2:])
+	case "reconcile":
+		err = reconcileMain(os.Args[2:])
 	case "host":
 		err = hostMain(os.Args[2:])
 	case "attempt":
@@ -90,7 +92,8 @@ func exitCode(err error) int {
 	}
 	var ref *store.Refusal
 	var ue usageError
-	if errors.As(err, &ref) || errors.As(err, &ue) {
+	var rr reconcileRefused
+	if errors.As(err, &ref) || errors.As(err, &ue) || errors.As(err, &rr) {
 		return 3
 	}
 	return 1
@@ -129,6 +132,7 @@ func usage() {
   provider capture --grant F --out DIR [--scenarios text,tool,thinking,badauth,badrequest]   record real API streams
   import --slots F --queue F           one-off #14882 import (shadow)
   expire-leases [--limit N]            bounded lease sweep
+  reconcile [--host H]                 one expire + quarantine pass for this host (no fabd); exit 3 while a fabd holds the host
   host controls --scratch DIR          run this host's negative controls
   __sandbox --rw DIR ... -- argv       (linux) apply Landlock then exec`)
 }

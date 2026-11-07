@@ -100,7 +100,13 @@ type Scheduler struct {
 	// runnerChecked: the RunnerDSN role passed CheckRunnerRole (G2).
 	runnerChecked bool
 	prober        Prober
-	waitLogged    map[domain.MissionID]bool // capacity waits already named in the log
+	lockProber    LockProber // native attempts' flock readback (goodqa#15087)
+	// lockRequired: lease expiry and reconcile run only while hostLock is
+	// held (fabd); lockWaitLogged keeps the wait to one log line.
+	lockRequired   bool
+	hostLock       *store.HostLock
+	lockWaitLogged bool
+	waitLogged     map[domain.MissionID]bool // capacity waits already named in the log
 	// beforeHeartbeat is a test cutpoint that can fail one heartbeat (H2).
 	beforeHeartbeat func() error
 	// settleBackoff is the first wait between settle tries (goodqa#15082
@@ -199,12 +205,16 @@ func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 	} else if n > 0 {
 		worked = true
 	}
-	exp, err := s.st.ExpireLeases(ctx, 50)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "fabd: lease sweep:", err) // per-row failures never stop the loop (review H10)
+	var exp []store.ExpiredLease
+	if s.reconcileAllowed(ctx) {
+		var err error
+		exp, err = s.st.ExpireLeases(ctx, 50)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fabd: lease sweep:", err) // per-row failures never stop the loop (review H10)
+		}
+		s.Expired += len(exp)
+		s.reconcileUnknown(ctx)
 	}
-	s.Expired += len(exp)
-	s.reconcileUnknown(ctx)
 	if s.gated() {
 		if _, err := s.st.ExpireEndedReservations(ctx, 50); err != nil {
 			fmt.Fprintln(os.Stderr, "fabd: reservation sweep:", err)
@@ -705,33 +715,45 @@ func (s *Scheduler) heartbeat(ctx context.Context, attempt domain.AttemptID, fen
 // and its outcome is unverified, so the mission pauses for review instead
 // of being retried blind, and its holds are released by the sweep. A live
 // runner, or no answer, leaves the attempt UNKNOWN and its capacity held.
-func (s *Scheduler) reconcileUnknown(ctx context.Context) {
-	if s.prober == nil {
-		return
+//
+// An anthropic-api attempt is read back through the flock on the lock path
+// stored in its row, never a recomputed one (goodqa#15087); every other
+// attempt through the Prober. It returns how many it quarantined.
+func (s *Scheduler) reconcileUnknown(ctx context.Context) int {
+	if s.prober == nil && s.lockProber == nil {
+		return 0
 	}
-	rows, err := s.st.Pool().Query(ctx, `SELECT id, mission_id, fence FROM attempts WHERE state = 'UNKNOWN' AND host = $1
-		ORDER BY started_at LIMIT 20`, string(s.cfg.Host))
+	rows, err := s.st.Pool().Query(ctx, `SELECT id, mission_id, fence, COALESCE(path, ''), COALESCE(lock_path, '') FROM attempts
+		WHERE state = 'UNKNOWN' AND host = $1 ORDER BY started_at LIMIT 20`, string(s.cfg.Host))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fabd: unknown sweep:", err)
-		return
+		return 0
 	}
 	type u struct {
-		id      domain.AttemptID
-		mission domain.MissionID
-		fence   int64
+		id             domain.AttemptID
+		mission        domain.MissionID
+		fence          int64
+		path, lockPath string
 	}
 	var page []u
 	for rows.Next() {
 		var x u
-		if err := rows.Scan(&x.id, &x.mission, &x.fence); err != nil {
+		if err := rows.Scan(&x.id, &x.mission, &x.fence, &x.path, &x.lockPath); err != nil {
 			rows.Close()
-			return
+			return 0
 		}
 		page = append(page, x)
 	}
 	rows.Close()
+	quarantined := 0
 	for _, x := range page {
-		alive, known := s.prober.Alive(x.id)
+		var alive, known bool
+		switch {
+		case domain.Provider(x.path) == domain.ProviderAnthropicAPI && s.lockProber != nil:
+			alive, known = s.lockProber(x.id, x.lockPath), true
+		case domain.Provider(x.path) != domain.ProviderAnthropicAPI && s.prober != nil:
+			alive, known = s.prober.Alive(x.id)
+		}
 		if !known || alive {
 			continue
 		}
@@ -743,7 +765,9 @@ func (s *Scheduler) reconcileUnknown(ctx context.Context) {
 		}
 		fmt.Fprintf(os.Stderr, "fabd: quarantined %s: runner gone, outcome unverified\n", x.id)
 		s.bump(ctx, "attempts_quarantined_total")
+		quarantined++
 	}
+	return quarantined
 }
 
 // noteCapacityWait records that a mission is waiting for capacity and,

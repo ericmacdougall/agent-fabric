@@ -14,6 +14,7 @@ import (
 	"fabric/internal/domain"
 	"fabric/internal/host"
 	"fabric/internal/hostid"
+	"fabric/internal/native"
 	"fabric/internal/sched"
 	"fabric/internal/store"
 )
@@ -130,6 +131,11 @@ func daemonMain(args []string) error {
 		if p, ok := runnerProber(*workerUser); ok {
 			s.SetProber(p) // G1: reconcile UNKNOWN attempts whose runner is gone
 		}
+		// goodqa#15087: native attempts read back through their stored lock
+		// path, and fabd holds the host reconcile lock for its whole life.
+		s.SetLockProber(native.ProbeLock)
+		s.RequireReconcileLock()
+		defer s.Close()
 		if *once {
 			for i := 0; i < 50; i++ {
 				worked, err := s.Tick(ctx)

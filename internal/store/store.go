@@ -701,9 +701,23 @@ type ExpiredLease struct {
 // retried or run twice is a replay, never a second transition. Bounded page:
 // a backlog can never become one unbounded transaction.
 func (s *Store) ExpireLeases(ctx context.Context, limit int) ([]ExpiredLease, error) {
+	return s.expireLeases(ctx, "", limit)
+}
+
+// ExpireLeasesOnHost is ExpireLeases limited to one host's attempts, for
+// `fab reconcile` (goodqa#15087). fabd keeps the all-hosts sweep.
+func (s *Store) ExpireLeasesOnHost(ctx context.Context, host domain.HostID, limit int) ([]ExpiredLease, error) {
+	if host == "" {
+		return nil, fmt.Errorf("%w: expire leases on an empty host", domain.ErrInvalidID)
+	}
+	return s.expireLeases(ctx, host, limit)
+}
+
+// expireLeases: host "" means every host.
+func (s *Store) expireLeases(ctx context.Context, host domain.HostID, limit int) ([]ExpiredLease, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, mission_id, fence, (extract(epoch FROM lease_until) * 1000)::bigint FROM attempts
-		WHERE state IN ('LEASED', 'PREPARING', 'RUNNING') AND lease_until < now()
-		ORDER BY lease_until LIMIT $1`, limit)
+		WHERE state IN ('LEASED', 'PREPARING', 'RUNNING') AND lease_until < now() AND ($2::text = '' OR host = $2::text)
+		ORDER BY lease_until LIMIT $1`, limit, string(host))
 	if err != nil {
 		return nil, err
 	}
