@@ -37,7 +37,7 @@ No `ahead` verdicts: for each Fabric strength the cited peer pages are silent on
 ## Upgrades, ranked
 | rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
 |---|---|---|---|---|---|
-| 1 | Effect-class policy table (kind, subject pattern) deciding approval, so approval is not a caller option | Caller cannot skip approval for high-impact classes | S | OWASP LLM06 human approval | TBD |
+| 1 | Effect-class policy table (kind, subject pattern) deciding approval, so approval is not a caller option | Caller cannot skip approval for high-impact classes | S | OWASP LLM06 human approval | goodqa#15135 |
 | 2 | Approver must differ from requester and mission creator, enforced by trigger | Two-party control | S | Self-approval | TBD |
 | 3 | Add a resolved-effect hash (dry run or computed diff) and policy version to the approval, re-derived at dispatch | Closes stale-consent gap beyond request bytes | M | Approved request differs from what executes | TBD |
 | 4 | Declare a compensating effect per kind as a separate approved effect (comment: edit or delete marker; push: revert commit) | Defined cleanup for partial multi-effect missions | M | Partial completion | TBD |

@@ -33,7 +33,7 @@ No `ahead` verdicts: each strength Fabric has is also present in at least one pe
 ## Upgrades, ranked
 | rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
 |---|---|---|---|---|---|
-| 1 | Event schema version field, upcasters for old kinds, and a minimum-reader-version recorded in the database so an older binary refuses to start rather than refusing per command | Safe rolling upgrade and rollback | M | Mixed-version writes; parked missions after rollback | TBD |
+| 1 | Event schema version field, upcasters for old kinds, and a minimum-reader-version recorded in the database so an older binary refuses to start rather than refusing per command | Safe rolling upgrade and rollback | M | Mixed-version writes; parked missions after rollback | goodqa#15133 |
 | 2 | Per-mission event count and byte alarms, plus a checkpoint event with `Digest` that replay can start from | Bounded replay cost, early warning | M | Unbounded log growth | TBD |
 | 3 | Receipt retention policy for `commands` (archive after N days, keep the hash) with a test that a replay after archive still conflicts on a changed body | Bounded storage without losing conflict detection | M | Idempotency table growth | TBD |
 | 4 | Hash chain over events written by a role that cannot disable triggers | Tamper evidence | M | Audit integrity | TBD |

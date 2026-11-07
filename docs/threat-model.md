@@ -28,7 +28,7 @@ shows coverage and the blind spots.
 | Operator (human) | Trusted, but not authenticated by Fabric | Runs `fab` with `FABRIC_ACTOR=op:<name>`; owns the database role for `fab` |
 | Scheduler/daemon (`fabd`) | Trusted code | App role; launches workers; writes scheduler events |
 | Worker (agent process) | **Untrusted** | Runs under a host profile; may hold the runner DSN; may emit any text |
-| Native loop | Trusted code, driven by an **untrusted** model | Calls the provider, runs confined tools, holds the provider key in memory |
+| Native loop | Trusted code, driven by an **untrusted** model | Calls the provider, runs confined tools, holds the provider key in memory. It writes events and reservations, which the runner role cannot, so it connects with the **app** role (G-28): the model-driven process holds the role that approves effects and writes any event |
 | Content the agent reads | **Untrusted** | Repository files, tool output, web pages, ticket text: can contain instructions |
 | Remote systems | Semi-trusted | May lose or duplicate responses; may change state independently |
 | Database owner/administrator | Fully trusted | Runs migrations; can disable triggers |
@@ -68,7 +68,7 @@ Legend for status: **Mitigated** (a gate with a test), **Partial** (a gate with 
 | Replay a command with different content | Idempotency key plus canonical bytes hash (R21, R14a) | Mitigated |
 | Run a changed migration or an older binary on a newer log | Checksum on migrations; foreign event kind refused (R21) | Mitigated |
 | A stale writer overwrites a newer attempt | Fence check (R4) | Mitigated inside Fabric; not at the remote edge |
-| Alter the spend ceiling | Constants in code; grants cannot raise them (R15) | Partial: rollback to an older binary restores older ceilings |
+| Alter the spend ceiling | Constants in code; grants cannot raise them (R15) | Partial: rollback to an older binary restores older ceilings; a skewed clock gives a fresh month (G-27) |
 | Tamper with the build | Clean-clone build, version check (D7) | Partial: no attestation (SLSA row) |
 
 ### Repudiation
@@ -96,13 +96,14 @@ Legend for status: **Mitigated** (a gate with a test), **Partial** (a gate with 
 | Threat | Mitigation (gate) | Status |
 |---|---|---|
 | Unbounded concurrent missions | Slot cap (R1) | Mitigated (count only) |
-| Runaway spend | Run/job/month caps with hold-before-send (R15) | Mitigated for the native path; not reconciled with the bill (G-17) |
+| Runaway spend | Run/job/month caps with hold-before-send (R15) | **Partial, bypassable until fixed** on the native path: holds of an ended attempt can be released uncounted (G-26) and the month key uses the process clock (G-27); the `claude -p` path allows USD 1000 per run and has no month ledger (G-28); not reconciled with the bill (G-17) |
 | A looping or failing launch | Park after 6 prelaunch failures; backoff; capacity waits excluded (R8) | Mitigated; a database outage can park missions (fail closed) |
 | A hung remote holds a connection | Dispatch deadline, slot limit, advisory lock (R14h) | Mitigated |
 | One bad row stalls a sweep | Per-row isolation (R9) | Mitigated |
 | Resource exhaustion by a worker | cgroup `MemoryMax`/`CPUQuota`/`TasksMax` on Linux (R17) | Mitigated on Linux; not on macOS |
 | Slow metrics scrape locks the database | Read-only transaction with timeouts, one at a time (R25) | Mitigated |
 | A worker never ends | Lease expiry to UNKNOWN; wall clock in the grant (R5) | Mitigated; reconcile needs the prober (R11) |
+| A worker holding the runner DSN pins the broker's advisory lock, locks `effects`/`jobs`, lifts its own timeouts or exhausts connections | none effective: the 60 s timeouts are role defaults a session can override (R18) | **Open**, reproduced by the red team (G-25) |
 
 ### Elevation of privilege
 
@@ -110,7 +111,7 @@ Legend for status: **Mitigated** (a gate with a test), **Partial** (a gate with 
 |---|---|---|
 | A worker escapes its sandbox via the scheduler's job launch | Host jobs disabled; no INSERT; trigger (R19) | Mitigated |
 | A worker starts a sibling process outside its confinement | Linux: dedicated worker account (repair in progress) | **Open** on same-UID hosts (G-8) |
-| A worker approves its own effect | Runner role cannot write approval (R14b); the app role path self-approves (R14b Limits) | Partial (G-1, G-2) |
+| A worker approves its own effect | Runner role cannot write approval (R14b); the app role path self-approves (R14b Limits); the native loop itself holds the app role (G-28) | Partial (G-1, G-2, G-28) |
 | A worker ends its own attempt or frees its hold | Runner role cannot write those tables (R18) | Mitigated |
 | An unapproved effect of a kind that does not demand approval is sent | none per kind except `publish` | **Open** (G-1) |
 | A shell command escapes the allow-list | Anchored allow-list, oracle fail-closed (R23) | Partial: the oracle's rules live outside the repo (G-20) |
@@ -122,10 +123,11 @@ Legend for status: **Mitigated** (a gate with a test), **Partial** (a gate with 
 - Side channels and kernel vulnerabilities (the sandbox is as strong as the kernel feature it uses).
 - Compromise of the provider or of a tracked remote.
 - Multi-tenant isolation (there is one logical tenant; see [gate angles](gate-angles.md)).
+- Worker artifacts that are later run by trusted operator or CI tooling (build scripts, editor and environment configs) and poisoned repository content; both are listed as gate angles, not mitigated.
+- Integrity of the external hook scripts the policy oracle calls (G-20).
 - Insider threats at the database owner level (G-9).
 - Supply-chain compromise of the Go toolchain or the two dependencies; no SBOM or provenance is produced.
 
 ## Review of this model
 
-This model is reviewed by the same adversarial process as the code (D4). Findings from that
-review are recorded in the commit history of this file.
+This model was reviewed by an independent adversarial pass (D4). Round 1 added the runner-role denial of service (G-25), the spend bypasses (G-26, G-27) and the native loop's role (G-28).

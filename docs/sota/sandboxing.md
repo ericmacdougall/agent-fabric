@@ -38,7 +38,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 ## Upgrades, ranked
 | rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
 |---|---|---|---|---|---|
-| 1 | Egress proxy with default-deny domain allowlist and metadata-address block; macOS Seatbelt network rule pointing at a loopback proxy | high | high | exfiltration of any readable secret | TBD |
+| 1 | Egress proxy with default-deny domain allowlist and metadata-address block; macOS Seatbelt network rule pointing at a loopback proxy | high | high | exfiltration of any readable secret | goodqa#15137 |
 | 2 | Record a dedicated-account run with all 10 controls passing, and make it the gate for writer lanes | high | low | containment false today | TBD |
 | 3 | Fail or warn when Landlock ABI is below 4; add a negative control; probe ABI 6 scope flags | med | low | silent loss of the port limit | TBD |
 | 4 | Replace the macOS deny list with a read allow-list | med | med | unnamed secret paths | TBD |

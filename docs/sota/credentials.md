@@ -33,7 +33,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 ## Upgrades, ranked
 | rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
 |---|---|---|---|---|---|
-| 1 | Per-run Postgres role (or `SET ROLE` session) with `VALID UNTIL`, dropped when the worker ends; usernames then attribute SQL to a run | high | med | static long-lived DSN in the worker | TBD |
+| 1 | Per-run Postgres role (or `SET ROLE` session) with `VALID UNTIL`, dropped when the worker ends; usernames then attribute SQL to a run | high | med | static long-lived DSN in the worker | goodqa#15138 |
 | 2 | Add negative tests: a confined child cannot read the parent's environment or `/proc/<pid>/environ`; a Linux environment control | high | low | parent-environment root cause | TBD |
 | 3 | Row-level security with FORCE on run-scoped tables, keyed to the worker role | med-high | med | cross-mission reads through the DSN | TBD |
 | 4 | Credential-injecting egress proxy; sentinel values in worker environment | high | high | exfiltration of worker-held secrets (pairs with sandboxing rank 1) | TBD |

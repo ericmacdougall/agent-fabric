@@ -32,7 +32,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 ## Upgrades, ranked
 | rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
 |---|---|---|---|---|---|
-| 1 | Hash-chain audit rows (previous hash, row hash) and publish a periodic signed checkpoint to a separate store | high | med | owner or superuser can rewrite history undetected | TBD |
+| 1 | Hash-chain audit rows (previous hash, row hash) and publish a periodic signed checkpoint to a separate store | high | med | owner or superuser can rewrite history undetected | goodqa#15139 |
 | 2 | Dedicated audit-writer role; revoke DML on audit tables from `app`; event trigger or alert on `ALTER TABLE ... DISABLE TRIGGER` | high | low-med | trigger-bypass by owner | TBD |
 | 3 | Propagate W3C `traceparent` to workers through the launch profile | med | low | cannot join control plane to worker activity | TBD |
 | 4 | OTLP exporter for events and logs, traces with GenAI span names, content off by default | med-high | med | no external observability | TBD |

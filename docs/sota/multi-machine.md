@@ -32,7 +32,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 ## Upgrades, ranked
 | rank | upgrade | value | effort | gate or risk addressed | ticket |
 |---|---|---|---|---|---|
-| 1 | State in the docs that one host is a deliberate scope limit and list rows 2 to 6 as the upgrade path | High (accuracy) | Trivial | Over-reading the "multi-host" claims in design text | TBD |
+| 1 | State in the docs that one host is a deliberate scope limit and list rows 2 to 6 as the upgrade path | High (accuracy) | Trivial | Over-reading the "multi-host" claims in design text | goodqa#15130 |
 | 2 | `hosts` table with DB-time heartbeat, capacity and capabilities; effective cap becomes a sum over live hosts | High once a second host exists | Med | Single global cap, no per-host limit | TBD |
 | 3 | Placement filter on `host_needs`, platform and recorded sandbox profile, with a negative test for an unfit host | Med | Low-Med | Running an attempt under a weaker sandbox | TBD |
 | 4 | Cordon and drain as operator actions using the existing actor and reason rules | Med | Low | Safe host maintenance | TBD |

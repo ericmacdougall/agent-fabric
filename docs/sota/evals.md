@@ -38,7 +38,7 @@ No `ahead` verdicts.
 ## Upgrades, ranked
 | rank | upgrade | value | effort | gate or risk addressed | ticket: TBD |
 |---|---|---|---|---|---|
-| 1 | Make the baseline green: fix the model-literal test failure so the mutant gate runs, refresh the metrics and TUI goldens from code, and add a CI step that fails on a red baseline | Restores the only existing quality gate | S | Unrunnable mutant gate | TBD |
+| 1 | Make the baseline green: fix the model-literal test failure so the mutant gate runs, refresh the metrics and TUI goldens from code, and add a CI step that fails on a red baseline | Restores the only existing quality gate | S | Unrunnable mutant gate | goodqa#15136 |
 | 2 | Golden task suite v0: 30 to 60 anonymised real jobs with hidden deterministic graders (tests pass, diff inside allowed paths, no effect outside the broker, spend under cap), tagged capability or regression, with provenance and date | First measure of agent quality | L | No model-quality gate | TBD |
 | 3 | Runner with k trials per task from a clean sandbox, storing config hash, model id, prompt hash, tool schema hash, turns, cost and grader result per trial | Flakiness and cost per task become data | M | pass^k, drift | TBD |
 | 4 | Promotion rule fixed before a run: Wilson lower bound on regression tasks above a floor, exact paired test on discordant tasks, cost and turn medians within a bound; state the minimum detectable effect for the suite size | Defensible model and prompt changes | M | Silent regression | TBD |

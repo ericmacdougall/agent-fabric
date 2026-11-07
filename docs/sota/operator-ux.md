@@ -36,7 +36,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 ## Upgrades, ranked
 | rank | upgrade | value | effort | gate or risk addressed | ticket |
 |---|---|---|---|---|---|
-| 1 | Per-operator database role or token, with `FABRIC_ACTOR` derived from it | High | Med | Forged actor on audit rows | TBD |
+| 1 | Per-operator database role or token, with `FABRIC_ACTOR` derived from it | High | Med | Forged actor on audit rows | goodqa#15132 |
 | 2 | Requester not equal to approver for effect settle and approval, with a negative test | Med | Low | Self-approval | TBD |
 | 3 | Approval TTL with default deny on expiry, plus a pending-approval age metric | Med-High | Low | Stale approvals, unattended runs | TBD |
 | 4 | Hash chain over operator audit rows and a verify command | Med | Low-Med | Tamper evidence beyond triggers | TBD |

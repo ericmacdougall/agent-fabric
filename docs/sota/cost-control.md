@@ -37,7 +37,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 ## Upgrades, ranked
 | rank | upgrade | value | effort | gate or risk addressed | ticket |
 |---|---|---|---|---|---|
-| 1 | Dedicated provider workspace with a lower spend limit (configuration, documented) | High | Low | Fabric bug or ledger drift overspends | TBD |
+| 1 | Dedicated provider workspace with a lower spend limit (configuration, documented) | High | Low | Fabric bug or ledger drift overspends | goodqa#15131 |
 | 2 | Daily reconcile of ledger spend against the provider usage report, alert on drift | High | Med | Estimate versus bill gap | TBD |
 | 3 | Test that a ledger or database outage sends nothing (failure-first) | Med-High | Low | Unproven fail-closed claim | TBD |
 | 4 | Soft-threshold metrics at 50 and 80 percent of job and month caps | Med | Low | Surprise at the hard stop | TBD |

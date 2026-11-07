@@ -40,7 +40,7 @@ Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 ## Upgrades, ranked
 | rank | upgrade | value | effort | gate or risk addressed | ticket |
 |---|---|---|---|---|---|
-| 1 | Half-open recovery for parked missions: one probe launch after an escalating delay, operator override kept | Med-High | Low-Med | Parked work never recovers without a human | TBD |
+| 1 | Half-open recovery for parked missions: one probe launch after an escalating delay, operator override kept | Med-High | Low-Med | Parked work never recovers without a human | goodqa#15129 |
 | 2 | Max queue depth with an explicit rejection reason and a metric | Med | Low | Unbounded queued work (OWASP LLM10) | TBD |
 | 3 | Bounded aging in the dispatch order, with a test that a high-numbered mission starts under steady low-numbered load | Med | Low | Starvation | TBD |
 | 4 | Classify clearly systemic pre-launch errors and park them at once | Med | Low | Wasted retries, slow signal | TBD |

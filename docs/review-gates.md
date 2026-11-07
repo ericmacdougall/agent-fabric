@@ -61,8 +61,8 @@ database you care about.
 
 **Evidence level of this document.** Section [Evidence](#evidence-failing-controls-and-test-results)
 records what was actually run for this review: the full `./internal/... ./cmd/...` suite at
-`bc5a6d3` (every cited test below was observed to print `--- PASS`, except the four failures
-listed there), a selection of the repository's own must-fail mutants, and nine extra
+`bc5a6d3` (cited tests were run and printed `--- PASS`, except four failures and four tests
+that skip; both lists are in that section), a selection of the repository's own must-fail mutants, and nine extra
 throwaway failing controls written for this review.
 
 ## Gate map
@@ -127,7 +127,7 @@ flowchart TD
 - **Enforced at.** `internal/store/store.go:313-318` locks the single `slots` row `FOR UPDATE` before counting; `store.go:420-422` counts the slot holders in the same transaction; `internal/reducer/reducer.go:98-116` (`CmdAdmitMission`) refuses with `ErrOverCapacity` when `SlotsUsed >= Cap`. A PAUSED or parked mission keeps its slot, so a stuck mission cannot be bypassed by starting another.
 - **Why deterministic.** The cap is a transaction (a row lock plus a count), and the decision is a pure function of the mission log and `Env{Cap, SlotsUsed}`.
 - **Fails if broken.** `TestCapacityIsRefused` (`./internal/reducer`, mutant `M3_capacity_ignored`); `TestCapRace` (`./internal/store`, mutant `M12_cap_lock_removed`).
-- **Limits.** The cap counts missions, not CPU, memory or money; those are R2 and R15. `Store.SetSlotCap` (`store.go:198`) is a plain `UPDATE` available to the app role with no reason or audit row (see [Known gaps](#known-gaps), G-12).
+- **Limits.** The cap counts missions, not CPU, memory or money; those are R2 and R15. `Store.SetCap` (`store.go:197`) is a plain `UPDATE` available to the app role with no reason or audit row (see [Known gaps](#known-gaps), G-12).
 
 ### R2. Dispatch gate (resource reservations and grant)
 
@@ -142,7 +142,7 @@ flowchart TD
 
 - **Threat.** An attempt was admitted, then its lease lapsed, it was superseded, or its intent was revised while the launch was being prepared; the runner would still start on stale authority.
 - **Invariant.** Immediately before the runner starts, in every deployment (gated or not), the attempt must still be at its fence, `RUNNING` (after the durable `ACK_START`), unexpired by database time, and at the mission's current intent revision. A database error at this point abandons the attempt before launch.
-- **Enforced at.** `internal/store/dispatch.go:132-146` (`staleReason`, shared by both paths); `:148` `CheckDispatchFresh` for the ungated path; `internal/sched/sched.go:535-560` calls it after `ACK_START` commits and before any runner byte (`s.ln.Start`, `:569`). The `ACK_START` is committed first (`:526`) so a crash after it leaves a leased attempt that expires into `UNKNOWN`, never a silent second launch.
+- **Enforced at.** `internal/store/dispatch.go:132-146` (`staleReason`, shared by both paths); `:148` `CheckDispatchFresh` for the ungated path; `internal/sched/sched.go:535-560` calls it after `ACK_START` commits and before any runner byte (`s.ln.Start`, `:569`). The `ACK_START` is committed first (`:529`) so a crash after it leaves a leased attempt that expires into `UNKNOWN`, never a silent second launch.
 - **Why deterministic.** One SQL read against `clock_timestamp()` joined to the mission's `intent_revision`; the verdict is a pure function of the row values (`staleReason`).
 - **Fails if broken.** `TestUngatedFinalAdmission` (`./internal/sched`). Failing control C1 (below): replacing the lease clause with `case false:` makes it fail. For the gated path, `TestAuthorizeDispatchDenials` with mutant `M127_grant_lease_unchecked`.
 - **Limits.**
@@ -233,7 +233,7 @@ flowchart TD
 - **Enforced at.** `internal/reducer/reducer.go:626-648` (`arbitrate`), `:237-253` (the `ready_for_review` branch), `:352-379` (`CmdAccept`), `:380-396` (`CmdDeliver`); evidence keys include attempt, revision, generation, head and receipt (`domain.EvidenceKey`).
 - **Why deterministic.** A pure function of the recorded event log. Replay produces the same verdict (`TestReplay*` in `replay_test.go`).
 - **Fails if broken.** `TestReadyForReviewArbitration` (mutants `M17`, `M19`), `TestRV6_AcceptOnlyAfterReview` (`M33`), `TestRV7_FutureSubjectEvidenceRefused`, `TestRV17_EvidenceKeyNoCollision` (`./internal/reducer`).
-- **Limits (important).** The receipt is a string the worker recorded; `vacuous` is a flag the recording caller sets. The gate proves the claim *refers to* evidence for the current head. It does not prove the evidence is true, and there is no independent verifier, second model or quorum. That is the largest limit in the review path ([gate angles](gate-angles.md): independent verifier, quorum). Fabric does not run tests itself.
+- **Limits (important).** Fabric stores no pass/fail verdict for a receipt: the receipt is a string the worker recorded, and `vacuous` is a flag the recording caller sets (`--vacuous`, default false), so a receipt of a failing run backs a claim and an ACCEPT unless it is flagged. The gate proves the claim *refers to* evidence for the current head. It does not prove the evidence is true, and there is no independent verifier, second model or quorum. That is the largest limit in the review path ([gate angles](gate-angles.md): independent verifier, quorum). Fabric does not run tests itself.
 
 ### R13. "Done" means live-tested (merged is not done)
 
@@ -321,8 +321,9 @@ Limits: the env allow-list work for the worker side is still open (see G-6).
   - A worst-case cost (request body size plus `max_tokens` at the price table) is held against all caps, all or none, **before** any byte is sent; if any cap cannot fit it, nothing is sent. The actual cost then settles the hold. A hold whose process died is charged at its held amount.
 - **Enforced at.** `internal/native/native.go:34-36` (constants), `:122-129` (grant validation); `internal/agent/ledger.go:93` (`Hold`, under per-resource advisory locks), `:136` (`Settle`), `:154` (`Reap`); `internal/agent/prices.go:83` (`WorstCase`); `internal/agent/loop.go:335-336` (hold before send); the reservations tables and triggers (`0009`, `0010`, `0014`) underneath.
 - **Why deterministic.** Integer micro-USD arithmetic in a ledger over Postgres reservations, with row locks and a unique-live-reservation index. No model judgement.
-- **Fails if broken.** `TestGrantMonthCeiling` (`./internal/native`; failing control C2), `TestMonthCeilingStopsLoop`, `TestBudgetExhaustedSendsNothing`, `TestBudgetHeldBeforeSend`, `TestBudgetCumulative`, `TestHoldSurvivesCrash`, `TestTransportAfterWriteCharged` (`./internal/agent`), plus the reservation mutants `M46` to `M60` (declared, not re-run).
+- **Fails if broken.** `TestGrantMonthCeiling` (`./internal/native`; failing control C2), `TestMonthCeilingStopsLoop` (`./internal/native`), `TestBudgetExhaustedSendsNothing`, `TestBudgetHeldBeforeSend`, `TestBudgetCumulative`, `TestHoldSurvivesCrash`, `TestTransportAfterWriteCharged` (`./internal/agent`), plus the reservation mutants `M46` to `M60` (declared, not re-run).
 - **Limits.**
+  - **The caps are bypassable today.** Spend held by an attempt that ends before the hold expires is marked RELEASED and not counted (G-26, goodqa#15123), and the month key comes from the process clock (G-27, goodqa#15124). Until both are fixed the USD 5 and USD 20 ceilings cannot be relied on against a crash or a skewed clock. The `claude -p` path allows up to USD 1000 per run and has no month ledger (G-28).
   - The ceilings are constants in the binary: a rollback to an older binary restores its older ceilings (README).
   - The price table comes from configuration; a wrong table is wrong accounting. Spend is computed from reported usage and is not reconciled against the provider's invoice.
   - The month ledger is per database. A second database, or a deleted `usage_receipts` row by the table owner, resets it.
@@ -359,11 +360,11 @@ Limits: the env allow-list work for the worker side is still open (see G-6).
 ### R18. Database role separation (app vs runner)
 
 - **Threat.** A compromised worker holds a database credential and rewrites state, approves its own effects, ends its own attempt, or schedules a host job.
-- **Invariant.** Roles are `<prefix>_scheduler` (NOLOGIN, marks who may write scheduler events), `<prefix>_app` (fabd and fab; a scheduler member) and `<prefix>_runner`. No role owns a table, can `TRUNCATE`, or can `CREATE` in the schema. The runner role writes only: `effects` (INSERT, UPDATE) under column and state guards, `asks` (INSERT), `effect_dispatches` (INSERT), and UPDATE on `jobs` for a legacy exit record. Approval, readback and answers need the app role. Every statement and idle transaction is bounded (60 s).
+- **Invariant.** Roles are `<prefix>_scheduler` (NOLOGIN, marks who may write scheduler events), `<prefix>_app` (fabd and fab; a scheduler member) and `<prefix>_runner`. No role owns a table, can `TRUNCATE`, or can `CREATE` in the schema. The runner role writes only: `effects` (INSERT, UPDATE) under column and state guards, `asks` (INSERT), `effect_dispatches` (INSERT), and UPDATE on `jobs` for a legacy exit record. Approval, readback and answers need the app role. Statement and idle-transaction timeouts of 60 s are set as role defaults (not enforced: a session can override them, G-25).
 - **Enforced at.** `internal/store/roles.go:35` (`runnerWrites`), `:39` (`RoleTimeout`), `ApplyRoles`; triggers in `0016_scheduler_role.sql` (`fabric_is_scheduler`), `0017_runner_write_guards.sql`, `0018_runner_transitions.sql`, `0019_runner_settle_live.sql`.
 - **Why deterministic.** Postgres privileges and triggers; the guard is evaluated by the database for the session role, not by Fabric code.
 - **Fails if broken.** `TestRolesLeastPrivilege` (mutants `M176`, `M179`, `M182`, `M183`, `M197`), `TestRunnerCannotApproveEffects`, `TestRolesUpgradeNarrowsRunner` (`M180`), `TestRunnerCannotShadowGuardTables`, `TestRunnerRoleBrokerFlows` (`./internal/effects`).
-- **Limits (from the README, unchanged here).** The role is shared by every runner on a host, so any runner can act for any running mission; it can read every table; a forged transport receipt for a live run is believed; metrics and TUI connect with whatever `FABRIC_DSN` names (no read-only role is provided); the worker still carries the runner DSN. Roles must be re-applied after each migration (`fab db roles`), or the app role gets `42501`.
+- **Limits.** A runner session can pin the broker's advisory locks, take `ACCESS EXCLUSIVE` on `effects`, lift its own timeouts and open unlimited connections (G-25, reproduced by the red team on a throwaway database; `TestRolesLeastPrivilege` does not cover them, and the tests connect with `role=`, so the role defaults never apply). From the README: the role is shared by every runner on a host, so any runner can act for any running mission; it can read every table; a forged transport receipt for a live run is believed; metrics and TUI connect with whatever `FABRIC_DSN` names (no read-only role is provided); the worker still carries the runner DSN. Roles must be re-applied after each migration (`fab db roles`), or the app role gets `42501`.
 
 ### R19. Host jobs are disabled (goodqa#15082, migration 0025)
 
@@ -389,7 +390,7 @@ Limits: the env allow-list work for the worker side is still open (see G-6).
 - **Invariant.** One transaction per command; the same key and the same canonical bytes replay the stored response, the same key with different bytes is `IDEMPOTENCY_CONFLICT`; per-mission event sequence numbers are gap-free; `events` and `commands` reject UPDATE, DELETE and TRUNCATE; an older binary refuses to write to a mission whose log holds an event kind it does not know; migrations record a checksum and a changed migration is refused.
 - **Enforced at.** `internal/store/store.go:261` (`Execute`), `:330-362` (replay), `:365-371` (foreign event kind), `:104-118` (`Migrate` checksum); `0011_command_bytes.sql:38-44` (append-only and no-truncate triggers).
 - **Why deterministic.** Primary keys and triggers; the reducer is replayed from the log (`reducer.Replay`, `:834`) and a rebuild must equal the stored snapshot.
-- **Fails if broken.** `TestCommandReplay` (mutant `M11`), `TestConcurrentSameKey`, `TestEventSeqGapFreeAndRebuild`, `TestCommandRowChecks` (`M105`, `M107`, `M108`), `TestMigrateRefusesChangedMigration` (`M241`), `TestUnknownEventKindMissionGetsNoWrites` (`M139`), `TestVerifiedSnapshotRejectsUnknownEvent`.
+- **Fails if broken.** `TestCommandReplay` (mutant `M11`), `TestConcurrentSameKey`, `TestEventSeqGapFreeAndRebuild`, `TestCommandRowChecks` (`M105`, `M107`, `M108`), `TestMigrateRefusesChangedMigration` (`M241`), `TestUnknownEventKindMissionGetsNoWrites` (`./internal/sched`, `M139`), `TestVerifiedSnapshotRejectsUnknownEvent`.
 - **Limits.** The table owner (migrations) can disable the triggers. There is no hash chain or external anchor over the log, so tampering by the owner is not detectable (G-9).
 
 ### R22. Ordered outbox
@@ -407,8 +408,8 @@ Limits: the env allow-list work for the worker side is still open (see G-6).
 - **Invariant.** `read` and `grep` are confined to the worktree by construction (path resolution, swap-race checks); `shell` runs in the host sandbox through a Confiner with its own environment, under an anchored allow-list; every shell call is first sent to external guard hooks (the "oracle"), which **fail closed**: a missing, timed-out or unexpected hook answer denies. The oracle is self-tested at start and the whole grant (allow-list, hooks, caps, turn and token limits) joins a configuration hash; a resumed run with a different configuration is refused.
 - **Enforced at.** `internal/tools/read.go`, `internal/tools/exec.go`, `internal/policy/oracle.go:17`, `:128` (`SelfTest`), `internal/agent/loop.go:486` (`Guard.Check`), `internal/native/native.go:173-176`, `:331` (config hash).
 - **Why deterministic.** Path and regex checks plus process exit codes. The oracle's rules live in the hooks, which are code, not a model.
-- **Fails if broken.** `TestReadConfinement`, `TestReadSwapRace`, `TestShellAllowlistIsAnchored`, `TestNativeToolsConfined`, `TestShellOutputFloodStopped` (`./internal/tools`); `TestOracleFailsClosed`, `TestOracleSelfTest`, `TestInjectionCannotApprove`, `TestOracleDenyShapes` (`./internal/policy`); `TestConfigChangeRefused` (`./internal/agent`).
-- **Limits.** The oracle is only as strong as the hook scripts it calls; those scripts live outside this repository, which makes this gate partly **Convention**. There is no taint tracking of tool output (see [gate angles](gate-angles.md), prompt-injection).
+- **Fails if broken.** `TestReadConfinement`, `TestReadSwapRace`, `TestShellAllowlistIsAnchored`, `TestShellOutputFloodStopped` (`./internal/tools`); `TestOracleFailsClosed`, `TestOracleSelfTest`, `TestInjectionCannotApprove`, `TestOracleDenyShapes` (`./internal/policy`); `TestConfigChangeRefused` (`./internal/agent`).
+- **Limits.** `TestNativeToolsConfined` always skips ("BLOCKED: Slice 0 native profile has not landed"), so confinement of native tools by the live host profile is not tested (G-29). The oracle is only as strong as the hook scripts it calls; those scripts live outside this repository, which makes this gate partly **Convention**. There is no taint tracking of tool output (see [gate angles](gate-angles.md), prompt-injection).
 
 ### R24. Provenance of asks, missions and answers
 
@@ -450,7 +451,7 @@ README, and this document.
 - **Threat.** The author's blind spots become the specification.
 - **Invariant.** An adversarial review (what could go wrong) and an acceptance review (does it meet the outcome) are performed by two different models, agents or people, each one capability rung above the author (ladder: a Sonnet-class author is reviewed at Opus-medium; Opus-medium at Opus-high; and so on). The author cannot be a reviewer. Editing the spec afterwards makes the reviews stale.
 - **Enforced at.** Maintainer tooling. In this repository, `internal/ladder/ladder.go` implements the escalation rule used by Fabric itself: escalate one rung after two genuine failures; infrastructure failures do not count.
-- **Fails if broken.** `./internal/ladder` tests (`TestLadder*`, mutant `M24_ladder_infra_counts`).
+- **Fails if broken.** `./internal/ladder` tests (`TestTwoGenuineFailuresClimbOneRung`, `TestInfraNeverCounts`, mutant `M24_ladder_infra_counts`).
 - **Strength.** Convention for the review requirement; code for the ladder rule.
 - **Limits.** Reviewer independence is procedural. Two models from different vendors reduce but do not remove correlated error.
 
@@ -467,7 +468,7 @@ README, and this document.
 
 - **Threat.** The author and the plan reviewers share assumptions and miss attack paths.
 - **Invariant.** A substantive change gets an independent adversarial review that tries to falsify the change (bypass, failure mode, missing threat, scope gap). Material findings are fixed or explicitly downgraded and a second round follows if the fix changes behaviour. Commit messages record the finding ids (`F1` to `F8`, `H1`, `N2`, `T1` to `T7`).
-- **Enforced at.** Maintainer process and the review helper tooling. The review evidence for this document is in the work directory named in the commit message.
+- **Enforced at.** Maintainer process and the review helper tooling.
 - **Strength.** Convention.
 - **Limits.** A review is a sample, not a proof. Findings the reviewer cannot reproduce from the packet are not found.
 
@@ -520,8 +521,11 @@ the tree at `bc5a6d3`, on 2026-11-07. Nothing here touched a production system.
 | `metrics` | **FAIL** `TestExpositionGolden` |
 | `tui` | **FAIL** `TestGoldenFrame`, `TestDrillDown` |
 
-Every test cited in this document was found with `--- PASS` in that run, except the four
-listed above, which this document does not rely on for a gate. They fail for two reasons that
+An independent re-run of every cited test by name (172 pass, 4 fail, 4 skip) agrees. The four skips are
+`TestNegativeControls` and `TestRV12_StopFailsClosed` (need `FABRIC_HOST_CONTROLS=1`),
+`TestDarwinRefusesWriterGrants` (macOS only) and `TestNativeToolsConfined`, which calls `t.Skip` every time
+(`internal/tools/tools_test.go:259-264`) and so proves nothing; it is not relied on below. The four failures
+are not relied on for a gate. They fail for two reasons that
 are defects in the test side, not in a gate:
 
 - `TestNoModelLiteralsInSource` scans the whole tree for model-name literals and flags
@@ -587,11 +591,22 @@ these edits is committed anywhere.
 every way of weakening the gate is caught. Several controls (C5, C7) were killed by tests that
 cover more than the one property.
 
+### Test-strength findings from the independent red team
+
+The red team made 40 one-edit throwaway controls (31 failed the named test). Nine left every named test passing, so
+the following claims are weaker than the gate text suggests (all tracked as G-29):
+the RUNNING-state clause of the ungated final admission (R3); a runner `INSERT` grant on `events` (R18);
+`Spent` ignoring EXPIRED holds (R15); the park budget being 6 and not 60 (R8); the operator prefix
+check, which also accepts `op: ` with a blank name (R20); the broker's approved-hash recheck, which
+is probably unreachable behind the 0020 trigger (R14b); the DELIVER generation check, redundant with the
+accepted-generation check (R12); and the Go-side remaining-budget checks, which the database
+capacity check catches (R15).
+
 ### Gates with no direct failing test (not yet tested)
 
 - The GoodQA key file mode check (`cmd/fab/effect.go:50-52`); `cmd/fab` has no test of it.
 - The macOS Seatbelt profile (needs a Mac; not run for this review).
-- `Store.SetSlotCap` has no audit (nothing to test).
+- `Store.SetCap` has no audit (nothing to test).
 - Clock-step behaviour of leases (G-14).
 
 ## Comparison and rationale
@@ -611,10 +626,10 @@ section with their access dates and the confidence of what was read.
 | **Saga** [S3] | Multi-step business transactions with explicit compensating actions; no automatic rollback. | An effect has no compensation notion. A mission cannot undo a CONFIRMED effect; the operator resolves manually. | **Behind**. Not needed for the current effect kinds; a gap before multi-effect missions. |
 | **Idempotency keys** [S4][S5] | Same key and different parameters is an error; a retry returns the original outcome. | Same key plus any different intent field is `IDEMPOTENCY_CONFLICT`; a settled effect replays after its attempt ends (`TestReplayBindsWholeIntent`, `TestTerminalReplayAfterAttemptEnds`). | **Parity**. No key-retention policy is stated (peers state 24 h pruning). |
 | **Fencing tokens** [S6] | Leases alone are unsafe; the protected resource must reject writes with a lower token. | Fence checked in the reducer, in `Heartbeat`, in the broker (twice around the precondition) and in a trigger that locks the attempt row. | **Parity** inside the system boundary. **Behind** at the outside edge: the remote system gets an idempotency key, not the fence. |
-| **Unknown outcomes** [S1][S5] | Retry the activity; the callee must be idempotent. | An ambiguous transport result is `UNKNOWN`; it is never retried; only a readback or an audited operator decision settles it. | **Ahead on safety** for effects whose remote cannot deduplicate; **behind on availability** (an unreadable remote blocks the mission until a human acts). A design choice, not a superset. |
-| **Human approval of agent actions**: MCP tools spec, OWASP LLM06 [S7][S8] | "SHOULD" a human-in-the-loop for sensitive operations; show tool inputs; complete mediation downstream; log. | Approval is bound to the SHA-256 of the canonical request, rechecked at dispatch, and held by a DB trigger. But approval is optional per submission except for `publish`, and `fab effect comment --approve` approves its own submission. | **Ahead of the spec's requirement** on binding approval to exact content; **behind** on mandatory policy per effect kind and on separation of duties (G-1, G-2). The spec is a protocol requirement, not an implementation, so this is a comparison of strength of mechanism, not of products. |
+| **Unknown outcomes** [S1][S5] | Retry the activity; the callee must be idempotent. | An ambiguous transport result is `UNKNOWN`; it is never retried; only a readback or an audited operator decision settles it. | **Different scope.** Temporal retry policies can be set to a single attempt with non-retryable errors, so the difference is defaults plus the readback step. **Behind on availability** (an unreadable remote blocks the mission until a human acts). |
+| **Human approval of agent actions**: MCP tools spec, OWASP LLM06 [S7][S8] | "SHOULD" a human-in-the-loop for sensitive operations; show tool inputs; complete mediation downstream; log. | Approval is bound to the SHA-256 of the canonical request, rechecked at dispatch, and held by a DB trigger. But approval is optional per submission except for `publish`, and `fab effect comment --approve` approves its own submission. | **Parity** on binding an approval to exact content (published work on approving resolved effects with a recheck before execution describes a similar control); **behind** on mandatory policy per effect kind and on separation of duties (G-1, G-2). |
 | **Excessive agency** [S8] | Narrow tools, least privilege downstream, human approval for high impact, rate limits. | Confined read/grep/shell, a fail-closed oracle, DB role separation, caps. Approval optional, no per-effect rate limit. | **Partial**. |
-| **Unbounded consumption** (LLM10) [S9] | Limit resource use per request and per user. | Worst-case hold before any send; run, job and month caps in code; crash charged at the held amount. | **Parity** with budget-limit gateways on the idea; the hold-before-send with crash charging is the part Fabric implements in the database. Not reconciled against invoices. |
+| **Unbounded consumption** (LLM10) [S9] | Limit resource use per request and per user. | On the native path: worst-case hold before any send; run, job and month caps in code; a crash charge that is bypassable today (G-26, G-27). The `claude -p` path has no month ledger (G-28). | **Parity** on hold-before-send (LiteLLM documents a default budget reservation that estimates the maximum cost and rejects before sending). Scoped to the native path; not reconciled against invoices; bypassable under G-26 and G-27 until fixed. |
 | **Prompt injection** (LLM01) [S9] | Constrain behaviour, filter inputs and outputs, privilege control, human approval for high-risk actions. | The oracle blocks shell calls; confined tools; no tracking of untrusted content through the loop. | **Behind** on taint tracking (see [gate angles](gate-angles.md)). |
 | **Supply chain** (LLM03) [S9] | Vet components, pin versions. | Dependencies are `pgx/v5` and `x/sys` only (README); no gate on packages an agent installs. | **Behind** on agent-installed packages. |
 | **Capability and least-privilege sandboxes** | Network egress policy, filesystem confinement, per-run isolation, microVM tiers (see [sandboxing](sota/sandboxing.md)). | Landlock filesystem plus TCP-port limits, cgroups; Seatbelt write-confinement; no egress proxy; two Linux controls fail on same-UID hosts. | **Behind** peers that ship an egress policy and a VM tier; **parity** on kernel-feature use (Landlock, cgroups). |
@@ -624,13 +639,12 @@ section with their access dates and the confidence of what was read.
 | **Anthropic "framework for developing safe and trustworthy agents"** [S13] | Keep humans in control, transparency, secure agent interactions, privacy. | Park/pause/quarantine are human-held; operator attribution; visible state (TUI, metrics). | **Partial**; the human-control gates are real, operator authentication is not (G-5). |
 | **OpenAI "practices for governing agentic AI systems"** [S14] | Practices include constraining the action space, legibility, automatic monitoring, attributability, interruptibility. | Action space: confined tools, broker. Attributability: actor plus real `db_user` in the audit. Interruptibility: pause, park and slot cap exist; no operator cancel (G-7). | **Partial**. |
 
-**Where Fabric is ahead, in one place.** On three mechanisms, relative to what the cited
-sources describe: (1) approval bound to exact request content and enforced again by the database
-outcome guard; (2) a state that refuses automatic retry of an ambiguous effect and demands a
-readback or an audited human decision; (3) a spend reservation made before a model request is
-sent, charged at the held amount if the process dies. Each has code, a test and a mutant
-(R14b, R14d, R15). None of the three is a claim about any specific product; they are claims
-about the mechanisms the cited pages describe.
+**Mechanisms Fabric implements and tests, with no ranking.** Approval bound to exact request
+content and re-enforced by a database outcome guard (R14b); refusal to retry an ambiguous effect
+without a readback or an audited human decision (R14d); a spend reservation taken before a model
+request is sent (R15). Each has code and a test. The cited peers describe the same ideas
+(see the rows above and [sota/](sota/README.md)), so none of these is claimed as ahead of any
+product. No row in this section is rated `ahead`.
 
 **Where Fabric is at parity.** Event-log-with-replay, outbox ordering, idempotency-key
 semantics, fencing inside the system boundary, kernel sandbox primitives.
@@ -641,14 +655,17 @@ prompt-injection taint tracking, signed provenance, model-quality evaluation gat
 multi-host operation, Windows. These are listed as gaps below and in
 [gate angles](gate-angles.md).
 
-**Why this is a defensible position, and not a claim of leadership.** The gates that matter
-for correctness are decided by constraints the database enforces for every connected role, by a
-pure state machine that is replayed, and by locks and tokens, not by a model's judgement. Every
-guarantee here names the code and a test, and 9 of 9 spot-check controls plus the mutants that
-were run fail when the code is broken. The weakest points are the ones that depend on a person
-following a rule (operator identity, reviewer independence, the oracle's external scripts) and
-on a worker's honest evidence. Those are named in each gate's Limits, because a gate list that
-omits its limits is marketing.
+**Why the position is defensible, and what it is not.** The gates that matter for correctness are
+decided by constraints the database enforces for the roles that connect as intended, by a pure state machine that is replayed,
+and by locks and tokens, not by a model's judgement. Every guarantee names the code and a test.
+The evidence: 9 of 9 throwaway controls and 13 of 17 repository mutants that were run fail as
+intended; 2 mutants survive and 2 hang (G-10); an independent red team found 9 more removals
+that leave every named test passing (G-29) and five database-role and spend weaknesses (G-25 to G-28).
+Fabric is a single-host, shadow-stage system and the comparison above is a list of mechanisms,
+not a claim of leadership. The weakest points are the ones that depend on a person
+following a rule (operator identity, reviewer independence, the oracle's external scripts), on a
+worker's honest evidence, and on the runner database role staying within its intended use.
+Those are named in each gate's Limits, because a gate list that omits its limits is marketing.
 
 ### Sources for this section
 
@@ -678,38 +695,45 @@ ticket is drafted and will be linked here when it is filed.
 
 | ID | Gap | Evidence | Consequence | Ticket |
 |---|---|---|---|---|
-| **G-1** | **Approval is opt-in per submission, not mandatory per effect kind.** Only kind `publish` refuses a submission without approval. A `ticket_comment` effect submitted without `--approve` never needs one. No table maps an effect kind to "approval required". | `effects/publish.go:125` (publish only); `cmd/fab/effect.go:132-144`; `broker.go:236`. | A worker (or anything holding the runner role, which can INSERT effects) can submit and dispatch an unapproved effect of any other kind. The approval gate protects only the kinds whose executor demands it. | TBD |
-| **G-2** | **No separation of duties for approval.** `fab effect comment --approve` submits, approves and dispatches in one process; `approved_by` is any non-empty string. | `cmd/fab/effect.go:148-155`; `0020_effect_resolutions.sql` (`coalesce(NEW.approved_by,'') <> ''`). | The approval binds the request hash; it does not prove a second party approved. | TBD |
+| **G-1** | **Approval is opt-in per submission, not mandatory per effect kind.** Only kind `publish` refuses a submission without approval. A `ticket_comment` effect submitted without `--approve` never needs one. No table maps an effect kind to "approval required". | `effects/publish.go:125` (publish only); `cmd/fab/effect.go:132-144`; `broker.go:236`. | A worker (or anything holding the runner role, which can INSERT effects) can submit and dispatch an unapproved effect of any other kind. The approval gate protects only the kinds whose executor demands it. | goodqa#15135 |
+| **G-2** | **No separation of duties for approval.** `fab effect comment --approve` submits, approves and dispatches in one process; `approved_by` is any non-empty string. | `cmd/fab/effect.go:148-155`; `0020_effect_resolutions.sql` (`coalesce(NEW.approved_by,'') <> ''`). | The approval binds the request hash; it does not prove a second party approved. | goodqa#15132 |
 | **G-3** | **No Windows support.** | No `host` implementation for Windows. | Windows workers cannot be confined or run. | goodqa#15088 |
-| **G-4** | **No egress policy.** macOS profile allows the network; Linux limits TCP connect/bind to allowed ports only. No DNS, protocol or destination policy, no proxy. | `host/darwin.go:61` (`allow default`); `host/landlock_linux.go:118`. | A worker (or injected content) can send any data it can read to any allowed destination. Secret redaction (R16) is the only mitigation. | TBD |
+| **G-4** | **No egress policy.** macOS profile allows the network; Linux limits TCP connect/bind to allowed ports only. No DNS, protocol or destination policy, no proxy. | `host/darwin.go:61` (`allow default`); `host/landlock_linux.go:118`. | A worker (or injected content) can send any data it can read to any allowed destination. Secret redaction (R16) is the only mitigation. | goodqa#15137 |
 | **G-5** | **Operator identity is self-asserted.** `FABRIC_ACTOR=op:<name>` is an environment variable. | `domain/ids.go:71`, `cmd/fab/main.go:172`. | Any process on the host that can run `fab` can act as an operator. Audit rows record the string and the real DB role, not a person. | goodqa#15091 |
 | **G-6** | **Open provider-path findings (goodqa#15087):** `LD_PRELOAD`-style loader injection and the completion of the worker environment allow-list. Until they ship, the `claude -p` worker path inherits more environment than intended and still receives the runner DB DSN. | README (Known limits); `sched.go:526` appends `FABRIC_DSN` to the worker env. | A worker can reach the runner role (R18 limits apply). | goodqa#15087 |
 | **G-7** | **No operator cancel.** Interruptibility is pause, park and the slot cap, not a command that cancels a mission and stops its runner. | No `cancel` command in `cmd/fab`. | An operator cannot stop one mission cleanly except through the pause/quarantine path. | goodqa#15093 |
-| **G-8** | **Linux sandbox same-UID escape.** On a same-UID host a worker can start a sibling unit via the user manager's bus and signal same-UID processes. | `TestNegativeControls` output in Evidence; `host/linux.go:20-26`. | No real provider runs on Linux until the dedicated-account repair passes re-review. | in the Linux repair; TBD |
-| **G-9** | **Audit and event log are not tamper-evident.** UPDATE, DELETE and TRUNCATE are rejected by triggers, but there is no hash chain, signed checkpoint, separate audit-writer role or off-host copy; the table owner can disable the triggers. | `0011:38-44`, `0020`. | An owner-level compromise can rewrite history undetectably. | TBD |
-| **G-10** | **The must-fail mutant gate does not run at `bc5a6d3`, and part of it is stale.** The unmutated baseline is red (`TestNoModelLiteralsInSource`), so `run.py` exits `BASELINE FAIL` on the full set. Of 17 mutants re-run on green packages, 2 survive (M184, M244: probably edits to function bodies later replaced by `CREATE OR REPLACE`) and 2 time out (M45, M259). | Evidence section. | The strongest failing-first control in the repository is unusable until fixed; 343 declared mutants are not re-run in CI-style use. | TBD (routed to the Fabric owner) |
-| **G-11** | **Stale golden files** (`TestExpositionGolden`, `TestGoldenFrame`, `TestDrillDown`) after the month cap moved to USD 20. | Evidence section. | Three tests fail on a clean tree; a real regression in those packages could hide among them. | TBD (routed) |
-| **G-12** | **`SetSlotCap` is a bare UPDATE** with no reason, actor or audit row. | `store/store.go:197-199`. | The admission limit can be changed silently by anyone with write access to the table. | TBD |
-| **G-13** | **Final admission is check-then-start, not atomic.** The window is small but real; the ungated path stores no decision. | R3 Limits. | A runner can start with authority that expires moments later. The fence still stops its Fabric writes. | TBD |
-| **G-14** | **No clock-step test for leases.** The model assumes the database clock does not move backwards. | No test. | A backwards step could extend leases. Postgres does not promise monotonic wall time. | TBD |
-| **G-15** | **Evidence receipts are worker-asserted.** The arbitration gate proves a claim cites evidence for the current head, not that the evidence is true; there is no independent verifier. | `reducer.go:626-648`. | A worker that records a false but non-vacuous receipt passes the gate. | TBD ([gate angles](gate-angles.md)) |
-| **G-16** | **Live-test receipts are caller-asserted.** `RecordLiveTest` trusts the caller's host, target and receipt strings. | `reducer.go:543-570`. | "Done" is as honest as whoever records the live test. | TBD |
-| **G-17** | **Spend is not reconciled with the provider.** The price table is configuration; the month ledger is per database. | R15 Limits. | A wrong table or a second database defeats the month cap; the cap does not bound the real bill. | TBD |
-| **G-18** | **macOS profile is write-confinement only.** `(allow default)` leaves network, process execution and non-listed reads open; `sandbox-exec` is deprecated by Apple. | `host/darwin.go:61`. | The Mac runs review (P0) only; no writer grants. | TBD |
-| **G-19** | **Runner role is shared per host** and can read every table; a forged transport receipt for a live run is believed. | README (Known limits); R18. | One compromised worker can affect another running mission on the same host. | TBD |
-| **G-20** | **The oracle's rules live outside the repository.** The native loop's shell guard calls external hook scripts. | `policy/oracle.go`. | Part of that gate is Convention; this repository cannot test the hooks' rules. | TBD |
-| **G-21** | **No model-quality evaluation gates**: no held-out sets, no statistical promotion rule. Evals today are unit, property, mutant and negative-control tests. | [evals notes](sota/evals.md). | Model or prompt changes are not gated on measured quality. | TBD |
-| **G-22** | **Single host; no placement, no shared-nothing multi-host scheduling.** | [multi-machine notes](sota/multi-machine.md). | Scale and failure domains are one machine. | TBD |
-| **G-23** | **Mutants missing for late gates** (T2, T3, T6, T7, operator checks, month cap, 0025). Covered here only by throwaway controls C1 to C9. | Evidence section. | Regression of those gates depends on the named unit tests alone until mutants are added. | TBD |
-| **G-24** | **Ambiguity of approval on retry.** A `FAILED_DEFINITE` or `NOT_APPLIED` effect re-arms under the same key with its approval kept (`APPROVED`) for the same request hash. The approval has no expiry or use count. | `0020` guard, `broker.go:664`. | An approval granted once covers every retry of the same exact request, indefinitely. | TBD |
+| **G-8** | **Linux sandbox same-UID escape.** On a same-UID host a worker can start a sibling unit via the user manager's bus and signal same-UID processes. | `TestNegativeControls` output in Evidence; `host/linux.go:20-26`. | No real provider runs on Linux until the dedicated-account repair passes re-review. | goodqa#15145 |
+| **G-9** | **Audit and event log are not tamper-evident.** UPDATE, DELETE and TRUNCATE are rejected by triggers, but there is no hash chain, signed checkpoint, separate audit-writer role or off-host copy; the table owner can disable the triggers. | `0011:38-44`, `0020`. | An owner-level compromise can rewrite history undetectably. | goodqa#15139 |
+| **G-10** | **The must-fail mutant gate does not run at `bc5a6d3`, and part of it is stale.** The unmutated baseline is red (`TestNoModelLiteralsInSource`), so `run.py` exits `BASELINE FAIL` on the full set. Of 17 mutants re-run on green packages, 2 survive (M184, M244: probably edits to function bodies later replaced by `CREATE OR REPLACE`) and 2 time out (M45, M259). | Evidence section. | The strongest failing-first control in the repository is unusable until fixed; 343 declared mutants are not re-run in CI-style use. | goodqa#15128 |
+| **G-11** | **Stale golden files** (`TestExpositionGolden`, `TestGoldenFrame`, `TestDrillDown`) after the month cap moved to USD 20. | Evidence section. | Three tests fail on a clean tree; a real regression in those packages could hide among them. | goodqa#15128 |
+| **G-12** | **`SetCap` is a bare UPDATE** with no reason, actor or audit row. | `store/store.go:197-199`. | The admission limit can be changed silently by anyone with write access to the table. | goodqa#15145 |
+| **G-13** | **Final admission is check-then-start, not atomic.** The window is small but real; the ungated path stores no decision. | R3 Limits. | A runner can start with authority that expires moments later. The fence still stops its Fabric writes. | goodqa#15145 |
+| **G-14** | **No clock-step test for leases.** The model assumes the database clock does not move backwards. | No test. | A backwards step could extend leases. Postgres does not promise monotonic wall time. | goodqa#15145 |
+| **G-15** | **Evidence receipts are worker-asserted and carry no pass/fail verdict.** The arbitration gate proves a claim cites evidence for the current head, not that the evidence is true or that the run passed; there is no independent verifier. | `reducer.go:626-648`. | A worker that records a false but non-vacuous receipt passes the gate. | goodqa#15145 |
+| **G-16** | **Live-test receipts are caller-asserted.** `RecordLiveTest` trusts the caller's host, target and receipt strings. | `reducer.go:543-570`. | "Done" is as honest as whoever records the live test. | goodqa#15145 |
+| **G-17** | **Spend is not reconciled with the provider.** The price table is configuration; the month ledger is per database. | R15 Limits. | A wrong table or a second database defeats the month cap; the cap does not bound the real bill. | goodqa#15145 |
+| **G-18** | **macOS profile is write-confinement only.** `(allow default)` leaves network, process execution and non-listed reads open; `sandbox-exec` is deprecated by Apple. | `host/darwin.go:61`. | The Mac runs review (P0) only; no writer grants. | goodqa#15145 |
+| **G-19** | **Runner role is shared per host** and can read every table; a forged transport receipt for a live run is believed. | README (Known limits); R18. | One compromised worker can affect another running mission on the same host. | goodqa#15145 |
+| **G-20** | **The oracle's rules live outside the repository.** The native loop's shell guard calls external hook scripts. | `policy/oracle.go`. | Part of that gate is Convention; this repository cannot test the hooks' rules. | goodqa#15145 |
+| **G-21** | **No model-quality evaluation gates**: no held-out sets, no statistical promotion rule. Evals today are unit, property, mutant and negative-control tests. | [evals notes](sota/evals.md). | Model or prompt changes are not gated on measured quality. | goodqa#15145 |
+| **G-22** | **Single host; no placement, no shared-nothing multi-host scheduling.** | [multi-machine notes](sota/multi-machine.md). | Scale and failure domains are one machine. | goodqa#15145 |
+| **G-23** | **Mutants missing for late gates** (T2, T3, T6, T7, operator checks, month cap, 0025). Covered here only by throwaway controls C1 to C9. | Evidence section. | Regression of those gates depends on the named unit tests alone until mutants are added. | goodqa#15128 |
+| **G-24** | **Ambiguity of approval on retry.** A `FAILED_DEFINITE` or `NOT_APPLIED` effect re-arms under the same key with its approval kept (`APPROVED`) for the same request hash. The approval has no expiry or use count. | `0020` guard, `broker.go:664`. | An approval granted once covers every retry of the same exact request, indefinitely. | goodqa#15145 |
+
+| **G-25** | **The runner role can deny service to the broker and scheduler.** It can pin the per-effect advisory lock (`pg_advisory_lock(4011, hashtext(id))`), take `ACCESS EXCLUSIVE` on `effects` and `jobs`, lift its own 60 s timeouts with `SET`, and has no connection limit. | `broker.go:324,646`; `store/roles.go` (`RoleTimeout`, `runnerWrites`); red-team probes, report r1. | A worker holding the runner DSN can stall dispatch, completion, metrics and the TUI. The 60 s bound in the README is a default, not a limit. | goodqa#15125 |
+| **G-26** | **Spend holds of an ended attempt can be released uncounted.** `ExpireEndedReservations` marks a not-yet-due `spend.*` hold RELEASED; `Ledger.Spent` counts only receipts and EXPIRED holds. Mechanism reproduced; the end-to-end path with a real daemon is not run. | `store/reservations.go:469-512`; `agent/ledger.go:81`. | A request billed before a crash can drop out of the run, job and month caps. **The caps are bypassable until fixed.** | goodqa#15123 (high) |
+| **G-27** | **The month cap key uses the process clock.** | `native/native.go:224`. | A skewed or faked clock starts a fresh USD 20 month. **Bypassable until fixed.** | goodqa#15124 (high) |
+| **G-28** | **The native loop runs as the app role, and the `claude -p` path has a USD 1000 per-run ceiling and no month ledger.** | `store/roles.go:35` (runner cannot write what the loop writes); `host/grant.go` (budget range). | The model-driven process holds the role that approves effects and writes any event. | goodqa#15126 |
+| **G-29** | **Nine gates can be weakened with every named test still passing; one cited test always skips.** | Test-strength findings above; `tools/tools_test.go:259-264`. | Regression of those clauses would not be noticed. | goodqa#15127 |
+| **G-30** | **The mutant-suite gaps** are tracked together with G-10, G-11 and G-23. | Evidence section. | See G-10. | goodqa#15128 |
 
 Items that the README already states are repeated here deliberately, so that this document
 is complete without it.
 
 ## Gate angles we do not yet cover
 
-A research sweep (accessed 2026-11-07) of vendor agent-safety documents, OWASP, NIST, MITRE ATLAS,
-SLSA and published incident reports found the gate types below. The full table with threats,
+A research sweep (accessed 2026-11-07) of vendor agent-safety documents, OWASP, NIST,
+SLSA and published incident reports (MITRE ATLAS and the NIST generative-AI profile could not be read from a primary source and are not mapped; the list below is not claimed complete against them) found the gate types below. The full table with threats,
 who does each today (cited), Fabric's coverage with evidence, a design sketch and a priority
 is in [gate-angles.md](gate-angles.md). Headline: Fabric has partial coverage of
 approval binding, spend circuit breaking, replay and kill switches, and none of prompt-injection

@@ -1,7 +1,7 @@
 # Gate angles: threats a Postgres-backed agent control plane should gate, and where Fabric stands
 Status line: pinned to commit bc5a6d3; sources accessed 2026-11-07.
 
-This note lists gate angles beyond the ones Fabric already implements (see review-gates-A.md, R1..R25). For each angle it states the threat, who addresses it today, what Fabric does at bc5a6d3, a design for a Postgres-backed control plane, and a priority. Priorities weigh likelihood times impact for Fabric as it is now: a single-host, shadow-stage system whose workers are coding agents that edit repositories, run shell commands and request effects (ticket comments, publish) through a broker. Source tags: H = primary page read, M = primary abstract or partial read, L = secondary or search summary. L-tagged claims are marked "unverified" and no number from them is relied on. Fabric claims cite file:line at bc5a6d3; where no code was found the text says "not found". Nothing here is a ticket yet.
+This note lists gate angles beyond the ones Fabric already implements (see review-gates.md, R1..R25). For each angle it states the threat, who addresses it today, what Fabric does at bc5a6d3, a design for a Postgres-backed control plane, and a priority. Priorities weigh likelihood times impact for Fabric as it is now: a single-host, shadow-stage system whose workers are coding agents that edit repositories, run shell commands and request effects (ticket comments, publish) through a broker. Source tags: H = primary page read, M = primary abstract or partial read, L = secondary or search summary. L-tagged claims are marked "unverified" and no number from them is relied on. Fabric claims cite file:line at bc5a6d3; where no code was found the text says "not found". Nothing here is a ticket yet.
 
 ## Summary
 
@@ -340,3 +340,34 @@ Reference frameworks: OWASP Top 10 for LLM Applications 2025 [genai.owasp.org/ll
 - Line numbers in store/roles.go and the exact runner-role tests.
 - Loop-guard behavior (I), persistent memory (E) and the approval view (G).
 - All L-tagged incident reports (EchoLeak, GitHub MCP flow, Replit, PocketOS, s1ngularity, forum approval reports) and the IETF draft; MITRE ATLAS and NIST AI 600-1 primaries were unreadable.
+
+
+## Additions and corrections after the first independent review
+
+Added angles (each is a gate type the field lists and Fabric does not have; no design is claimed yet; ticket: TBD):
+
+- **Poisoned repository or tool content as a data-poisoning route** (OWASP LLM04:2025): content the agent reads can steer later missions. Related to the taint-tracking angle; no control today.
+- **Worker artifacts run later by trusted tooling** (OWASP LLM05:2025 improper output handling): Makefile and package scripts, `.envrc`, editor and CI configs written by a worker are executed by an operator or CI job. No gate inspects them.
+- **System-prompt and transcript leakage** (OWASP LLM07:2025): prompts and transcripts are readable by the runner database role.
+- **Deceptive or sandbagging behaviour** (OWASP agentic list, third-party page, unverified): no control; related to the independent-verifier angle.
+- **Poisoning of messages between side-by-side attempts** (asks, wakes, receipts between a writer and a reviewer; OWASP agentic list, unverified): answers carry a source grammar, not trust.
+- **Integrity of the external hook scripts** the policy oracle calls: part of that gate is convention (review-gates.md G-20).
+- **Runner-role database denial of service** (advisory locks, table locks, connection exhaustion): reproduced, goodqa#15125; this is an existing gap, not only an angle.
+- **Cost harvesting** (MITRE ATLAS technique names were not read from a primary source; treat as unverified): bounded by the caps, which are bypassable today (goodqa#15123, goodqa#15124).
+- **Incident response and disclosure**: no `SECURITY.md` or disclosure policy file in the repository (NIST AI RMF and SSDF theme).
+- **Source-track build integrity** (SLSA v1.2 source track was not read): two-party review and branch protection are process, not repository, controls.
+
+Corrections to statements above, checked against the code at bc5a6d3:
+
+- Default-deny egress is absent: macOS allows the network and Linux limits TCP connect and bind by port only (review-gates.md G-4). Where an angle above says this was "not verified", read "absent".
+- Provider refusals: the native loop has a typed park error (`internal/agent/types.go:114`, `internal/provider/anthropic/stream.go:431`) and `sota/native-loop.md` documents the refusal path.
+- Loop detection: not found (`sota/native-loop.md`). Read "not verified" as "not found".
+- Git credentials: the publish executor passes only an allow-listed environment, which includes `SSH_AUTH_SOCK` (`internal/effects/publish.go`, `gitEnvKeep`), so a host SSH agent is reachable by the push child.
+- The MITRE ATLAS and NIST AI 600-1 primaries were not read; no coverage against them is claimed.
+
+
+## Ticket map
+
+Tickets filed for the high-priority missing gates (priority P0 in the table) and the first-ranked item of each component note:
+prompt-injection and taint tracking goodqa#15144; cross-mission rate and spend breakers goodqa#15141; secret egress DLP goodqa#15142;
+per-mission short-lived credentials goodqa#15143. Other angles are `Ticket: TBD` until picked up; the per-component upgrade tickets are listed in each note.
