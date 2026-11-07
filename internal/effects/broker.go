@@ -14,9 +14,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"fabric/internal/domain"
@@ -46,6 +48,9 @@ var (
 	ErrRequestTampered = errors.New("stored request does not match its hash")
 	ErrNotDispatchable = errors.New("effect is not in a dispatchable state")
 	ErrNotReconcilable = errors.New("effect is not UNKNOWN or RECONCILING")
+	// ErrSettleRunEnded: the runner role may settle only a live run's
+	// dispatch (migration 0019); the outcome stays DISPATCHED for readback.
+	ErrSettleRunEnded = errors.New("dispatch outcome not recorded: run ended; reconcile with the app role")
 )
 
 // Intent is what a caller submits.
@@ -126,6 +131,9 @@ type Executor interface {
 type Broker struct {
 	st   *store.Store
 	pool *pgxpool.Pool
+	// settleRefused counts dispatch outcomes the database refused to record
+	// because the run had ended (ErrSettleRunEnded).
+	settleRefused atomic.Int64
 
 	// Crash cutpoints for tests: after the dispatch row commits but before
 	// transport, and after transport but before the receipt commits.
@@ -332,6 +340,11 @@ func (b *Broker) settle(ctx context.Context, id string, dispatch int, rc Receipt
 	rcJSON, _ := json.Marshal(rc)
 	if _, err := b.pool.Exec(ctx, `UPDATE effects SET state = $2, receipt = $3, last_error = $4, updated_at = now() WHERE id = $1 AND state = $5 AND dispatches = $6`,
 		id, string(state), rcJSON, rc.Detail, string(Dispatched), dispatch); err != nil {
+		var pe *pgconn.PgError
+		if errors.As(err, &pe) && pe.Code == "42501" {
+			b.settleRefused.Add(1)
+			return Effect{}, fmt.Errorf("%w: effect %s (%s)", ErrSettleRunEnded, id, pe.Message)
+		}
 		return Effect{}, err
 	}
 	return b.Load(ctx, id)
@@ -446,3 +459,7 @@ func (b *Broker) Unresolved(ctx context.Context, age time.Duration, limit int) (
 	}
 	return ids, rows.Err()
 }
+
+// SettleRefused is how many dispatch outcomes this broker could not record
+// because their run had ended.
+func (b *Broker) SettleRefused() int64 { return b.settleRefused.Load() }

@@ -2607,5 +2607,18 @@
     "        IF OLD.state IN ('INTENT', 'APPROVED') AND NEW.state = 'DISPATCHED' AND NEW.dispatches = OLD.dispatches + 1\n           AND public.fabric_runner_run_live(OLD.mission_id, OLD.attempt_id, OLD.fence)\n"
    ]
   ]
+ },
+ {
+  "id": "M199_settle_refusal_raw",
+  "invariant": "effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestRunnerRoleBrokerFlows",
+  "edits": [
+   [
+    "\t\tif errors.As(err, &pe) && pe.Code == \"42501\" {",
+    "\t\tif errors.As(err, &pe) && pe.Code == \"42501\" && false {"
+   ]
+  ]
  }
 ]

@@ -142,6 +142,13 @@ func TestRunnerRoleBrokerFlows(t *testing.T) {
 			t.Errorf("runner settled an ended run's dispatch as %s: %v, want 42501", to, err)
 		}
 	}
+	// Review nit on 2afeffe: the refused settle names the remedy.
+	if _, err := rb.settle(ctx, "e_crash", 1, Receipt{Outcome: OutcomeConfirmed}); !errors.Is(err, ErrSettleRunEnded) {
+		t.Errorf("settle after the run ended: %v, want ErrSettleRunEnded", err)
+	}
+	if n := rb.SettleRefused(); n != 1 {
+		t.Errorf("settle refusals counted %d, want 1", n)
+	}
 	// An effect for an attempt that is not running.
 	other := spec("kr6", "elsewhere")
 	other.Attempt, other.Fence = "r_gone", 1
