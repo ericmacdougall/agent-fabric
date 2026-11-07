@@ -275,6 +275,13 @@ func TestShellAllowlistIsAnchored(t *testing.T) {
 	if o, isErr := sh.Run(context.Background(), input("command", "echo hi")); isErr || !strings.Contains(o, "hi") {
 		t.Errorf("plain command refused: %q %v", o, isErr)
 	}
+	// Even a pattern that matches everything cannot admit shell syntax.
+	wide := &tools.Shell{C: f.conf, Allow: allow(`^.*$`), Timeout: 5 * time.Second}
+	for _, c := range []string{"ls; id", "ls | cat", "ls && id", "echo `id`", "echo $(id)", "ls > x"} {
+		if o, isErr := wide.Run(context.Background(), input("command", c)); !isErr || !strings.Contains(o, "control characters") {
+			t.Errorf("wide allowlist admitted %q: %q", c, o)
+		}
+	}
 }
 
 // F8: a child that floods its output is stopped long before the disk fills.

@@ -129,7 +129,7 @@
   "id": "R1-grep-symlink-operand",
   "file": "internal/tools/exec.go",
   "old": "if err := NoSymlinkPath(g.Root, p); err != nil {",
-  "new": "if false {",
+  "new": "if err := NoSymlinkPath(g.Root, p); err != nil && false {",
   "cmd": "go test ./internal/tools -count=1 -run TestGrep"
  },
  {
