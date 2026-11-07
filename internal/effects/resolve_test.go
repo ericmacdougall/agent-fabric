@@ -150,7 +150,7 @@ func TestAppRoleCannotBypassEffectOutcomes(t *testing.T) {
 				"NOT_APPLIED":     {"DISPATCHED", "UNKNOWN", "RECONCILING", "NOT_APPLIED"},
 				"FAILED_DEFINITE": {"DISPATCHED", "FAILED_DEFINITE"},
 			}[state] {
-				if _, err := st.Pool().Exec(ctx, "UPDATE effects SET state = $2, dispatches = dispatches + CASE WHEN $2 = 'DISPATCHED' THEN 1 ELSE 0 END WHERE id = $1", e.ID, s); err != nil {
+				if _, err := st.Pool().Exec(ctx, "UPDATE effects SET receipt = CASE WHEN state = 'DISPATCHED' AND $2::text IN ('CONFIRMED', 'FAILED_DEFINITE') THEN jsonb_build_object('outcome', $2::text) ELSE receipt END, state = $2, dispatches = dispatches + CASE WHEN $2 = 'DISPATCHED' THEN 1 ELSE 0 END WHERE id = $1", e.ID, s); err != nil {
 					t.Fatalf("fixture %s -> %s: %v", key, s, err)
 				}
 			}
@@ -287,6 +287,10 @@ func TestAbandonStrandedIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	h, err := b.Submit(ctx, fake, uspec("ab4"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	// One that was dispatched once, failed definitely, and was retried.
 	d, err := b.Submit(ctx, fake, IntentSpec{Mission: "m_1", Attempt: "r_1", Fence: 1, Kind: "ticket_comment", Subject: "ticket:goodqa#1",
 		IdemKey: "ab2", Request: json.RawMessage(`{"ticket": "goodqa#1", "body": "sent once"}`)})
@@ -346,13 +350,28 @@ func TestAbandonStrandedIntent(t *testing.T) {
 		Scan(&n, &from, &to, &actor, &evid); err != nil || n != 1 || from != "INTENT" || to != "NOT_APPLIED" || actor != "eric" || evid != "wal:w_a" {
 		t.Fatalf("abandon audit: n=%d %s->%s actor=%q evidence=%q err=%v", n, from, to, actor, evid, err)
 	}
+	// Review T2 on e35d78e: an abandoned effect is final; a retry would lose
+	// its approval requirement and block done again.
+	if _, err := ab.Retry(ctx, e.ID); !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Errorf("retry of an abandoned effect: %v, want ErrInvalidTransition", err)
+	}
+	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET state = 'INTENT' WHERE id = $1", e.ID); err == nil {
+		t.Error("raw retry of an abandoned effect accepted")
+	}
 	// An audit row from an earlier transaction does not authorize a later
-	// move: retry, then a raw abandon, is refused.
-	if _, err := ab.Retry(ctx, e.ID); err != nil {
+	// move: a row committed first, then a raw abandon, is refused.
+	pre, err := ab.pool.Begin(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET state = 'NOT_APPLIED' WHERE id = $1", e.ID); err == nil {
-		t.Error("an earlier audit row authorized a second abandon")
+	if _, err := pre.Exec(ctx, `INSERT INTO effect_resolutions (effect_id, from_state, to_state, reason, evidence, actor) VALUES ($1, 'INTENT', 'NOT_APPLIED', 'r', 'e', 'eric')`, h.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := pre.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET state = 'NOT_APPLIED' WHERE id = $1", h.ID); err == nil {
+		t.Error("an earlier audit row authorized a later abandon")
 	}
 }
 
@@ -584,5 +603,73 @@ func TestDispatchRefusesUnapprovedIntentWithApproval(t *testing.T) {
 	}
 	if fake.Count() != 0 {
 		t.Fatalf("remote writes %d", fake.Count())
+	}
+}
+
+// Review T1 on e35d78e: a DISPATCHED effect left by a crash (the remote may
+// have applied it) has a supported exit once its attempt is no longer live:
+// Unresolved lists it and Reconcile reads it back. A raw settle needs a
+// matching new receipt, so it cannot be relabelled FAILED_DEFINITE and sent
+// again.
+func TestStaleDispatchedRecovers(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	runnerBroker(t, ctx, st)
+	ab := appBroker(t, ctx, st)
+	crash := func(key string) Effect {
+		t.Helper()
+		e, err := b.Submit(ctx, fake, uspec(key))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.afterTransport = func(Effect, Receipt) { panic("crash after transport") }
+		func() {
+			defer func() { recover() }() //nolint:errcheck
+			b.Dispatch(ctx, fake, e.ID)  //nolint:errcheck
+		}()
+		b.afterTransport = nil
+		e, _ = b.Load(ctx, e.ID)
+		if e.State != Dispatched {
+			t.Fatalf("setup %s: %s", key, e.State)
+		}
+		return e
+	}
+	e := crash("t1a")
+	f := crash("t1b")
+	if fake.Count() != 2 {
+		t.Fatalf("remote writes %d, want 2", fake.Count())
+	}
+	// While the attempt is live the dispatcher may still settle it.
+	if _, err := ab.Reconcile(ctx, fake, e.ID); !errors.Is(err, ErrNotReconcilable) {
+		t.Errorf("reconcile of a live attempt's DISPATCHED effect: %v, want ErrNotReconcilable", err)
+	}
+	if ids, _ := ab.Unresolved(ctx, 0, 10); len(ids) != 0 {
+		t.Errorf("unresolved lists live dispatches: %v", ids)
+	}
+	if _, err := st.Pool().Exec(ctx, "UPDATE attempts SET state = 'UNKNOWN' WHERE id = 'r_1'"); err != nil {
+		t.Fatal(err)
+	}
+	// A raw settle without a matching new receipt is refused (RT-T1).
+	for _, q := range []string{
+		"UPDATE effects SET state = 'FAILED_DEFINITE' WHERE id = $1",
+		"UPDATE effects SET state = 'CONFIRMED' WHERE id = $1",
+		`UPDATE effects SET state = 'FAILED_DEFINITE', receipt = '{"outcome":"CONFIRMED"}' WHERE id = $1`,
+	} {
+		if _, err := ab.pool.Exec(ctx, q, f.ID); err == nil {
+			t.Errorf("raw settle accepted: %s", q)
+		}
+	}
+	ids, err := ab.Unresolved(ctx, 0, 10)
+	if err != nil || len(ids) != 2 {
+		t.Fatalf("unresolved after the attempt ended: %v %v, want both", ids, err)
+	}
+	for _, id := range []string{e.ID, f.ID} {
+		got, err := ab.Reconcile(ctx, fake, id)
+		if err != nil || got.State != Confirmed {
+			t.Errorf("reconcile of stale %s: %+v %v", id, got, err)
+		}
+	}
+	if fake.Count() != 2 {
+		t.Fatalf("recovery sent again: remote writes %d", fake.Count())
 	}
 }

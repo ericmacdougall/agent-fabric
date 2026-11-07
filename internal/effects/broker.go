@@ -373,6 +373,9 @@ func (b *Broker) settle(ctx context.Context, id string, dispatch int, rc Receipt
 // Reconcile is a token-free readback for an UNKNOWN effect (plan invariant
 // 9). It never dispatches.
 func (b *Broker) Reconcile(ctx context.Context, exec Executor, id string) (Effect, error) {
+	if err := b.markStaleDispatched(ctx, id); err != nil {
+		return Effect{}, err
+	}
 	tag, err := b.pool.Exec(ctx, `UPDATE effects SET state = $2, updated_at = now() WHERE id = $1 AND state IN ($3, $2)`,
 		id, string(Reconciling), string(Unknown))
 	if err != nil {
@@ -408,6 +411,22 @@ func (b *Broker) Reconcile(ctx context.Context, exec Executor, id string) (Effec
 	return b.Load(ctx, id)
 }
 
+// staleAttempt is SQL true when the effect's attempt can no longer settle a
+// dispatch itself: it is missing or not live.
+const staleAttempt = `NOT EXISTS (SELECT 1 FROM attempts a WHERE a.id = effects.attempt_id
+	AND a.state IN ('ADMITTED', 'LEASED', 'PREPARING', 'RUNNING'))`
+
+// markStaleDispatched moves a DISPATCHED effect whose attempt is no longer
+// live to UNKNOWN (review T1 on e35d78e): the process that sent it crashed
+// or lost its lease, so its outcome is unknown and only a readback may
+// settle it. A live attempt's dispatch is left to its dispatcher.
+func (b *Broker) markStaleDispatched(ctx context.Context, id string) error {
+	_, err := b.pool.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now()
+		WHERE id = $1 AND state = $4 AND `+staleAttempt,
+		id, string(Unknown), "stale dispatch: its attempt ended before the outcome was recorded", string(Dispatched))
+	return err
+}
+
 // Retry re-arms a FAILED_DEFINITE or NOT_APPLIED effect under the same key.
 // UNKNOWN is refused: reconcile first.
 func (b *Broker) Retry(ctx context.Context, id string) (Effect, error) {
@@ -421,6 +440,14 @@ func (b *Broker) Retry(ctx context.Context, id string) (Effect, error) {
 	case FailedDefinite, NotApplied:
 	default:
 		return Effect{}, fmt.Errorf("%w: retry while %s", domain.ErrInvalidTransition, e.State)
+	}
+	var abandoned bool
+	if err := b.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM effect_resolutions WHERE effect_id = $1 AND to_state = $2)`,
+		id, string(NotApplied)).Scan(&abandoned); err != nil {
+		return Effect{}, err
+	}
+	if abandoned {
+		return Effect{}, fmt.Errorf("%w: effect %s was abandoned and is final", domain.ErrInvalidTransition, id)
 	}
 	next := Intent
 	if e.ApprovalSHA != "" {
@@ -463,8 +490,11 @@ func (b *Broker) loadTx(ctx context.Context, tx pgx.Tx, col, val string) (Effect
 
 // Unresolved lists UNKNOWN/RECONCILING effects older than age, bounded.
 func (b *Broker) Unresolved(ctx context.Context, age time.Duration, limit int) ([]string, error) {
-	rows, err := b.pool.Query(ctx, `SELECT id FROM effects WHERE state IN ($1, $2) AND updated_at < now() - $3::interval ORDER BY updated_at LIMIT $4`,
-		string(Unknown), string(Reconciling), fmt.Sprintf("%d milliseconds", age.Milliseconds()), limit)
+	// Review T1: a DISPATCHED effect whose attempt is no longer live is
+	// unresolved too; Reconcile moves it to UNKNOWN and reads it back.
+	rows, err := b.pool.Query(ctx, `SELECT id FROM effects WHERE (state IN ($1, $2) OR (state = $5 AND `+staleAttempt+`))
+		AND updated_at < now() - $3::interval ORDER BY updated_at LIMIT $4`,
+		string(Unknown), string(Reconciling), fmt.Sprintf("%d milliseconds", age.Milliseconds()), limit, string(Dispatched))
 	if err != nil {
 		return nil, err
 	}

@@ -59,13 +59,30 @@ func goodqaExecutor() (*effects.GoodQA, error) {
 //	fab effect comment --mission M --attempt R --fence F --issue-id UUID --ticket goodqa#N --body TEXT --key K [--approve]
 //	fab effect reconcile --id E   (app role: readback is not a runner step, 0018)
 //	fab effect show --id E
+//	fab effect unresolved [--age 10m]   (UNKNOWN, RECONCILING, and DISPATCHED of an ended attempt; then fab effect reconcile)
 //	fab effect resolve --id E --outcome applied|not_applied --reason R --evidence REF   (app role; QUARANTINED only, audited)
 //	fab effect abandon --id E --reason R --evidence REF   (app role; a never-dispatched intent whose attempt ended -> NOT_APPLIED, audited)
 func effectMain(args []string) error {
 	if len(args) == 0 {
-		return errors.New("effect comment|reconcile|show|resolve|abandon")
+		return errors.New("effect comment|reconcile|show|resolve|abandon|unresolved")
 	}
 	switch args[0] {
+	case "unresolved":
+		fs := flag.NewFlagSet("effect unresolved", flag.ContinueOnError)
+		age := fs.Duration("age", 0, "only effects unchanged for at least this long")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return withStore(func(ctx context.Context, st *store.Store) error {
+			ids, err := effects.New(st).Unresolved(ctx, *age, 200)
+			if err != nil {
+				return err
+			}
+			for _, id := range ids {
+				fmt.Println(id)
+			}
+			return nil
+		})
 	case "abandon":
 		fs := flag.NewFlagSet("effect abandon", flag.ContinueOnError)
 		id := fs.String("id", "", "effect id")
