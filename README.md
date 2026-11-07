@@ -186,6 +186,25 @@ python3 -I tools/mutants/run.py --repo . --out mutants.tsv
 
 Go 1.22, `pgx/v5` and `x/sys` only.
 
+## Deploying
+
+1. Back up the database first (`pg_dump -Fc`), check the dump with
+   `pg_restore --list`, and keep the previous `fab` binary for rollback.
+2. Build from a fresh `git clone` checked out at the release commit, with
+   `go build -buildvcs=true -o <path> ./cmd/fab`. Check that `git status
+   --porcelain` is empty and that `<path> version` prints the commit's
+   12-character prefix; refuse to install a build that prints `devel` or
+   ends in `-dirty`. A build from a `git worktree` checkout can lose the VCS
+   stamp and print `devel`.
+3. Stop anything using the database, then run `fab migrate` as the owner.
+4. Run `fab db roles` as the owner after every migration, with the same
+   password files, so the app and runner roles are granted the new tables;
+   without it the app role gets `permission denied` (SQLSTATE 42501).
+5. Restart, then smoke test: `fab version` and `fab metrics` (exit 0, and
+   `fabric_schema_level` is the newest migration).
+
+Rollback is the previous binary plus `pg_restore` of the dump.
+
 ## License
 
 Apache-2.0. See `LICENSE` for the full text and `NOTICE` for attribution.

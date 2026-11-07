@@ -74,15 +74,30 @@ func dbMain(args []string) error {
 			return err
 		}
 		return withStore(func(ctx context.Context, st *store.Store) error {
-			if err := st.SetCapacity(ctx, *res, *unit, *capacity); err != nil {
-				return err
-			}
-			c, h, err := st.Capacity(ctx, *res)
-			fmt.Printf("%s: capacity %d, held %d\n", *res, c, h)
-			return err
+			return setCapacity(ctx, st, *res, *unit, *capacity)
 		})
 	}
 	return fmt.Errorf("fab db: unknown subcommand %q", args[0])
+}
+
+type capacityStore interface {
+	SetCapacity(ctx context.Context, resource, unit string, capacity int64) error
+	Capacity(ctx context.Context, resource string) (capacity, held int64, err error)
+}
+
+// setCapacity runs `fab db capacity`. A domain refusal (bad input, a unit
+// change, a capacity below what is held) changed nothing, so it becomes a
+// *store.Refusal and main exits 3, not 1 (review F7, goodqa#15074).
+func setCapacity(ctx context.Context, st capacityStore, res, unit string, capacity int64) error {
+	if err := st.SetCapacity(ctx, res, unit, capacity); err != nil {
+		return refusal(err)
+	}
+	c, h, err := st.Capacity(ctx, res)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s: capacity %d, held %d\n", res, c, h)
+	return nil
 }
 
 func readSecret(path string) (string, error) {

@@ -78,12 +78,20 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fab:", err)
-		var ref *store.Refusal
-		if errors.As(err, &ref) {
-			os.Exit(3)
-		}
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
+}
+
+// exitCode: 3 is a refusal (nothing changed), 1 an error of unknown effect.
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ref *store.Refusal
+	if errors.As(err, &ref) {
+		return 3
+	}
+	return 1
 }
 
 func usage() {
