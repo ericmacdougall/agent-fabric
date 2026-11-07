@@ -473,7 +473,9 @@ func TestPublishEnvAllowListed(t *testing.T) {
 	}
 	args, _ := os.ReadFile(dump + ".args")
 	// Hooks are off even though the mirror has none (no template).
-	for _, want := range []string{"push.gpgSign=false", "core.hooksPath=/dev/null"} {
+	// Review H1 on a5b3ac1: commit parents come from the commit objects, not
+	// from a commit-graph the runner could forge.
+	for _, want := range []string{"push.gpgSign=false", "core.hooksPath=/dev/null", "core.commitGraph=false"} {
 		if !strings.Contains(string(args), want) {
 			t.Errorf("git args lack %s: %s", want, args)
 		}

@@ -94,6 +94,10 @@ var gitSafety = []string{
 	"-c", "push.recurseSubmodules=no",
 	"-c", "push.followTags=false",
 	"-c", "push.gpgSign=false",
+	// Review H1 on a5b3ac1: the fast-forward check must read parents from
+	// the commit objects (whose hashes cover them), never from a
+	// commit-graph file in the runner-writable source objects directory.
+	"-c", "core.commitGraph=false",
 }
 
 // riskyConfig matches configuration keys that could redirect the push or
@@ -257,7 +261,10 @@ func (p *Publish) repoDir(repo string) (string, error) {
 // bind checks, before any transport, that the repository's git dir and
 // common dir are inside Root, that it borrows no objects from elsewhere,
 // and that no configuration could redirect or wrap the transport. It
-// returns the resolved object directory.
+// returns the resolved object directory. Its own git calls (rev-parse and
+// config) run in the source repository and read its configuration; they
+// are a fail-closed check only. Never add a transport or ancestry call
+// here: those run in the mirror.
 func (p *Publish) bind(ctx context.Context, dir string) (string, error) {
 	root, err := filepath.EvalSymlinks(p.Root)
 	if err != nil {

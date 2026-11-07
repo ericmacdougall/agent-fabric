@@ -3946,5 +3946,18 @@
     ""
    ]
   ]
+ },
+ {
+  "id": "M307_publish_commit_graph_on",
+  "invariant": "publish_cas",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/publish.go",
+  "expect": "TestPublishEnvAllowListed",
+  "edits": [
+   [
+    "\t\"-c\", \"core.commitGraph=false\",\n",
+    ""
+   ]
+  ]
  }
 ]
