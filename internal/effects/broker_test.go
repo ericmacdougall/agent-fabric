@@ -67,9 +67,6 @@ func setup(t *testing.T) (context.Context, *store.Store, *Broker, *Fake) {
 	if err := st.Truncate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Pool().Exec(ctx, "TRUNCATE effects CASCADE"); err != nil {
-		t.Fatal(err)
-	}
 	if err := st.CreateMission(ctx, "m_1", "GoodQA goodqa#14791", "fabric", "main"); err != nil {
 		t.Fatal(err)
 	}

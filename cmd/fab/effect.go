@@ -60,11 +60,28 @@ func goodqaExecutor() (*effects.GoodQA, error) {
 //	fab effect reconcile --id E   (app role: readback is not a runner step, 0018)
 //	fab effect show --id E
 //	fab effect resolve --id E --outcome applied|not_applied --reason R --evidence REF   (app role; QUARANTINED only, audited)
+//	fab effect abandon --id E --reason R --evidence REF   (app role; a never-dispatched intent whose attempt ended -> NOT_APPLIED, audited)
 func effectMain(args []string) error {
 	if len(args) == 0 {
-		return errors.New("effect comment|reconcile|show|resolve")
+		return errors.New("effect comment|reconcile|show|resolve|abandon")
 	}
 	switch args[0] {
+	case "abandon":
+		fs := flag.NewFlagSet("effect abandon", flag.ContinueOnError)
+		id := fs.String("id", "", "effect id")
+		reason := fs.String("reason", "", "why the intent is abandoned")
+		evidence := fs.String("evidence", "", "evidence reference (run record, WAL id)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return withStore(func(ctx context.Context, st *store.Store) error {
+			e, err := effects.New(st).Abandon(ctx, *id, *reason, *evidence, actor())
+			if err != nil {
+				return err
+			}
+			fmt.Printf("effect %s %s (%s)\n", e.ID, e.State, e.LastError)
+			return nil
+		})
 	case "resolve":
 		fs := flag.NewFlagSet("effect resolve", flag.ContinueOnError)
 		id := fs.String("id", "", "effect id")

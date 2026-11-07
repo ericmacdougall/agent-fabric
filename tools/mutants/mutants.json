@@ -2763,8 +2763,8 @@
   "expect": "TestDoneCountsBrokerEffects",
   "edits": [
    [
-    "\t\t\tAND state IN ('DISPATCHED', 'UNKNOWN', 'RECONCILING', 'QUARANTINED')`, string(cmd.Mission)).Scan(&env.UnsettledEffects)",
-    "\t\t\tAND false`, string(cmd.Mission)).Scan(&env.UnsettledEffects)"
+    "\t\t\tAND state NOT IN ('CONFIRMED', 'FAILED_DEFINITE', 'NOT_APPLIED', 'RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED')`, string(cmd.Mission))",
+    "\t\t\tAND false`, string(cmd.Mission))"
    ]
   ]
  },
@@ -2789,8 +2789,8 @@
   "expect": "TestResolveQuarantinedEffect",
   "edits": [
    [
-    "\tif reason == \"\" || evidence == \"\" || actor == \"\" {",
-    "\tif actor == \"\" {"
+    "\tif reason == \"\" || evidence == \"\" || actor == \"\" {\n\t\treturn Effect{}, fmt.Errorf(\"%w: resolving",
+    "\tif actor == \"\" {\n\t\treturn Effect{}, fmt.Errorf(\"%w: resolving"
    ]
   ]
  },
@@ -2804,19 +2804,6 @@
    [
     "\tif State(state) != Quarantined {",
     "\tif false {"
-   ]
-  ]
- },
- {
-  "id": "M214_unaudited_resolution",
-  "invariant": "done_effects",
-  "pkg": "./internal/effects",
-  "file": "internal/store/migrations/0020_effect_resolutions.sql",
-  "expect": "TestResolveQuarantinedEffect",
-  "edits": [
-   [
-    "        IF OLD.state <> 'QUARANTINED' OR NOT EXISTS (",
-    "        IF OLD.state <> 'QUARANTINED' OR false AND NOT EXISTS ("
    ]
   ]
  },
@@ -2860,6 +2847,19 @@
   ]
  },
  {
+  "id": "M214_unaudited_resolution",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestResolveQuarantinedEffect",
+  "edits": [
+   [
+    "        IF OLD.state <> 'QUARANTINED' OR NOT EXISTS (",
+    "        IF OLD.state <> 'QUARANTINED' OR false AND NOT EXISTS ("
+   ]
+  ]
+ },
+ {
   "id": "M218_born_resolved",
   "invariant": "done_effects",
   "pkg": "./internal/effects",
@@ -2869,6 +2869,175 @@
    [
     "        IF NEW.state IN ('RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN\n            RAISE",
     "        IF false THEN\n            RAISE"
+   ]
+  ]
+ },
+ {
+  "id": "M219_quarantine_raw_exit",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestAppRoleCannotBypassEffectOutcomes",
+  "edits": [
+   [
+    "    IF OLD.state = 'QUARANTINED' THEN\n        RAISE",
+    "    IF false THEN\n        RAISE"
+   ]
+  ]
+ },
+ {
+  "id": "M220_settled_mutable",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestAppRoleCannotBypassEffectOutcomes",
+  "edits": [
+   [
+    "    IF OLD.state IN ('CONFIRMED', 'RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN",
+    "    IF false THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M221_effects_deletable",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestAppRoleCannotBypassEffectOutcomes",
+  "edits": [
+   [
+    "    IF TG_OP = 'DELETE' THEN\n        RAISE",
+    "    IF TG_OP = 'DELETE' THEN\n        RETURN OLD;\n        RAISE"
+   ]
+  ]
+ },
+ {
+  "id": "M222_dispatch_no_hold",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestDispatchedHoldsAttempt",
+  "edits": [
+   [
+    "       OR (TG_OP = 'UPDATE' AND NEW.state = 'DISPATCHED' AND OLD.state IS DISTINCT FROM 'DISPATCHED') THEN",
+    "       THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M223_dispatch_no_recheck",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestDispatchAfterAttemptEndNoRemoteWrite",
+  "edits": [
+   [
+    "\t// can end meanwhile. Re-check (the 0020 trigger holds it from here).\n\tif err := liveFence(ctx, tx, e.Attempt, e.Fence); err != nil {",
+    "\t// can end meanwhile. Re-check (the 0020 trigger holds it from here).\n\tif err := liveFence(ctx, tx, e.Attempt, e.Fence); false && err != nil {"
+   ]
+  ]
+ },
+ {
+  "id": "M224_resolutions_truncatable",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestAppRoleCannotBypassEffectOutcomes",
+  "edits": [
+   [
+    "CREATE TRIGGER effect_resolutions_no_truncate BEFORE TRUNCATE ON effect_resolutions\n    FOR EACH STATEMENT EXECUTE FUNCTION fabric_reject_truncate();\nCREATE TRIGGER effects_no_truncate BEFORE TRUNCATE ON effects\n    FOR EACH STATEMENT EXECUTE FUNCTION fabric_reject_truncate();",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "M225_done_skips_intents",
+  "invariant": "done_effects",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestDoneCountsBrokerEffects",
+  "edits": [
+   [
+    "'RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED')`, string(cmd.Mission)).Scan(&env.UnsettledEffects)",
+    "'RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED', 'INTENT')`, string(cmd.Mission)).Scan(&env.UnsettledEffects)"
+   ]
+  ]
+ },
+ {
+  "id": "M226_abandon_live",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestAbandonStrandedIntent",
+  "edits": [
+   [
+    "\tif liveFence(ctx, tx, domain.AttemptID(attempt), fence) == nil {",
+    "\tif false && liveFence(ctx, tx, domain.AttemptID(attempt), fence) == nil {"
+   ]
+  ]
+ },
+ {
+  "id": "M227_abandon_unaudited",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestAbandonStrandedIntent",
+  "edits": [
+   [
+    "        IF OLD.dispatches <> 0 OR NEW.dispatches <> 0 OR NOT EXISTS (",
+    "        IF OLD.dispatches <> 0 OR NEW.dispatches <> 0 OR false AND NOT EXISTS ("
+   ]
+  ]
+ },
+ {
+  "id": "M228_abandon_dispatched_db",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestAbandonStrandedIntent",
+  "edits": [
+   [
+    "        IF OLD.dispatches <> 0 OR NEW.dispatches <> 0 OR NOT EXISTS (",
+    "        IF NOT EXISTS ("
+   ]
+  ]
+ },
+ {
+  "id": "M229_abandon_dispatched_go",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestAbandonStrandedIntent",
+  "edits": [
+   [
+    "\tif dispatches != 0 {",
+    "\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M230_audit_any_xact",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestAbandonStrandedIntent",
+  "edits": [
+   [
+    "                AND to_state = 'NOT_APPLIED' AND xact = txid_current()) THEN",
+    "                AND to_state = 'NOT_APPLIED') THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M231_abandon_no_evidence",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestAbandonStrandedIntent",
+  "edits": [
+   [
+    "\tif reason == \"\" || evidence == \"\" || actor == \"\" {\n\t\treturn Effect{}, fmt.Errorf(\"%w: abandoning",
+    "\tif reason == \"\" || actor == \"\" {\n\t\treturn Effect{}, fmt.Errorf(\"%w: abandoning"
    ]
   ]
  }

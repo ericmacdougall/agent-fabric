@@ -2,6 +2,7 @@ package effects
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -118,5 +119,231 @@ func TestSubmitRefusedOnTerminalMission(t *testing.T) {
 	must("done", domain.Command{Kind: domain.CmdCompleteMission, Mission: "m_1"})
 	if _, err := b.Submit(ctx, fake, spec("kt1", "after done")); err == nil {
 		t.Fatal("a broker effect was submitted on a terminal mission")
+	}
+}
+
+// Review O1 on 717bb09: the audit binds every role, not only the runner.
+func TestAppRoleCannotBypassEffectOutcomes(t *testing.T) {
+	ctx, st, _, fake := setup(t)
+	ackRun(t, ctx, st)
+	runnerBroker(t, ctx, st) // creates the roles
+	ab := appBroker(t, ctx, st)
+	mk := func(key, state string) string {
+		t.Helper()
+		e, err := ab.Submit(ctx, fake, spec(key, key))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if state != "INTENT" {
+			// Fixture setup as the owner, through the states the broker uses.
+			for _, s := range map[string][]string{
+				"QUARANTINED":     {"DISPATCHED", "UNKNOWN", "QUARANTINED"},
+				"CONFIRMED":       {"DISPATCHED", "CONFIRMED"},
+				"NOT_APPLIED":     {"DISPATCHED", "UNKNOWN", "NOT_APPLIED"},
+				"FAILED_DEFINITE": {"DISPATCHED", "FAILED_DEFINITE"},
+			}[state] {
+				if _, err := st.Pool().Exec(ctx, "UPDATE effects SET state = $2, subject = id WHERE id = $1", e.ID, s); err != nil {
+					t.Fatalf("fixture %s -> %s: %v", key, s, err)
+				}
+			}
+		}
+		return e.ID
+	}
+	q := mk("o1q", "QUARANTINED")
+	c := mk("o1c", "CONFIRMED")
+	n := mk("o1n", "NOT_APPLIED")
+	f := mk("o1f", "FAILED_DEFINITE")
+	for _, w := range []struct{ id, to string }{
+		{q, "CONFIRMED"}, {q, "NOT_APPLIED"}, {q, "INTENT"}, {q, "UNKNOWN"},
+		{c, "NOT_APPLIED"}, {c, "INTENT"}, {c, "QUARANTINED"},
+		{n, "CONFIRMED"}, {n, "DISPATCHED"},
+		{f, "CONFIRMED"},
+	} {
+		if _, err := ab.pool.Exec(ctx, "UPDATE effects SET state = $2 WHERE id = $1", w.id, w.to); err == nil {
+			t.Errorf("app role moved %s to %s without the broker", w.id, w.to)
+		}
+	}
+	for _, id := range []string{q, c} {
+		if _, err := ab.pool.Exec(ctx, "DELETE FROM effects WHERE id = $1", id); err == nil {
+			t.Errorf("app role deleted effect %s", id)
+		}
+	}
+	// Retry's own moves stay open.
+	if e, err := ab.Retry(ctx, f); err != nil || e.State != Intent {
+		t.Errorf("retry of FAILED_DEFINITE: %+v %v", e, err)
+	}
+	if e, err := ab.Retry(ctx, n); err != nil || e.State != Intent {
+		t.Errorf("retry of NOT_APPLIED: %+v %v", e, err)
+	}
+	// Review O4: the audit and the effects cannot be truncated away.
+	for _, tbl := range []string{"effect_resolutions", "effects"} {
+		if _, err := st.Pool().Exec(ctx, "TRUNCATE "+tbl+" CASCADE"); err == nil {
+			t.Errorf("TRUNCATE %s accepted", tbl)
+		}
+	}
+}
+
+// blockingExec parks Precondition until release closes (review O3).
+type blockingExec struct {
+	*Fake
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b blockingExec) Precondition(ctx context.Context, e Effect) (bool, string, error) {
+	close(b.entered)
+	<-b.release
+	return true, "", nil
+}
+
+// Review O3 on 717bb09: a dispatch parked in Precondition must not write to
+// the remote after its attempt ended.
+func TestDispatchAfterAttemptEndNoRemoteWrite(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	e, err := b.Submit(ctx, fake, spec("o3", "late"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bx := blockingExec{Fake: fake, entered: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { _, err := b.Dispatch(ctx, bx, e.ID); done <- err }()
+	<-bx.entered
+	if _, err := st.Execute(ctx, "fabd", "o3-sel", domain.Command{Kind: domain.CmdSelectCandidate, Mission: "m_1", Head: "sha_t"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Execute(ctx, "fabd", "o3-fin", domain.Command{Kind: domain.CmdFinishAttempt, Mission: "m_1", Attempt: "r_1", Fence: 1,
+		Outcome: "ready_for_review", Claims: []domain.Claim{{AC: "AC-1", Receipt: "rc"}}}); err != nil {
+		t.Fatal(err)
+	}
+	close(bx.release)
+	if err := <-done; !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Fatalf("dispatch after its attempt ended: %v, want the typed ErrInvalidTransition", err)
+	}
+	if fake.Count() != 0 {
+		t.Fatalf("remote writes after the attempt ended: %d", fake.Count())
+	}
+	if got, _ := b.Load(ctx, e.ID); got.State != Intent {
+		t.Fatalf("effect is %s, want INTENT", got.State)
+	}
+}
+
+// Review O3: the move to DISPATCHED holds the attempt row, so ending the
+// attempt waits for it, and done then sees the DISPATCHED row.
+func TestDispatchedHoldsAttempt(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	e, err := b.Submit(ctx, fake, spec("o3b", "held"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := st.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck
+	if _, err := tx.Exec(ctx, "UPDATE effects SET state = 'DISPATCHED', dispatches = dispatches + 1 WHERE id = $1", e.ID); err != nil {
+		t.Fatal(err)
+	}
+	t2, err := st.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer t2.Rollback(context.Background()) //nolint:errcheck
+	if _, err := t2.Exec(ctx, "SET LOCAL lock_timeout = '300ms'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := t2.Exec(ctx, "UPDATE attempts SET state = 'SUCCEEDED_UNVERIFIED' WHERE id = 'r_1'"); code(err) != "55P03" {
+		t.Fatalf("ending the attempt under an uncommitted DISPATCHED: %v, want lock timeout 55P03", err)
+	}
+	// And a raw move to DISPATCHED on an ended attempt is refused.
+	_ = t2.Rollback(ctx)
+	_ = tx.Rollback(ctx)
+	if _, err := st.Pool().Exec(ctx, "UPDATE attempts SET state = 'SUCCEEDED_UNVERIFIED' WHERE id = 'r_1'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Pool().Exec(ctx, "UPDATE effects SET state = 'DISPATCHED', dispatches = dispatches + 1 WHERE id = $1", e.ID); err == nil {
+		t.Fatal("DISPATCHED accepted on an ended attempt")
+	}
+}
+
+// Review nit on 717bb09, main ruling: a never-dispatched effect left by an
+// ended attempt blocks done; Abandon is its exit to NOT_APPLIED. App role,
+// reason, evidence and actor, audited; dispatched effects go through resolve.
+func TestAbandonStrandedIntent(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	ackRun(t, ctx, st)
+	_, rb := runnerBroker(t, ctx, st)
+	ab := appBroker(t, ctx, st)
+	e, err := b.Submit(ctx, fake, spec("ab1", "stranded"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One that was dispatched once, failed definitely, and was retried.
+	d, err := b.Submit(ctx, fake, IntentSpec{Mission: "m_1", Attempt: "r_1", Fence: 1, Kind: "ticket_comment", Subject: "ticket:goodqa#1",
+		IdemKey: "ab2", Request: json.RawMessage(`{"ticket": "goodqa#1", "body": "sent once"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.Reject = true
+	if got, err := b.Dispatch(ctx, fake, d.ID); err != nil || got.State != FailedDefinite {
+		t.Fatalf("dispatch d: %+v %v", got, err)
+	}
+	fake.Reject = false
+	if got, err := b.Retry(ctx, d.ID); err != nil || got.State != Intent || got.Dispatches != 1 {
+		t.Fatalf("retry d: %+v %v", got, err)
+	}
+	if _, err := ab.Abandon(ctx, e.ID, "run ended", "wal:w_a", "eric"); !errors.Is(err, domain.ErrAttemptLive) {
+		t.Errorf("abandon while the attempt is live: %v, want ErrAttemptLive", err)
+	}
+	if _, err := st.Pool().Exec(ctx, "UPDATE attempts SET state = 'SUCCEEDED_UNVERIFIED' WHERE id = 'r_1'"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, reason, evid, actor string }{
+		{"no reason", "", "wal:w_a", "eric"}, {"no evidence", "run ended", "", "eric"}, {"no actor", "run ended", "wal:w_a", ""},
+	} {
+		if _, err := ab.Abandon(ctx, e.ID, c.reason, c.evid, c.actor); !errors.Is(err, domain.ErrInvalidTransition) {
+			t.Errorf("abandon with %s: %v", c.name, err)
+		}
+	}
+	if _, err := ab.Abandon(ctx, d.ID, "run ended", "wal:w_a", "eric"); !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Errorf("abandon of a dispatched effect: %v, want ErrInvalidTransition", err)
+	}
+	if _, err := rb.Abandon(ctx, e.ID, "run ended", "wal:w_a", "runner"); err == nil {
+		t.Error("the runner abandoned an effect")
+	}
+	// The database refuses the move without its audit row, and the
+	// dispatched one even with a row (an earlier or forged one).
+	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET state = 'NOT_APPLIED' WHERE id = $1", e.ID); err == nil {
+		t.Error("an unaudited abandon was accepted")
+	}
+	tx, err := ab.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO effect_resolutions (effect_id, from_state, to_state, reason, evidence, actor) VALUES ($1, 'INTENT', 'NOT_APPLIED', 'r', 'e', 'eric')`, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE effects SET state = 'NOT_APPLIED' WHERE id = $1", d.ID); err == nil {
+		t.Error("a dispatched effect was abandoned by a raw write with an audit row")
+	}
+	_ = tx.Rollback(ctx)
+	got, err := ab.Abandon(ctx, e.ID, "run ended before dispatch", "wal:w_a", "eric")
+	if err != nil || got.State != NotApplied || got.Dispatches != 0 {
+		t.Fatalf("abandon: %+v %v", got, err)
+	}
+	var n int
+	var from, to, actor, evid string
+	if err := st.Pool().QueryRow(ctx, `SELECT count(*) OVER (), from_state, to_state, actor, evidence FROM effect_resolutions WHERE effect_id = $1`, e.ID).
+		Scan(&n, &from, &to, &actor, &evid); err != nil || n != 1 || from != "INTENT" || to != "NOT_APPLIED" || actor != "eric" || evid != "wal:w_a" {
+		t.Fatalf("abandon audit: n=%d %s->%s actor=%q evidence=%q err=%v", n, from, to, actor, evid, err)
+	}
+	// An audit row from an earlier transaction does not authorize a later
+	// move: retry, then a raw abandon, is refused.
+	if _, err := ab.Retry(ctx, e.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ab.pool.Exec(ctx, "UPDATE effects SET state = 'NOT_APPLIED' WHERE id = $1", e.ID); err == nil {
+		t.Error("an earlier audit row authorized a second abandon")
 	}
 }

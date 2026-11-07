@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"fabric/internal/domain"
@@ -13,13 +14,17 @@ import (
 // ErrLiveTestMissing); with the live test, the mission is SUCCEEDED and its
 // slot is free.
 // deployLT drives m_lt to deployed (DELIVERED) at sha_lt, generation 1.
-func deployLT(t *testing.T, st *Store, ctx context.Context) {
+// whileLive, if set, runs while attempt r_lt_1 is live.
+func deployLT(t *testing.T, st *Store, ctx context.Context, whileLive func(fence int64)) {
 	t.Helper()
 	mk(t, st, ctx, "m_lt")
 	ok(t, st, ctx, "chat", "a", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_lt"})
 	ok(t, st, ctx, "chat", "sel", domain.Command{Kind: domain.CmdSelectCandidate, Mission: "m_lt", Head: "sha_lt"})
 	f := startAttempt(t, st, ctx, "m_lt", "r_lt_1")
 	ok(t, st, ctx, "fabd", "ack", domain.Command{Kind: domain.CmdAckStart, Mission: "m_lt", Attempt: "r_lt_1", Fence: f})
+	if whileLive != nil {
+		whileLive(f)
+	}
 	ok(t, st, ctx, "host", "ev", domain.Command{Kind: domain.CmdRecordEvidence, Mission: "m_lt", Attempt: "r_lt_1", Fence: f, Generation: 1, Head: "sha_lt", Receipt: "rcpt"})
 	ok(t, st, ctx, "host", "fin", domain.Command{Kind: domain.CmdFinishAttempt, Mission: "m_lt", Attempt: "r_lt_1", Fence: f, Outcome: "ready_for_review", Claims: []domain.Claim{{AC: "AC-1", Receipt: "rcpt"}}})
 	ok(t, st, ctx, "fabd", "rec", domain.Command{Kind: domain.CmdReconcileAttempt, Mission: "m_lt", Attempt: "r_lt_1", Fence: f, Result: "VERIFIED"})
@@ -29,7 +34,7 @@ func deployLT(t *testing.T, st *Store, ctx context.Context) {
 
 func TestDoneNeedsLiveTestThroughStore(t *testing.T) {
 	st, ctx := openTest(t)
-	deployLT(t, st, ctx)
+	deployLT(t, st, ctx, nil)
 	before, err := st.SlotsHeld(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -62,26 +67,51 @@ func TestDoneNeedsLiveTestThroughStore(t *testing.T) {
 // reducer events, so done must count that table too.
 func TestDoneCountsBrokerEffects(t *testing.T) {
 	st, ctx := openTest(t)
-	deployLT(t, st, ctx)
-	ok(t, st, ctx, "chat", "live", domain.Command{Kind: domain.CmdRecordLiveTest, Mission: "m_lt", Generation: 1, Head: "sha_lt",
-		Host: "h_t2", Target: "https://staging.example.test", Receipt: "rcpt_live"})
-	for _, state := range []string{"DISPATCHED", "UNKNOWN", "RECONCILING", "QUARANTINED"} {
-		if _, err := st.pool.Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state)
-			VALUES ('e_n1', 'm_lt', 'r_lt_1', 1, 'ticket_comment', 's_n1', 'k_n1', '{}', 'sha', $1)
-			ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state`, state); err != nil {
+	// Effects are created while the attempt is live, then moved by the
+	// owner through the broker's own steps (0020 guards the rest).
+	path := map[string][]string{
+		"INTENT":            {},
+		"APPROVAL_REQUIRED": {"APPROVAL_REQUIRED"},
+		"APPROVED":          {"APPROVED"},
+		"DISPATCHED":        {"DISPATCHED"},
+		"UNKNOWN":           {"DISPATCHED", "UNKNOWN"},
+		"RECONCILING":       {"DISPATCHED", "UNKNOWN", "RECONCILING"},
+		"QUARANTINED":       {"DISPATCHED", "UNKNOWN", "QUARANTINED"},
+		"CONFIRMED":         {"DISPATCHED", "CONFIRMED"},
+		"FAILED_DEFINITE":   {"DISPATCHED", "FAILED_DEFINITE"},
+		"NOT_APPLIED":       {"DISPATCHED", "UNKNOWN", "NOT_APPLIED"},
+	}
+	run := func(states ...string) error {
+		t.Helper()
+		if err := st.Truncate(ctx); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.Execute(ctx, "chat", domain.CommandID("done-"+state), domain.Command{Kind: domain.CmdCompleteMission, Mission: "m_lt"}); !errors.Is(err, domain.ErrUnknownUnresolved) {
+		deployLT(t, st, ctx, func(f int64) {
+			for i, state := range states {
+				id := fmt.Sprintf("e_n1_%d", i)
+				if _, err := st.pool.Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state)
+					VALUES ($1, 'm_lt', 'r_lt_1', $2, 'ticket_comment', $1, $1, '{}', 'sha', 'INTENT')`, id, f); err != nil {
+					t.Fatal(err)
+				}
+				for _, s := range path[state] {
+					if _, err := st.pool.Exec(ctx, "UPDATE effects SET state = $2 WHERE id = $1", id, s); err != nil {
+						t.Fatalf("fixture %s -> %s: %v", id, s, err)
+					}
+				}
+			}
+		})
+		ok(t, st, ctx, "chat", "live", domain.Command{Kind: domain.CmdRecordLiveTest, Mission: "m_lt", Generation: 1, Head: "sha_lt",
+			Host: "h_t2", Target: "https://staging.example.test", Receipt: "rcpt_live"})
+		_, err := st.Execute(ctx, "chat", "done", domain.Command{Kind: domain.CmdCompleteMission, Mission: "m_lt"})
+		return err
+	}
+	for _, state := range []string{"DISPATCHED", "UNKNOWN", "RECONCILING", "QUARANTINED", "INTENT", "APPROVAL_REQUIRED", "APPROVED"} {
+		if err := run(state); !errors.Is(err, domain.ErrUnknownUnresolved) {
 			t.Errorf("done with a broker effect %s: %v, want ErrUnknownUnresolved", state, err)
 		}
 	}
-	// Settled (and never-dispatched) effects do not block.
-	if _, err := st.pool.Exec(ctx, `UPDATE effects SET state = 'CONFIRMED' WHERE id = 'e_n1'`); err != nil {
-		t.Fatal(err)
+	// Settled effects do not block.
+	if err := run("CONFIRMED", "FAILED_DEFINITE", "NOT_APPLIED"); err != nil {
+		t.Errorf("done with only settled effects: %v", err)
 	}
-	if _, err := st.pool.Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state)
-		VALUES ('e_n1b', 'm_lt', 'r_lt_1', 1, 'ticket_comment', 's_n1b', 'k_n1b', '{}', 'sha', 'INTENT')`); err != nil {
-		t.Fatal(err)
-	}
-	ok(t, st, ctx, "chat", "done", domain.Command{Kind: domain.CmdCompleteMission, Mission: "m_lt"})
 }

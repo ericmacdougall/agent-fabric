@@ -371,11 +371,12 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 
 	env := reducer.Env{Cap: cap}
 	if cmd.Kind == domain.CmdCompleteMission {
-		// Review N1: the broker's effects for this mission, in this
-		// transaction. None can become unsettled meanwhile: Submit and
-		// Dispatch need a live fence, and done needs no live attempt.
+		// Review N1: the broker's effects for this mission that are not
+		// settled, in this transaction. A new intent or dispatch holds its
+		// live attempt row (0020), and done needs no live attempt, so none
+		// can appear after this count (review O3).
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM effects WHERE mission_id = $1
-			AND state IN ('DISPATCHED', 'UNKNOWN', 'RECONCILING', 'QUARANTINED')`, string(cmd.Mission)).Scan(&env.UnsettledEffects); err != nil {
+			AND state NOT IN ('CONFIRMED', 'FAILED_DEFINITE', 'NOT_APPLIED', 'RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED')`, string(cmd.Mission)).Scan(&env.UnsettledEffects); err != nil {
 			return Response{}, err
 		}
 	}

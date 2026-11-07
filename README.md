@@ -26,7 +26,14 @@ production readiness.
   request hash, a fake executor and a GoodQA ticket-comment executor. A
   readback conflict leaves an effect `QUARANTINED`; only an app-role operator
   can settle it (`fab effect resolve --outcome applied|not_applied --reason
-  --evidence`), audited in the append-only `effect_resolutions` table.
+  --evidence`), audited in the append-only `effect_resolutions` table. A
+  database guard binds every role: settled outcomes do not change except by
+  retry, effects are never deleted, and a new intent or dispatch holds its
+  live attempt row. A never-sent intent left by an ended attempt is settled
+  with `fab effect abandon --reason --evidence`, only if it was never
+  dispatched, audited in the same table. Limit: the app role, as the reconciler, can still
+  record a readback outcome for an UNKNOWN or DISPATCHED effect by a plain
+  write.
 - Done means live-tested: `fab done` is refused until `fab live-test` records a
   receipt for the deployed commit of the current candidate, and while any of
   the mission's effects (reducer or broker) is unsettled.

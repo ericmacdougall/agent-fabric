@@ -290,9 +290,16 @@ func (b *Broker) Dispatch(ctx context.Context, exec Executor, id string) (Effect
 	if err := liveFence(ctx, tx, e.Attempt, e.Fence); err != nil {
 		return Effect{}, err
 	}
-	if ok, detail, err := exec.Precondition(ctx, e); err != nil {
+	ok, detail, err := exec.Precondition(ctx, e)
+	if err != nil {
 		return Effect{}, err
-	} else if !ok {
+	}
+	// Review O3: Precondition may take a network round trip; the attempt
+	// can end meanwhile. Re-check (the 0020 trigger holds it from here).
+	if err := liveFence(ctx, tx, e.Attempt, e.Fence); err != nil {
+		return Effect{}, err
+	}
+	if !ok {
 		if _, err := tx.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now() WHERE id = $1`, id, string(FailedDefinite), "precondition: "+detail); err != nil {
 			return Effect{}, err
 		}
@@ -502,6 +509,56 @@ func (b *Broker) ResolveQuarantined(ctx context.Context, id string, outcome Stat
 	}
 	if _, err := tx.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now() WHERE id = $1`,
 		id, string(outcome), "resolved by "+actor+": "+reason); err != nil {
+		return Effect{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Effect{}, err
+	}
+	return b.Load(ctx, id)
+}
+
+// Abandon settles a never-dispatched intent whose attempt has ended (main
+// ruling on the 717bb09 review nit): INTENT, APPROVAL_REQUIRED or APPROVED
+// with dispatches = 0 can no longer be sent (no live fence) and never was,
+// so it is NOT_APPLIED. An effect that was ever dispatched goes through
+// readback or ResolveQuarantined instead. Audited like a resolution, in the
+// same transaction (0020 refuses the move without the row). App role only.
+func (b *Broker) Abandon(ctx context.Context, id, reason, evidence, actor string) (Effect, error) {
+	if reason == "" || evidence == "" || actor == "" {
+		return Effect{}, fmt.Errorf("%w: abandoning an effect needs a reason, an evidence reference and an actor", domain.ErrInvalidTransition)
+	}
+	tx, err := b.pool.Begin(ctx)
+	if err != nil {
+		return Effect{}, err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck
+	var state, attempt string
+	var fence int64
+	var dispatches int
+	err = tx.QueryRow(ctx, "SELECT state, attempt_id, fence, dispatches FROM effects WHERE id = $1 FOR UPDATE", id).Scan(&state, &attempt, &fence, &dispatches)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Effect{}, fmt.Errorf("%w: effect %s", domain.ErrNotFound, id)
+	}
+	if err != nil {
+		return Effect{}, err
+	}
+	switch State(state) {
+	case Intent, ApprovalRequired, Approved:
+	default:
+		return Effect{}, fmt.Errorf("%w: abandon while %s", domain.ErrInvalidTransition, state)
+	}
+	if dispatches != 0 {
+		return Effect{}, fmt.Errorf("%w: effect %s was dispatched %d time(s); settle it by readback or fab effect resolve", domain.ErrInvalidTransition, id, dispatches)
+	}
+	if liveFence(ctx, tx, domain.AttemptID(attempt), fence) == nil {
+		return Effect{}, fmt.Errorf("%w: attempt %s can still dispatch effect %s", domain.ErrAttemptLive, attempt, id)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO effect_resolutions (effect_id, from_state, to_state, reason, evidence, actor) VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, state, string(NotApplied), reason, evidence, actor); err != nil {
+		return Effect{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE effects SET state = $2, last_error = $3, updated_at = now() WHERE id = $1`,
+		id, string(NotApplied), "abandoned by "+actor+": "+reason); err != nil {
 		return Effect{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
