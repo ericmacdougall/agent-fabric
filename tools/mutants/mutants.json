@@ -2867,8 +2867,8 @@
   "expect": "TestResolveQuarantinedEffect",
   "edits": [
    [
-    "        IF NEW.state IN ('RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED') THEN\n            RAISE",
-    "        IF false THEN\n            RAISE"
+    "        IF NEW.state NOT IN ('INTENT', 'APPROVAL_REQUIRED') OR NEW.dispatches <> 0 OR NEW.receipt IS NOT NULL",
+    "        IF false"
    ]
   ]
  },
@@ -2932,8 +2932,8 @@
   "expect": "TestDispatchAfterAttemptEndNoRemoteWrite",
   "edits": [
    [
-    "\t// can end meanwhile. Re-check (the 0020 trigger holds it from here).\n\tif err := liveFence(ctx, tx, e.Attempt, e.Fence); err != nil {",
-    "\t// can end meanwhile. Re-check (the 0020 trigger holds it from here).\n\tif err := liveFence(ctx, tx, e.Attempt, e.Fence); false && err != nil {"
+    "\t// can end meanwhile. Re-check (the 0020 trigger holds it from here).\n\tif err := liveFence(ctx, tx, e.Mission, e.Attempt, e.Fence); err != nil {",
+    "\t// can end meanwhile. Re-check (the 0020 trigger holds it from here).\n\tif err := liveFence(ctx, tx, e.Mission, e.Attempt, e.Fence); false && err != nil {"
    ]
   ]
  },
@@ -2971,8 +2971,8 @@
   "expect": "TestAbandonStrandedIntent",
   "edits": [
    [
-    "\tif liveFence(ctx, tx, domain.AttemptID(attempt), fence) == nil {",
-    "\tif false && liveFence(ctx, tx, domain.AttemptID(attempt), fence) == nil {"
+    "\tif liveFence(ctx, tx, domain.MissionID(mission), domain.AttemptID(attempt), fence) == nil {",
+    "\tif false && liveFence(ctx, tx, domain.MissionID(mission), domain.AttemptID(attempt), fence) == nil {"
    ]
   ]
  },
@@ -3077,6 +3077,110 @@
    [
     "\t\tif m.ParkedReason != \"\" {\n\t\t\t// A park waiting",
     "\t\tif false {\n\t\t\t// A park waiting"
+   ]
+  ]
+ },
+ {
+  "id": "M235_columns_mutable",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestEffectColumnsImmutable",
+  "edits": [
+   [
+    "        RAISE EXCEPTION 'effect % changed an immutable column', NEW.id USING ERRCODE = 'check_violation';",
+    "        NULL;"
+   ]
+  ]
+ },
+ {
+  "id": "M236_dispatch_count_free",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestEffectColumnsImmutable",
+  "edits": [
+   [
+    "    ELSIF NEW.dispatches <> OLD.dispatches THEN",
+    "    ELSIF false THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M237_receipt_unfrozen",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestEffectColumnsImmutable",
+  "edits": [
+   [
+    "    IF NEW.receipt IS DISTINCT FROM OLD.receipt AND OLD.state NOT IN ('DISPATCHED', 'UNKNOWN', 'RECONCILING') THEN",
+    "    IF false THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M238_insert_any_state",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestEffectInsertOnlyInitial",
+  "edits": [
+   [
+    "        IF NEW.state NOT IN ('INTENT', 'APPROVAL_REQUIRED') OR NEW.dispatches <> 0 OR NEW.receipt IS NOT NULL",
+    "        IF false"
+   ]
+  ]
+ },
+ {
+  "id": "M239_hold_any_mission",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestFenceBelongsToMission",
+  "edits": [
+   [
+    "OR fe <> NEW.fence OR am <> NEW.mission_id THEN",
+    "OR fe <> NEW.fence THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M240_fence_any_mission",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/effects/broker.go",
+  "expect": "TestFenceBelongsToMission",
+  "edits": [
+   [
+    "\tif owner != string(mission) {",
+    "\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M241_migrate_no_checksum",
+  "invariant": "done_effects",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestMigrateRefusesChangedMigration",
+  "edits": [
+   [
+    "\t\t\tif *recorded != want {",
+    "\t\t\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M242_approval_free",
+  "invariant": "done_effects",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0020_effect_resolutions.sql",
+  "expect": "TestEffectColumnsImmutable",
+  "edits": [
+   [
+    "        RAISE EXCEPTION 'effect % approval changes only by approve', NEW.id USING ERRCODE = 'check_violation';",
+    "        NULL;"
    ]
   ]
  }
