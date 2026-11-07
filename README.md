@@ -194,8 +194,8 @@ Go 1.22, `pgx/v5` and `x/sys` only.
    `go build -buildvcs=true -o <path> ./cmd/fab`. Check that `git status
    --porcelain` is empty and that `<path> version` prints the commit's
    12-character prefix; refuse to install a build that prints `devel` or
-   ends in `-dirty`. A build from a `git worktree` checkout can lose the VCS
-   stamp and print `devel`.
+   ends in `-dirty`. We observed a build from a `git worktree` checkout
+   (Go 1.22.2) print `devel`; the version check catches it either way.
 3. Stop anything using the database, then run `fab migrate` as the owner.
 4. Run `fab db roles` as the owner after every migration, with the same
    password files, so the app and runner roles are granted the new tables;
@@ -203,7 +203,10 @@ Go 1.22, `pgx/v5` and `x/sys` only.
 5. Restart, then smoke test: `fab version` and `fab metrics` (exit 0, and
    `fabric_schema_level` is the newest migration).
 
-Rollback is the previous binary plus `pg_restore` of the dump.
+Rollback: stop everything using the database, reinstall the previous
+binary, and restore the dump, either into the same database with
+`pg_restore --clean --if-exists -d <db> <dump>` or into a fresh database
+that you then switch to. Everything written after the dump is lost.
 
 ## License
 

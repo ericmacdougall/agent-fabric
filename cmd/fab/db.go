@@ -94,7 +94,9 @@ func setCapacity(ctx context.Context, st capacityStore, res, unit string, capaci
 	}
 	c, h, err := st.Capacity(ctx, res)
 	if err != nil {
-		return err
+		// The set has committed; only the readback failed (exit 1). A rerun
+		// with the same values is idempotent.
+		return fmt.Errorf("capacity set; readback failed: %w", err)
 	}
 	fmt.Printf("%s: capacity %d, held %d\n", res, c, h)
 	return nil

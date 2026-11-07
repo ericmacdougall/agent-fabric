@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"fabric/internal/domain"
@@ -49,6 +50,11 @@ func TestCapacityExitCodes(t *testing.T) {
 		}
 		if c.want == 3 && !errors.Is(err, domain.ErrInvalidTransition) {
 			t.Errorf("%s: refusal lost its cause: %v", c.name, err)
+		}
+		// The set committed before the readback failed: say so, and keep
+		// the cause (review nit a on 17d82d9).
+		if c.rdErr != nil && (!strings.Contains(fmt.Sprint(err), "capacity set") || !errors.Is(err, c.rdErr)) {
+			t.Errorf("%s: want a hint that the capacity was set, got %v", c.name, err)
 		}
 	}
 }
