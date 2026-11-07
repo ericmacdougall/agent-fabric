@@ -2487,7 +2487,7 @@
   "id": "M190_effects_any_transition",
   "invariant": "roles",
   "pkg": "./internal/effects",
-  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "file": "internal/store/migrations/0019_runner_settle_live.sql",
   "expect": "TestRunnerRoleBrokerFlows",
   "edits": [
    [
@@ -2500,7 +2500,7 @@
   "id": "M191_dispatch_count_free",
   "invariant": "roles",
   "pkg": "./internal/effects",
-  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "file": "internal/store/migrations/0019_runner_settle_live.sql",
   "expect": "TestRunnerRoleBrokerFlows",
   "edits": [
    [
@@ -2513,7 +2513,7 @@
   "id": "M192_retry_ignores_approval",
   "invariant": "roles",
   "pkg": "./internal/effects",
-  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "file": "internal/store/migrations/0019_runner_settle_live.sql",
   "expect": "TestRunnerRoleBrokerFlows",
   "edits": [
    [
@@ -2530,7 +2530,7 @@
   "id": "M193_precondition_from_approval_required",
   "invariant": "roles",
   "pkg": "./internal/effects",
-  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "file": "internal/store/migrations/0019_runner_settle_live.sql",
   "expect": "TestRunnerRoleBrokerFlows",
   "edits": [
    [
@@ -2543,7 +2543,7 @@
   "id": "M194_effect_insert_any_run",
   "invariant": "roles",
   "pkg": "./internal/effects",
-  "file": "internal/store/migrations/0018_runner_transitions.sql",
+  "file": "internal/store/migrations/0019_runner_settle_live.sql",
   "expect": "TestRunnerRoleBrokerFlows",
   "edits": [
    [
@@ -2588,6 +2588,23 @@
    [
     "NEW.unit = ''\n           AND public.fabric_runner_run_live(NEW.mission_id, NEW.attempt_id, NEW.fence) THEN",
     "NEW.unit = '' THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M198_settle_without_live_run",
+  "invariant": "roles",
+  "pkg": "./internal/effects",
+  "file": "internal/store/migrations/0019_runner_settle_live.sql",
+  "expect": "TestRunnerRoleBrokerFlows",
+  "edits": [
+   [
+    "          AND public.fabric_runner_run_live(OLD.mission_id, OLD.attempt_id, OLD.fence) THEN\n        -- Dispatch",
+    "          THEN\n        -- Dispatch"
+   ],
+   [
+    "        IF OLD.state IN ('INTENT', 'APPROVED') AND NEW.state = 'DISPATCHED' AND NEW.dispatches = OLD.dispatches + 1\n",
+    "        IF OLD.state IN ('INTENT', 'APPROVED') AND NEW.state = 'DISPATCHED' AND NEW.dispatches = OLD.dispatches + 1\n           AND public.fabric_runner_run_live(OLD.mission_id, OLD.attempt_id, OLD.fence)\n"
    ]
   ]
  }

@@ -131,6 +131,17 @@ func TestRunnerRoleBrokerFlows(t *testing.T) {
 			t.Errorf("runner: %s gave %v, want 42501", c.name, err)
 		}
 	}
+	// Red-team K2 on 4d8e1de: a crash-left DISPATCHED effect of an ended run
+	// is the app role's readback, not a runner settle.
+	if _, err := st.Pool().Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state, dispatches)
+		VALUES ('e_crash', 'm_1', 'r_gone', 1, 'ticket_comment', 's_crash', 'k_crash', '{}', 'sha', 'DISPATCHED', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, to := range []string{"CONFIRMED", "FAILED_DEFINITE", "UNKNOWN"} {
+		if _, err := rs.Exec(ctx, `UPDATE effects SET state = $2, receipt = '{"comment_id":"forged"}' WHERE id = $1`, "e_crash", to); code(err) != "42501" {
+			t.Errorf("runner settled an ended run's dispatch as %s: %v, want 42501", to, err)
+		}
+	}
 	// An effect for an attempt that is not running.
 	other := spec("kr6", "elsewhere")
 	other.Attempt, other.Fence = "r_gone", 1
