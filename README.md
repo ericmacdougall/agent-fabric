@@ -140,6 +140,84 @@ Database text is sanitized before it is drawn: ticket text, ask questions and re
 
 `fab version` prints the build revision, the same value as `fabric_build_info`.
 
+## Providers
+
+Every mission names its provider when it is created, and it never changes
+(goodqa#15087): `fab mission new --provider claude-code|anthropic-api` is
+required, and the database refuses an UPDATE of `missions.provider`.
+
+- `claude-code`: fabd runs the mission on the Claude Code binary.
+- `anthropic-api`: only `fab mission run --grant F` runs it, through the
+  native loop. That loop accepts only an API-key-shaped key, sends it only to
+  `https://api.anthropic.com` (no proxy), and refuses subscription billing.
+
+Each attempt records the path that started it (`attempts.path`), and the
+database refuses an attempt whose path differs from its mission's provider.
+Fabd always starts `claude-code`, `fab mission run` always starts
+`anthropic-api`, and `fab attempt start` requires `--path` (and
+`--lock-path` for `anthropic-api`). The path is part of the start command's
+request hash, so a start command recorded by an older binary and replayed
+by a newer one is refused as a changed payload. Live had no in-flight
+attempts at the upgrade, so nothing else was done.
+
+Two flags are not the mission provider:
+
+- `fab daemon --provider` is the provider binary fabd launches (`claude`,
+  or a recorded fake for shadow runs).
+- `fab mission run --provider anthropic` is the grant's provider field.
+
+The native month cap is keyed on the database clock, never the host's, and
+a run charges the UTC month it started in, even if it ends in the next one.
+
+### Worker environment
+
+A worker's environment is exactly what fabric builds, whatever fabd, the
+host or the worker user's systemd manager holds. Fabric may set only these
+names: `FAB_RUN`, `FAB_MISSION`, `FAB_ATTEMPT`, `FAB_FENCE`,
+`FAB_RUN_DIR`, `FAB_WORKTREE`, `FABRIC_DSN`, `FABRIC_HOME`, `HOME`,
+`PATH`, `LANG`, `USER`, `TMPDIR`, `SHELL`, `CLAUDE_CONFIG_DIR`,
+`CLAUDE_CODE_DISABLE_CLAUDE_MDS`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`,
+`GOCACHE`, `GOMODCACHE` and `GOFLAGS` (`internal/host/env.go`). A launch
+that sets any other name is refused, so a proxy or locale variable the
+claude binary turns out to need is a reviewed code change. On Linux each
+set name is passed with `systemd-run -E NAME=VALUE`, each allow-listed name
+left unset with `-E NAME=` (so the manager's value is overridden), and
+`fab __sandbox --env-keep <names>` execs the worker with only the set
+names. The worker is a static fab (`CGO_ENABLED=0`, see Deploying).
+
+A claude-code launch always passes `--setting-sources ""`, so no user or
+project settings load. The `--settings` file may hold only `permissions`,
+`hooks` and `model`. Each hook must be a single absolute path that resolves
+inside `FABRIC_HOOKS_DIR`. The worker user must be unable to write the hooks
+directory, each hook, and every directory above them: one that is owned by
+the worker, or writable by group or others (unless it is sticky and owned
+by root, like `/tmp`), refuses the launch. Managed settings apply whatever
+`--setting-sources` says, so fabric also reads `managed-settings.json`,
+every `managed-settings.d/*.json` and `managed-mcp.json` under
+`/etc/claude-code` (Linux) or `/Library/Application Support/ClaudeCode`
+(macOS). An env block or a credential or command helper in any of them, an
+env block on a managed MCP server, or a file that cannot be read or parsed
+refuses the launch. A missing file is fine.
+
+### Upgrades in lockstep
+
+A binary refuses to open or migrate a database that holds a migration it
+does not embed, and names its own latest migration and the foreign one.
+This is checked at start-up only: a long-running process keeps going, and
+for 0026 the `attempts.path` trigger stops an older fabd. Every later
+migration therefore stops every binary built before it, worker-side `fab`
+calls included, until that binary is upgraded too. Upgrade all binaries
+on a host together.
+
+### Database connection
+
+`FABRIC_DSN` must be a direct connection or a session-mode pooler, never
+a transaction-pooling pgbouncer. The host reconcile lock (held by fabd and
+`fab reconcile`) and each native attempt's agent-run lock are session
+advisory locks. Behind transaction pooling they exclude no one: two
+reconcilers could run at once, and a second native process could run the
+same attempt.
+
 ## Operator actions
 
 Some states wait for a human on purpose. Clearing them needs an explicit
@@ -166,6 +244,14 @@ at all. An operator-only role for these commands is follow-up work.
   quarantined attempt stays QUARANTINED: nothing checks by machine that its
   runner is gone, so check the host before unpausing. An older binary refuses to write to a
   mission whose log has a `MISSION_UNPAUSED` event, so roll back with care.
+- **Operator reconcile.** `fab reconcile` runs one reconcile pass for this
+  host, under the host reconcile lock (exit 3 while fabd or another pass
+  holds it). Its commands stay under actor `fabd`, so a pass and fabd replay
+  each other. To tell the operator pass apart, it writes one stderr line,
+  `fab reconcile: operator pass host=<host> actor="<FABRIC_ACTOR>" pid=<pid>
+  expired=<n> quarantined=<n>`, and adds one to
+  `fabric_sched_counter_total{name="reconcile_operator_passes_total"}`. A
+  refused or failed pass writes no such line and does not count.
 - **Final admission.** Every launch, gated or not, rechecks the attempt's
   fence, lease and intent revision against the database clock just before
   the runner starts. A database error at that moment abandons the attempt

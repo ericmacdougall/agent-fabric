@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"fabric/internal/domain"
@@ -99,4 +100,26 @@ func ReconcileHost(ctx context.Context, st *store.Store, host, local domain.Host
 	s := &Scheduler{st: st, cfg: Config{Host: host}, prober: p, lockProber: lp}
 	r.Quarantined = s.reconcileUnknown(ctx)
 	return r, err
+}
+
+// OperatorPassCounter counts successful `fab reconcile` passes in
+// sched_counters (adversarial L2).
+const OperatorPassCounter = "reconcile_operator_passes_total"
+
+// OperatorReconcile is `fab reconcile`: ReconcileHost, then, after a pass
+// that ran, one log line naming the host, the operator (FABRIC_ACTOR, or
+// "chat" when unset), the pid and the counts, and a durable counter bump.
+// The commands themselves stay under actor fabd so that a pass and fabd
+// replay each other (deterministic ids); the line and the counter are how an
+// operator pass is told apart. A refused or failed pass logs no pass line
+// and does not count.
+func OperatorReconcile(ctx context.Context, st *store.Store, host, local domain.HostID, p Prober, lp LockProber, actor string, log io.Writer) (ReconcileResult, error) {
+	r, err := ReconcileHost(ctx, st, host, local, p, lp)
+	if err != nil {
+		return r, err
+	}
+	fmt.Fprintf(log, "fab reconcile: operator pass host=%s actor=%q pid=%d expired=%d quarantined=%d\n", host, actor, os.Getpid(), len(r.Expired), r.Quarantined)
+	s := &Scheduler{st: st}
+	s.bump(ctx, OperatorPassCounter)
+	return r, nil
 }

@@ -44,7 +44,9 @@ func reconcileMain(args []string) error {
 		if rp, ok := runnerProber(*workerUser); ok {
 			p = rp
 		}
-		r, err := sched.ReconcileHost(ctx, st, host, local, p, native.ProbeLock)
+		// L2: the pass logs a line naming FABRIC_ACTOR and counts in
+		// reconcile_operator_passes_total.
+		r, err := sched.OperatorReconcile(ctx, st, host, local, p, native.ProbeLock, actor(), os.Stderr)
 		if errors.Is(err, store.ErrReconcileBusy) {
 			return reconcileRefused{err}
 		}
