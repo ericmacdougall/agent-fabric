@@ -71,4 +71,23 @@ func TestLaunchInputs(t *testing.T) {
 	if p := providerPath("no-such-provider-k3"); p != "" {
 		t.Errorf("missing provider resolved to %q", p)
 	}
+	// Review N1: an update repoints the symlink and prunes the old version;
+	// the next resolution names the new file.
+	v2 := filepath.Join(real, "provider-v2")
+	if err := os.WriteFile(v2, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(v2, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(bin); err != nil {
+		t.Fatal(err)
+	}
+	realV2, _ := filepath.EvalSymlinks(v2)
+	if p := providerPath(link); p != realV2 {
+		t.Errorf("after an update providerPath = %q, want %q", p, realV2)
+	}
 }

@@ -309,9 +309,12 @@ at all. An operator-only role for these commands is follow-up work.
     when `claude` is an npm install). An entry is refused when it is `/`,
     a home, an account's home under `/Users`, or a directory holding a
     home, the directory of other runs, or a secret path (so not
-    `~/.config` or `~/Library`). The launch runs the provider's resolved
-    file, not a symlink in a denied bin directory, and the control
-    `provider_starts_under_profile` runs it with `--version`. Any other
+    `~/.config`, `~/Library`, `~/.docker` or `~/.config/fabric`). Each
+    launch resolves the provider name again and runs the resolved file,
+    not a symlink in a denied bin directory, so a provider update that
+    repoints the symlink is followed. The control
+    `provider_starts_under_profile` runs the file resolved at fabd start
+    with `--version`. Any other
     tool on `PATH` under a home is unreadable, so install toolchains
     outside `$HOME` or list them there;
   - the worker's git uses the run's own global config

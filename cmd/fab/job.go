@@ -111,12 +111,10 @@ func daemonMain(args []string) error {
 		return err
 	}
 	darwinLaunchRO = launchInputs(*provider, os.Getenv("FABRIC_HOOKS_DIR"), schemaPath)
-	// The launch runs the resolved provider file, the same one the
-	// provider control starts (goodqa#15161 review C).
-	if p := providerPath(*provider); p != "" {
-		*provider = p
-	}
-	darwinProvider = *provider
+	// The control starts the provider file resolved now; each launch
+	// resolves the name again (cfg.Launch.Resolve), so an update that
+	// repoints the symlink is followed (goodqa#15161 reviews C and N1).
+	darwinProvider = providerPath(*provider)
 	ln, err := launcherForThisHost()
 	if err != nil {
 		return err
@@ -142,6 +140,7 @@ func daemonMain(args []string) error {
 	cfg.RunnerDSN = os.Getenv(*runnerDSNEnv)
 	// goodqa#15087 AC-6: the same launch the AC-6 (f) live check runs.
 	cfg.Launch = claude.ProductionLaunch(*provider, schemaPath, os.Getenv("FABRIC_HOOKS_DIR"))
+	cfg.Launch.Resolve = providerPath
 	return withStore(func(ctx context.Context, st *store.Store) error {
 		s := sched.New(st, cfg, ln)
 		if p, ok := runnerProber(*workerUser); ok {

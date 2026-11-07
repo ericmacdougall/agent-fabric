@@ -27,6 +27,12 @@ type Launch struct {
 	HooksDir        string // FABRIC_HOOKS_DIR: the only place a --settings hook may run from
 	WorkerUID       *int   // the worker account; it must not own the hooks
 	ManagedRoot     string // managed-settings directory; "" is the system one
+	// Resolve, when set, maps Binary to the file to exec at each launch;
+	// "" refuses the launch, never falls back to Binary. fabd resolves symlinks per launch, so a provider
+	// update that repoints the symlink and prunes old versions is followed
+	// (goodqa#15161 review N1) while the launch never execs through a
+	// symlink in a directory the Darwin profile denies (review C).
+	Resolve func(string) string
 }
 
 // Argv builds the launch line from the grant and the launch config. It is the
@@ -54,7 +60,15 @@ func Argv(g host.Grant, l Launch) (argv []string, env []string, err error) {
 	if mode == "" {
 		mode = "acceptEdits"
 	}
-	argv = []string{l.Binary, "-p", l.Prompt,
+	bin := l.Binary
+	if l.Resolve != nil {
+		// Never fall back to a stale or unresolved path: a provider that
+		// cannot be resolved now refuses this launch with a named cause.
+		if bin = l.Resolve(l.Binary); bin == "" {
+			return nil, nil, fmt.Errorf("%w: provider %q cannot be resolved to a file now (missing, or removed by an update); refusing the launch", host.ErrGrantInvalid, l.Binary)
+		}
+	}
+	argv = []string{bin, "-p", l.Prompt,
 		"--output-format", "stream-json", "--verbose",
 		"--model", g.Model, "--effort", g.Effort,
 		"--max-turns", strconv.Itoa(g.MaxTurns),

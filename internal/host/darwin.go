@@ -47,6 +47,8 @@ func denyRead(home string) []string {
 		filepath.Join(home, ".ssh"), filepath.Join(home, ".config", "rclone"), filepath.Join(home, ".claude.json"),
 		filepath.Join(home, ".claude"), filepath.Join(home, ".aws"), filepath.Join(home, ".gnupg"),
 		filepath.Join(home, "Library", "Keychains"), filepath.Join(home, ".config", "goodqa"), filepath.Join(home, ".netrc"),
+		// goodqa#15161 review N4: also guarded from a broad read-only input.
+		filepath.Join(home, ".docker"), filepath.Join(home, ".pgpass"), filepath.Join(home, ".config", "fabric"),
 	}
 }
 
@@ -613,7 +615,10 @@ func (d *Darwin) NegativeControls(scratch string) ([]ControlResult, error) {
 	// Review 716fc04 C: the provider itself starts under the profile (an
 	// npm or nvm install needs its interpreter too, which reading the
 	// inputs does not show).
-	if d.Provider != "" {
+	if d.Provider != "" && strings.ContainsAny(d.Provider, "$`\"\\\n") {
+		// Review N5: %q inside sh double quotes does not neutralise these.
+		add("provider_starts_under_profile", false, "provider path holds a shell metacharacter; refusing to run it")
+	} else if d.Provider != "" {
 		res, err = d.runControl(g, fmt.Sprintf(`%q --version >/dev/null 2>&1 && echo provider=started || echo provider=failed:$?`, d.Provider))
 		if err != nil {
 			return out, err

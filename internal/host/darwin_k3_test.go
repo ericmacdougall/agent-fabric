@@ -337,7 +337,8 @@ func TestDarwinProfileDeniesSiblingRuns(t *testing.T) {
 	// the directory of other runs, or holds a secret path is refused.
 	home := os.Getenv("HOME")
 	for _, in := range []string{home, "/Users", "/", "relative", "/Users/someone-else", "/opt/fabric-k3", "/opt/fabric-k3/wt",
-		filepath.Join(home, ".config"), filepath.Join(home, "Library")} {
+		filepath.Join(home, ".config"), filepath.Join(home, "Library"),
+		filepath.Join(home, ".docker"), filepath.Join(home, ".config", "fabric"), filepath.Join(home, ".pgpass")} {
 		if _, err := (&Darwin{ExtraRO: []string{in}}).profile(g); err == nil {
 			t.Errorf("read-only input %q accepted", in)
 		}
