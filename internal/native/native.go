@@ -27,12 +27,13 @@ import (
 	"fabric/internal/tools"
 )
 
-// Spend ceilings fixed by the user's decision (goodqa#15040 D-A). They are
+// Spend ceilings fixed by the user's decisions (goodqa#15040 D-A; the month
+// ceiling lowered to USD 20 for the first native missions, goodqa#15086). They are
 // enforced in code: a grant cannot raise them.
 const (
-	monthCapMicros    = 100_000_000 // USD 100 a month
-	jobCapMicros      = 5_000_000   // USD 5 per job
-	liveTestCapMicros = 1_000_000   // USD 1 per live test
+	monthCapMicros    = 20_000_000 // USD 20 a month
+	jobCapMicros      = 5_000_000  // USD 5 per job
+	liveTestCapMicros = 1_000_000  // USD 1 per live test
 )
 
 // The same ceilings, exported read-only for metrics.
@@ -122,7 +123,7 @@ func (g Grant) Validate() error {
 		p = append(p, "all three caps are required")
 	}
 	if g.Caps.Month > monthCapMicros || g.Caps.Job > jobCapMicros || g.Caps.Run > g.Caps.Job {
-		p = append(p, "caps exceed the fixed ceilings (month 100 USD, job 5 USD, run <= job)")
+		p = append(p, "caps exceed the fixed ceilings (month 20 USD, job 5 USD, run <= job)")
 	}
 	if g.LiveTest && g.Caps.Run > liveTestCapMicros {
 		p = append(p, "a live test is capped at 1 USD")

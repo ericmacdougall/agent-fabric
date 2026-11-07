@@ -83,9 +83,7 @@ func tuiMain(args []string) error {
 	// No store is opened, so a down database still starts the view. The
 	// dispatch limit shown is the default store's (store.Open: 16 conns,
 	// half of them dispatch slots), as fab metrics reports it.
-	o := metrics.Options{Timeout: f.timeout, DispatchLimit: 8, Version: buildVersion(),
-		Caps: []metrics.Cap{{Scope: "month", Micros: native.MonthCapMicros}, {Scope: "job", Micros: native.JobCapMicros},
-			{Scope: "live_test", Micros: native.LiveTestCapMicros}}}
+	o := metrics.Options{Timeout: f.timeout, DispatchLimit: 8, Version: buildVersion(), Caps: spendCaps()}
 	s := &tui.Session{Src: &tui.Source{Pool: pool, Timeout: f.timeout, Metrics: o}, M: tui.Model{JobCap: native.JobCapMicros}}
 	return tui.Run(context.Background(), s, os.Stdin, os.Stdout, f.interval, f.opts)
 }
