@@ -31,7 +31,7 @@ func TestPrelaunchBackoffAndPark(t *testing.T) {
 	if _, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_after", Host: "h_t2", Role: "writer"}); err == nil {
 		t.Fatal("a parked mission started an attempt")
 	}
-	mustStep(t, f, domain.Command{Kind: domain.CmdAdmitMission, Mission: id})
+	mustStep(t, f, domain.Command{Kind: domain.CmdAdmitMission, Mission: id, Reason: "fixed the dispatch"})
 	if m := f.missions[id]; m.PrelaunchFailures != 0 || m.ParkedReason != "" || m.Execution != domain.ExecAdmitted {
 		t.Fatalf("re-admission did not reset: %+v", m)
 	}

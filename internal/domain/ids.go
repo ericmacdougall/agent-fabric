@@ -61,13 +61,15 @@ func ParseActorID(s string) (ActorID, error) {
 	return ActorID(s), nil
 }
 
-// IsOperator reports whether an actor is a human operator: the main chat
-// ("chat", the fab CLI default) or an "op:<name>" actor (FABRIC_ACTOR).
+// IsOperator reports whether an actor names a human operator: "op:<name>",
+// set with FABRIC_ACTOR. The fab CLI default "chat" is not one, so clearing
+// a park or a pause needs a deliberate, attributed actor (main decision on
+// red-team N3, goodqa#15082).
 // It is an allowlist, so a new automation actor is never an operator.
 // Actors are self-asserted by the caller, so this separates code paths
 // (fabd, native-runner, import, asks), not authenticated people.
 func IsOperator(a ActorID) bool {
-	return a == "chat" || (strings.HasPrefix(string(a), "op:") && len(a) > len("op:"))
+	return strings.HasPrefix(string(a), "op:") && len(a) > len("op:")
 }
 
 // ParseCommandID accepts the client-minted idempotency key for one command.

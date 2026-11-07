@@ -27,7 +27,7 @@ func TestUnpauseCountsUnsettledEffects(t *testing.T) {
 	if cur, err := st.Mission(ctx, m); err != nil || cur.Execution != domain.ExecPaused {
 		t.Fatalf("setup: %v %s, want PAUSED", err, cur.Execution)
 	}
-	_, err := st.Execute(ctx, "chat", "unpause-ue", domain.Command{Kind: domain.CmdUnpauseMission, Mission: m, Reason: "checked"})
+	_, err := st.Execute(ctx, "op:eric", "unpause-ue", domain.Command{Kind: domain.CmdUnpauseMission, Mission: m, Reason: "checked"})
 	var ref *Refusal
 	if !errors.As(err, &ref) {
 		t.Fatalf("an operator unpaused a mission with an unsettled effect: %v", err)

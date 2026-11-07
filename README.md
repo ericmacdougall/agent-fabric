@@ -142,20 +142,23 @@ Database text is sanitized before it is drawn: ticket text, ask questions and re
 
 ## Operator actions
 
-Some states wait for a human on purpose. The `fab` CLI acts as the
-operator: its actor is `chat`, or `op:<name>` when `FABRIC_ACTOR` is set to
-that. Any other actor (`fabd`, `native-runner`, `import`, `asks`) is
-automation. Actors are asserted by the caller, so this separates code paths,
-not authenticated people.
+Some states wait for a human on purpose. Clearing them needs an explicit
+operator actor, `FABRIC_ACTOR=op:<name>`, and a `--reason`. The `fab` CLI's
+default actor `chat` is refused for these commands (it still works for
+everything else), as are `fabd`, `native-runner`, `import` and `asks`.
+This is attribution and friction, not authentication: the actor is
+asserted by the caller, so any script that sets `op:<name>` passes. The
+real separation is the database role; a runner role cannot write events
+at all. An operator-only role for these commands is follow-up work.
 
 - **Parked missions.** After six consecutive attempts abandoned before
   launch, a mission is parked: no attempt starts, and once nothing is live it
   is BLOCKED and frees its slot. Only an operator clears a park:
-  `fab admit --mission <id> --key <key>`. The scheduler, the native runner and the
+  `FABRIC_ACTOR=op:<name> fab admit --mission <id> --reason '<why>' --key <key>`. The scheduler, the native runner and the
   importer get exit 3 (goodqa#15082).
 - **Paused missions.** A quarantined attempt pauses its mission, which keeps
   its slot. After checking that the quarantined runner is gone,
-  `fab unpause --mission <id> --reason '<why>' --key <key>` returns it to ADMITTED. It is
+  `FABRIC_ACTOR=op:<name> fab unpause --mission <id> --reason '<why>' --key <key>` returns it to ADMITTED. It is
   refused while any attempt is live or unresolved, while any broker effect
   is unsettled (resolve it first), without a reason, or for a non-operator
   actor (goodqa#15085). A parked mission that is unpaused goes straight to

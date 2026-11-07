@@ -78,7 +78,10 @@ func TestOldParkLogReplaysAndCanBeReadmitted(t *testing.T) {
 	if _, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: id}, Env{Cap: 4}); !errors.Is(err, domain.ErrInvalidTransition) {
 		t.Errorf("a non-operator admit of a parked mission was accepted: %v", err)
 	}
-	evs, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: id}, Env{Cap: 1, SlotsUsed: 1, Operator: true})
+	if _, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: id}, Env{Cap: 1, SlotsUsed: 1, Operator: true}); !errors.Is(err, domain.ErrInvalidTransition) {
+		t.Errorf("an operator admit of a parked mission without a reason was accepted: %v", err)
+	}
+	evs, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: id, Reason: "looked at it"}, Env{Cap: 1, SlotsUsed: 1, Operator: true})
 	if err != nil {
 		t.Fatalf("re-admission of a wedged parked mission refused: %v", err)
 	}
@@ -99,7 +102,7 @@ func TestParkedAdmitIsOperatorOnly(t *testing.T) {
 	for _, a := range []struct {
 		actor domain.ActorID
 		want  bool
-	}{{"chat", true}, {"op:eric", true}, {"fabd", false}, {"native-runner", false}, {"import", false}, {"asks", false}, {"op:", false}, {"chatbot", false}} {
+	}{{"chat", false}, {"op:eric", true}, {"fabd", false}, {"native-runner", false}, {"import", false}, {"asks", false}, {"op:", false}, {"chatbot", false}} {
 		if got := domain.IsOperator(a.actor); got != a.want {
 			t.Errorf("IsOperator(%q) = %v, want %v", a.actor, got, a.want)
 		}
@@ -108,7 +111,7 @@ func TestParkedAdmitIsOperatorOnly(t *testing.T) {
 	if _, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_po"}, Env{Cap: 4}); !errors.Is(err, domain.ErrInvalidTransition) {
 		t.Errorf("an automated admit cleared a park: %v", err)
 	}
-	evs, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_po"}, Env{Cap: 4, Operator: true})
+	evs, err := Decide(m, domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_po", Reason: "looked at it"}, Env{Cap: 4, Operator: true})
 	if err != nil || len(evs) != 1 || Apply(m, evs[0]).ParkedReason != "" {
 		t.Errorf("an operator admit did not clear the park: %v %+v", err, evs)
 	}

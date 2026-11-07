@@ -22,7 +22,7 @@ import (
 type Env struct {
 	Cap       int
 	SlotsUsed int // missions other than this one that hold a slot
-	// UnsettledEffects: COMPLETE_MISSION only, the mission's broker effects
+	// UnsettledEffects: COMPLETE_MISSION and UNPAUSE_MISSION only, the mission's broker effects
 	// that are DISPATCHED, UNKNOWN, RECONCILING or QUARANTINED (review N1).
 	UnsettledEffects int
 	// Operator: the command comes from a human operator (domain.IsOperator),
@@ -96,8 +96,8 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 
 	switch cmd.Kind {
 	case domain.CmdAdmitMission:
-		if m.ParkedReason != "" && !env.Operator {
-			return nil, fmt.Errorf("%w: mission is parked (%s); only an operator may re-admit it", domain.ErrInvalidTransition, m.ParkedReason)
+		if m.ParkedReason != "" && (!env.Operator || cmd.Reason == "") {
+			return nil, fmt.Errorf("%w: mission is parked (%s); re-admit it as an operator: FABRIC_ACTOR=op:<name> fab admit --mission %s --reason <why> --key <key>", domain.ErrInvalidTransition, m.ParkedReason, m.ID)
 		}
 		if parkedIdle(m) {
 			// goodqa#15082 T2: a park recorded while another attempt was
@@ -121,7 +121,7 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		// its runner is gone). The mission keeps the slot it already holds.
 		switch {
 		case !env.Operator:
-			return nil, fmt.Errorf("%w: only an operator may unpause a mission", domain.ErrInvalidTransition)
+			return nil, fmt.Errorf("%w: only an operator may unpause a mission: FABRIC_ACTOR=op:<name> fab unpause --mission %s --reason <why> --key <key>", domain.ErrInvalidTransition, m.ID)
 		case m.Execution != domain.ExecPaused:
 			return nil, fmt.Errorf("%w: unpause while %s", domain.ErrInvalidTransition, m.Execution)
 		case m.LiveAttempts() != 0 || m.UnresolvedAttempts() != 0:

@@ -27,8 +27,9 @@ func TestParkedAdmitRefusedForAutomationActors(t *testing.T) {
 	if err != nil || cur.ParkedReason == "" || cur.Execution != domain.ExecBlocked {
 		t.Fatalf("setup: %v %s %q", err, cur.Execution, cur.ParkedReason)
 	}
-	for _, actor := range []domain.ActorID{"fabd", "native-runner", "import"} {
-		_, err := st.Execute(ctx, actor, domain.CommandID("admit-"+string(actor)), domain.Command{Kind: domain.CmdAdmitMission, Mission: m})
+	// "chat" is the fab CLI default actor: refused too (main decision on N3).
+	for _, actor := range []domain.ActorID{"fabd", "native-runner", "import", "chat"} {
+		_, err := st.Execute(ctx, actor, domain.CommandID("admit-"+string(actor)), domain.Command{Kind: domain.CmdAdmitMission, Mission: m, Reason: "try"})
 		var ref *Refusal
 		if !errors.As(err, &ref) {
 			t.Errorf("%s re-admitted a parked mission: %v", actor, err)
@@ -37,7 +38,10 @@ func TestParkedAdmitRefusedForAutomationActors(t *testing.T) {
 	if cur, _ := st.Mission(ctx, m); cur.ParkedReason == "" || cur.Execution != domain.ExecBlocked {
 		t.Fatalf("an automated admit cleared the park: %s %q", cur.Execution, cur.ParkedReason)
 	}
-	ok(t, st, ctx, "chat", "admit-operator", domain.Command{Kind: domain.CmdAdmitMission, Mission: m})
+	if _, err := st.Execute(ctx, "op:eric", "admit-noreason", domain.Command{Kind: domain.CmdAdmitMission, Mission: m}); !errors.As(err, new(*Refusal)) {
+		t.Errorf("an operator admit without a reason was accepted: %v", err)
+	}
+	ok(t, st, ctx, "op:eric", "admit-operator", domain.Command{Kind: domain.CmdAdmitMission, Mission: m, Reason: "looked at it"})
 	if cur, _ := st.Mission(ctx, m); cur.ParkedReason != "" || cur.Execution != domain.ExecAdmitted {
 		t.Fatalf("the operator admit did not clear the park: %s %q", cur.Execution, cur.ParkedReason)
 	}

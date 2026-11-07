@@ -102,7 +102,8 @@ func usage() {
   db capacity --resource R --unit U --capacity N   set a dispatch-gate resource
   mission new|list                     register / list missions
   admit|release|wake --mission M [--token T] --key K
-  unpause --mission M --reason R --key K   (operator only)
+  unpause --mission M --reason R --key K   (operator: FABRIC_ACTOR=op:<name>)
+  admit of a parked mission also needs FABRIC_ACTOR=op:<name> and --reason
   live-test --mission M --commit C --generation G --host H --target URL --receipt R --key K
                                        record a live_test receipt for the deployed commit (AC-6)
   done --mission M --key K             close a mission; refused without a live_test receipt (AC-6)
@@ -229,7 +230,7 @@ func simpleCommand(name string, args []string) error {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	mission := fs.String("mission", "", "mission id")
 	token := fs.String("token", "", "wake token (wake only)")
-	reason := fs.String("reason", "", "why (unpause only; required)")
+	reason := fs.String("reason", "", "why (required for unpause and for admitting a parked mission)")
 	key := fs.String("key", "", "idempotency key")
 	if err := fs.Parse(args); err != nil {
 		return err

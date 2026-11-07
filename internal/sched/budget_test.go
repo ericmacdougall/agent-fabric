@@ -90,7 +90,9 @@ func TestReadmissionClearsNotBefore(t *testing.T) {
 	if _, err := st.Pool().Exec(ctx, "UPDATE missions SET not_before = now() + interval '5 minutes' WHERE id = 'm_ra'"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.Execute(ctx, "chat", "readmit-m_ra", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_ra"}); err != nil {
+	// A parked mission is re-admitted only by an operator with a reason
+	// (main decision on red-team N3, goodqa#15082).
+	if _, err := st.Execute(ctx, "op:test", "readmit-m_ra", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_ra", Reason: "fixed the launch"}); err != nil {
 		t.Fatal(err)
 	}
 	var cleared bool
