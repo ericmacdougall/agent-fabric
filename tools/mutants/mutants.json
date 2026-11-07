@@ -2274,9 +2274,9 @@
  {
   "id": "M174_prober_gone_reads_alive",
   "invariant": "unknown_reconcile",
-  "pkg": "./cmd/fab",
-  "file": "cmd/fab/prober.go",
-  "expect": "TestCgroupProber",
+  "pkg": "./internal/probe",
+  "file": "internal/probe/cgroup.go",
+  "expect": "TestCgroup",
   "edits": [
    [
     "\tcase errors.Is(err, fs.ErrNotExist):\n\t\treturn false, true",
@@ -2287,9 +2287,9 @@
  {
   "id": "M175_prober_no_slice_check",
   "invariant": "unknown_reconcile",
-  "pkg": "./cmd/fab",
-  "file": "cmd/fab/prober.go",
-  "expect": "TestCgroupProber",
+  "pkg": "./internal/probe",
+  "file": "internal/probe/cgroup.go",
+  "expect": "TestCgroup",
   "edits": [
    [
     "if fi, err := os.Stat(slice); err != nil || !fi.IsDir() {",
@@ -2346,6 +2346,140 @@
    [
     "fmt.Sprintf(\"GRANT %s TO %s\", sched, app),",
     "fmt.Sprintf(\"GRANT %s TO %s\", sched, runner),"
+   ]
+  ]
+ },
+ {
+  "id": "M180_runner_keeps_dml",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/roles.go",
+  "expect": "TestRolesUpgradeNarrowsRunner",
+  "edits": [
+   [
+    "fmt.Sprintf(\"REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM %s\", runner),",
+    "fmt.Sprintf(\"REVOKE INSERT ON hold_commands FROM %s\", runner),"
+   ]
+  ]
+ },
+ {
+  "id": "M181_check_ignores_attempts",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/roles.go",
+  "expect": "TestRolesUpgradeNarrowsRunner",
+  "edits": [
+   [
+    "OR has_table_privilege(current_user, 'attempts', 'UPDATE') OR has_table_privilege(current_user, 'missions', 'UPDATE')",
+    "OR has_table_privilege(current_user, 'missions', 'UPDATE')"
+   ]
+  ]
+ },
+ {
+  "id": "M182_jobs_any_update",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0017_runner_write_guards.sql",
+  "expect": "TestRolesLeastPrivilege",
+  "edits": [
+   [
+    "    ELSIF OLD.state = 'STARTED' AND NEW.state = 'EXITED' AND NEW.woken = OLD.woken",
+    "    ELSIF true"
+   ]
+  ]
+ },
+ {
+  "id": "M183_jobs_insert_any_state",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0017_runner_write_guards.sql",
+  "expect": "TestRolesLeastPrivilege",
+  "edits": [
+   [
+    "IF NEW.state = 'REQUESTED' AND NOT NEW.woken",
+    "IF NOT NEW.woken"
+   ]
+  ]
+ },
+ {
+  "id": "M184_effects_runner_approves",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0017_runner_write_guards.sql",
+  "expect": "TestRunnerCannotApproveEffects",
+  "edits": [
+   [
+    "          AND (NEW.state <> 'APPROVED' OR OLD.state = 'APPROVED'",
+    "          AND (true"
+   ]
+  ]
+ },
+ {
+  "id": "M185_effects_request_mutable",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0017_runner_write_guards.sql",
+  "expect": "TestRunnerCannotApproveEffects",
+  "edits": [
+   [
+    "OLD.idem_key, OLD.request, OLD.request_sha,",
+    "OLD.idem_key, NEW.request, OLD.request_sha,"
+   ]
+  ]
+ },
+ {
+  "id": "M186_effects_retry_unapproved",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0017_runner_write_guards.sql",
+  "expect": "TestRunnerCannotApproveEffects",
+  "edits": [
+   [
+    "AND OLD.approval_sha IS NOT NULL)) THEN",
+    "AND true)) THEN"
+   ]
+  ]
+ },
+ {
+  "id": "M187_heartbeat_stops_on_transient",
+  "invariant": "heartbeat",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestHeartbeatSurvivesTransientError",
+  "edits": [
+   [
+    "case errors.Is(err, domain.ErrStaleFence), errors.Is(err, domain.ErrInvalidTransition), errors.Is(err, domain.ErrNotFound):",
+    "case err != nil:"
+   ]
+  ]
+ },
+ {
+  "id": "M188_wake_without_job_readback",
+  "invariant": "jobs",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestForgedJobExitDoesNotWake",
+  "edits": [
+   [
+    "\t\t\tif alive, known := s.prober.JobAlive(x.id); known && alive {",
+    "\t\t\tif alive, known := s.prober.JobAlive(x.id); known && alive && false {"
+   ]
+  ]
+ },
+ {
+  "id": "M189_guard_unpinned_lookup",
+  "invariant": "roles",
+  "pkg": "./internal/store",
+  "file": "internal/store/migrations/0017_runner_write_guards.sql",
+  "expect": "TestRunnerCannotShadowGuardTables",
+  "edits": [
+   [
+    "CREATE FUNCTION fabric_is_scheduler() RETURNS boolean LANGUAGE plpgsql STABLE\nSET search_path = pg_catalog, pg_temp AS $$",
+    "CREATE FUNCTION fabric_is_scheduler() RETURNS boolean LANGUAGE plpgsql STABLE AS $$"
+   ],
+   [
+    "SELECT value INTO r FROM public.fabric_settings",
+    "SELECT value INTO r FROM fabric_settings"
    ]
   ]
  }

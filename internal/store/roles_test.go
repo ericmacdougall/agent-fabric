@@ -67,6 +67,15 @@ func TestRolesLeastPrivilege(t *testing.T) {
 		{"runner", runner, "UPDATE resource_capacities SET held = 0"},
 		{"runner", runner, "UPDATE fabric_settings SET value = 'x'"},
 		{"runner", runner, "TRUNCATE events"},
+		// Red-team H1 on 193c0a1: the gate trusts these rows, so a runner
+		// must not write them directly.
+		{"runner", runner, "UPDATE attempts SET state = 'FAILED_DEFINITE', lease_until = NULL"},
+		{"runner", runner, "UPDATE attempts SET host = 'elsewhere'"},
+		{"runner", runner, "UPDATE missions SET not_before = NULL"},
+		{"runner", runner, "UPDATE slots SET cap = 99"},
+		{"runner", runner, "DELETE FROM waits"},
+		{"runner", runner, "INSERT INTO commands (actor, mission_id, command_id, kind, request_sha256, status, response) VALUES ('fabd', 'm_x', 'c_x', 'WAKE', 'x', 'OK', '{}')"},
+		{"runner", runner, "DELETE FROM jobs"},
 	} {
 		if _, err := c.st.pool.Exec(ctx, c.stmt); sqlCode(err) != "42501" {
 			t.Errorf("%s: %q gave %v, want 42501", c.who, c.stmt, err)
@@ -86,6 +95,29 @@ func TestRolesLeastPrivilege(t *testing.T) {
 	if sqlCode(err) != "42501" {
 		t.Fatalf("the runner role wrote a pre-launch abandonment: %v", err)
 	}
+	// The runner's own write paths still work: a job request and an ask.
+	if _, err := runner.pool.Exec(ctx, `INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state) VALUES ('j_rl', 'm_rl', 'r_rl_2', $1, '[]', '/x', 'REQUESTED')`, fence); err != nil {
+		t.Fatalf("control: the runner cannot request a job: %v", err)
+	}
+	if _, err := runner.pool.Exec(ctx, `UPDATE jobs SET state = 'STARTED' WHERE id = 'j_rl'`); sqlCode(err) != "42501" {
+		t.Errorf("runner: marking a job STARTED gave %v, want 42501 (the scheduler starts jobs)", err)
+	}
+	if _, err := app.pool.Exec(ctx, `UPDATE jobs SET state = 'STARTED' WHERE id = 'j_rl'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.pool.Exec(ctx, `UPDATE jobs SET state = 'EXITED', exit_code = 0, ended_at = now() WHERE id = 'j_rl'`); err != nil {
+		t.Fatalf("control: the job watcher cannot record its exit: %v", err)
+	}
+	for _, q := range []string{
+		"UPDATE jobs SET woken = true WHERE id = 'j_rl'",
+		"UPDATE jobs SET state = 'FAILED_TO_START' WHERE id = 'j_rl'",
+		"INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state, ended_at) VALUES ('j_rl2', 'm_rl', 'r_rl_2', 1, '[]', '/x', 'EXITED', now())",
+		"INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state) VALUES ('j_rl3', 'm_rl', 'r_rl_2', 1, '[]', '/x', 'STARTED')",
+	} {
+		if _, err := runner.pool.Exec(ctx, q); sqlCode(err) != "42501" {
+			t.Errorf("runner: %q gave %v, want 42501", q, err)
+		}
+	}
 	if err := runner.CheckRunnerRole(ctx); err != nil {
 		t.Fatalf("the runner role failed its own check: %v", err)
 	}
@@ -93,5 +125,98 @@ func TestRolesLeastPrivilege(t *testing.T) {
 		if err := st.CheckRunnerRole(ctx); err == nil {
 			t.Errorf("CheckRunnerRole accepted the %s role as a runner", name)
 		}
+	}
+}
+
+// Main's follow-up to H1: the runner keeps UPDATE on effects for dispatch,
+// but it never approves one.
+func TestRunnerCannotApproveEffects(t *testing.T) {
+	owner, ctx := openTest(t)
+	r := testRoles(t, owner, ctx)
+	runner := openAs(t, ctx, r.Runner())
+	mk(t, owner, ctx, "m_ap")
+	if _, err := owner.pool.Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state)
+		VALUES ('e_ap', 'm_ap', 'r_ap_1', 1, 'comment', 's', 'k_ap', '{}', 'sha', 'APPROVAL_REQUIRED')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.pool.Exec(ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state, approval_sha, approved_by) VALUES
+		('e_ap3', 'm_ap', 'r_ap_1', 1, 'comment', 's', 'k_ap3', '{}', 'sha', 'FAILED_DEFINITE', NULL, NULL),
+		('e_ok', 'm_ap', 'r_ap_1', 1, 'comment', 's', 'k_ok', '{}', 'sha', 'FAILED_DEFINITE', 'sha', 'eric')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		"UPDATE effects SET state = 'APPROVED' WHERE id = 'e_ap'",
+		"UPDATE effects SET approval_sha = 'sha', approved_by = 'runner' WHERE id = 'e_ap'",
+		"INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state) VALUES ('e_ap2', 'm_ap', 'r_ap_1', 1, 'comment', 's', 'k_ap2', '{}', 'sha', 'APPROVED')",
+		"UPDATE effects SET state = 'APPROVED' WHERE id = 'e_ap3'",                // retry of a never-approved effect
+		"UPDATE effects SET request = '{\"body\":\"swapped\"}' WHERE id = 'e_ok'", // content after approval
+	} {
+		if _, err := runner.pool.Exec(ctx, q); sqlCode(err) != "42501" {
+			t.Errorf("runner: %q gave %v, want 42501", q, err)
+		}
+	}
+	// Control: Broker.Retry as the runner re-arms an approved effect.
+	if _, err := runner.pool.Exec(ctx, "UPDATE effects SET state = 'APPROVED', updated_at = now() WHERE id = 'e_ok' AND state = 'FAILED_DEFINITE'"); err != nil {
+		t.Fatalf("control: the runner cannot retry an approved effect: %v", err)
+	}
+}
+
+// A deployment whose runner role was made by 193c0a1 (DML on every table):
+// CheckRunnerRole refuses it, and re-applying the roles narrows it.
+func TestRolesUpgradeNarrowsRunner(t *testing.T) {
+	owner, ctx := openTest(t)
+	r := testRoles(t, owner, ctx)
+	runner := openAs(t, ctx, r.Runner())
+	// Each grant alone is enough to be refused.
+	for _, g := range []string{"UPDATE ON attempts", "UPDATE ON missions", "UPDATE ON slots", "DELETE ON waits", "INSERT ON commands"} {
+		if _, err := owner.pool.Exec(ctx, "GRANT "+g+" TO "+r.Runner()); err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.CheckRunnerRole(ctx); err == nil {
+			t.Errorf("CheckRunnerRole passed a runner with %s", g)
+		}
+		if _, err := owner.pool.Exec(ctx, "REVOKE "+g+" FROM "+r.Runner()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := owner.pool.Exec(ctx, "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "+r.Runner()+"; REVOKE INSERT, UPDATE, DELETE ON hold_commands FROM "+r.Runner()); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.CheckRunnerRole(ctx); err == nil {
+		t.Fatal("CheckRunnerRole passed a runner that can UPDATE attempts")
+	}
+	if err := owner.ApplyRoles(ctx, r, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.CheckRunnerRole(ctx); err != nil {
+		t.Fatalf("after re-applying the roles: %v", err)
+	}
+	if _, err := runner.pool.Exec(ctx, "UPDATE attempts SET host = 'elsewhere'"); sqlCode(err) != "42501" {
+		t.Fatalf("after re-applying the roles the runner's UPDATE attempts gave %v, want 42501", err)
+	}
+}
+
+// A runner may create temporary tables, and pg_temp is searched first, so
+// an unqualified fabric_settings or events in a guard could be shadowed by
+// one the runner names itself the scheduler in.
+func TestRunnerCannotShadowGuardTables(t *testing.T) {
+	owner, ctx := openTest(t)
+	r := testRoles(t, owner, ctx)
+	runner := openAs(t, ctx, r.Runner())
+	mk(t, owner, ctx, "m_sh")
+	if _, err := owner.pool.Exec(ctx, `INSERT INTO jobs (id, mission_id, attempt_id, fence, argv, rundir, state) VALUES ('j_sh', 'm_sh', 'r_sh_1', 1, '[]', '/x', 'REQUESTED')`); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := runner.pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, "CREATE TEMP TABLE fabric_settings (key text, value text); INSERT INTO fabric_settings VALUES ('scheduler_role', '"+r.Runner()+"')"); err != nil {
+		t.Fatalf("setup: the runner cannot create its shadow table: %v", err)
+	}
+	_, err = conn.Exec(ctx, "UPDATE jobs SET state = 'STARTED' WHERE id = 'j_sh'")
+	if sqlCode(err) != "42501" {
+		t.Fatalf("a runner with a shadow fabric_settings started a job: %v, want 42501", err)
 	}
 }

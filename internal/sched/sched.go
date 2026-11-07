@@ -42,6 +42,8 @@ type Launcher interface {
 // Prober reads a runner back by attempt id (G1). known false: no answer.
 type Prober interface {
 	Alive(run domain.AttemptID) (alive, known bool)
+	// JobAlive reads a host job's unit back (fab-job-<id>).
+	JobAlive(job string) (alive, known bool)
 }
 
 // Config is the policy the scheduler applies. Model and effort come from the
@@ -95,6 +97,8 @@ type Scheduler struct {
 	runnerChecked bool
 	prober        Prober
 	waitLogged    map[domain.MissionID]bool // capacity waits already named in the log
+	// beforeHeartbeat is a test cutpoint that can fail one heartbeat (H2).
+	beforeHeartbeat func() error
 
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired, CapacityWaits int
@@ -308,6 +312,14 @@ func (s *Scheduler) wakeExitedJobs(ctx context.Context) (int, error) {
 	}
 	rows.Close()
 	for _, x := range jobs {
+		if s.prober != nil {
+			// A runner records its own job's exit (0017), so the exit is a
+			// claim: wake only once the job's unit is gone (main, after H1).
+			if alive, known := s.prober.JobAlive(x.id); known && alive {
+				s.park(domain.MissionID(x.mission), fmt.Errorf("job %s reported exited but its unit is still running", x.id))
+				continue
+			}
+		}
 		_, err := s.st.Execute(ctx, "fabd", domain.CommandID("wake:job:"+x.id), domain.Command{Kind: domain.CmdWake, Mission: domain.MissionID(x.mission), Token: "job:" + x.id})
 		if err != nil && !errors.As(err, new(*store.Refusal)) {
 			// Red-team D1: park this one mission and carry on. The job stays
@@ -588,11 +600,25 @@ func (s *Scheduler) heartbeat(ctx context.Context, attempt domain.AttemptID, fen
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := s.st.Heartbeat(ctx, attempt, fence); err != nil {
-				if ctx.Err() == nil {
-					fmt.Fprintf(os.Stderr, "fabd: heartbeat %s stopped: %v\n", attempt, err)
-				}
+			err := error(nil)
+			if s.beforeHeartbeat != nil {
+				err = s.beforeHeartbeat()
+			}
+			if err == nil {
+				err = s.st.Heartbeat(ctx, attempt, fence)
+			}
+			switch {
+			case err == nil:
+			case errors.Is(err, domain.ErrStaleFence), errors.Is(err, domain.ErrInvalidTransition), errors.Is(err, domain.ErrNotFound):
+				// Definite: another fence owns the attempt or it is no longer live.
+				fmt.Fprintf(os.Stderr, "fabd: heartbeat %s stopped: %v\n", attempt, err)
 				return
+			default:
+				// Red-team H2: transient (a dropped connection, a timeout). Keep
+				// beating; the lease is three beats long.
+				if ctx.Err() == nil {
+					fmt.Fprintf(os.Stderr, "fabd: heartbeat %s failed, retrying: %v\n", attempt, err)
+				}
 			}
 		}
 	}

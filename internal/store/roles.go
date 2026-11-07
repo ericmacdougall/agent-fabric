@@ -25,9 +25,12 @@ func (r Roles) Scheduler() string { return r.Prefix + "_scheduler" }
 
 var rolePrefix = regexp.MustCompile(`^[a-z][a-z0-9_]{0,40}$`)
 
-// gateTables are written only by the scheduler (holds, reservations,
-// grants); the runner role may read them.
-var gateTables = []string{"hold_commands", "reservations", "reservation_events", "resource_capacities", "dispatch_grants", "usage_receipts", "fabric_settings"}
+// runnerWrites is everything the runner role may write (red-team H1 on
+// 193c0a1: it had DML on every table, so it could end its own attempt and
+// free its hold). A runner requests jobs and records their exit, submits
+// and dispatches effects, and raises asks; 0017 narrows jobs and effects
+// further. It reads everything.
+var runnerWrites = map[string]string{"jobs": "INSERT, UPDATE", "effects": "INSERT, UPDATE", "asks": "INSERT"}
 
 // RoleTimeout bounds every statement and idle transaction of the app and
 // runner roles (goodqa#14929 item 3; also bounds goodqa#14925).
@@ -83,13 +86,17 @@ func (s *Store) ApplyRoles(ctx context.Context, r Roles, appPassword, runnerPass
 			fmt.Sprintf("ALTER ROLE %s SET idle_in_transaction_session_timeout = '%s'", rl, RoleTimeout),
 			fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", id(db), rl),
 			fmt.Sprintf("GRANT USAGE ON SCHEMA public TO %s", rl),
-			fmt.Sprintf("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %s", rl),
 			fmt.Sprintf("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO %s", rl),
-			fmt.Sprintf("REVOKE INSERT, UPDATE, DELETE ON fabric_settings FROM %s", rl),
 		)
 	}
-	for _, tb := range gateTables {
-		stmts = append(stmts, fmt.Sprintf("REVOKE INSERT, UPDATE, DELETE ON %s FROM %s", id(tb), runner))
+	stmts = append(stmts,
+		fmt.Sprintf("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %s", app),
+		fmt.Sprintf("REVOKE INSERT, UPDATE, DELETE ON fabric_settings FROM %s", app),
+		fmt.Sprintf("REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM %s", runner),
+		fmt.Sprintf("GRANT SELECT ON ALL TABLES IN SCHEMA public TO %s", runner),
+	)
+	for tb, privs := range runnerWrites {
+		stmts = append(stmts, fmt.Sprintf("GRANT %s ON %s TO %s", privs, id(tb), runner))
 	}
 	schedRole, err := quote(r.Scheduler())
 	if err != nil {
@@ -131,7 +138,10 @@ func (s *Store) CheckRunnerRole(ctx context.Context) error {
 		pg_has_role(current_user, (SELECT relowner FROM pg_class WHERE oid = 'events'::regclass), 'USAGE'),
 		COALESCE((SELECT pg_has_role(current_user, value, 'MEMBER') FROM fabric_settings
 		          WHERE key = 'scheduler_role' AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = value)), false),
-		has_table_privilege(current_user, 'hold_commands', 'INSERT')`).Scan(&who, &super, &owner, &sched, &hold)
+		has_table_privilege(current_user, 'hold_commands', 'INSERT')
+		OR has_table_privilege(current_user, 'attempts', 'UPDATE') OR has_table_privilege(current_user, 'missions', 'UPDATE')
+		OR has_table_privilege(current_user, 'slots', 'UPDATE') OR has_table_privilege(current_user, 'waits', 'DELETE')
+		OR has_table_privilege(current_user, 'commands', 'INSERT')`).Scan(&who, &super, &owner, &sched, &hold)
 	if err != nil {
 		return err
 	}
@@ -143,7 +153,7 @@ func (s *Store) CheckRunnerRole(ctx context.Context) error {
 	case sched:
 		return fmt.Errorf("runner role %s is a scheduler member", who)
 	case hold:
-		return fmt.Errorf("runner role %s can write hold_commands", who)
+		return fmt.Errorf("runner role %s can write scheduler state (hold_commands, attempts, missions, slots, waits or commands)", who)
 	}
 	return nil
 }

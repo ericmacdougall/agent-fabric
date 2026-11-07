@@ -47,6 +47,12 @@ production readiness.
 - The grant is an in-process struct, not a signed envelope; there is no
   separate host agent yet; the worker still carries a database DSN for
   `fab job run`.
+- **The dispatch gate (`fab daemon --hold`) is an accident guard, not a
+  security boundary yet.** It stops the scheduler from over-admitting a
+  resource by mistake. It is not proven against a runner that writes the
+  database directly until the runner-role restrictions (migration 0017,
+  `fab db roles`) pass independent review. Runners must connect as the
+  runner role (`FABRIC_RUNNER_DSN`), never as the app or owner role.
 - Store tests need a disposable PostgreSQL 16 (`FABRIC_TEST_DSN`); the
   process-signalling controls are opt-in (`FABRIC_HOST_CONTROLS=1`).
 
