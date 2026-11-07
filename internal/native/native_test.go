@@ -3,6 +3,10 @@ package native_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +21,7 @@ import (
 
 func TestMain(m *testing.M) { os.Exit(storetest.Main(m, "native")) }
 
-var canary = "sk-" + "ant-CANARY-" + "0123456789abcdefXYZ"
+var canary = "sk-" + "ant-api03-" + strings.Repeat("CANARYx", 12) // the API-key shape (goodqa#15087)
 
 func hooks(t *testing.T) [][]string {
 	d := os.Getenv("FABRIC_HOOKS_DIR")
@@ -56,15 +60,41 @@ func newEnv(t *testing.T, steps ...fakeapi.Step) *env {
 	prices := `{"input_per_mtok_micros":100000,"output_per_mtok_micros":500000,"cache_write_per_mtok_micros":200000,"cache_read_per_mtok_micros":10000,"server_tool_per_use_micros":10000,"long_context_threshold_tokens":100000,"long_context_multiplier_percent":500}`
 	g := native.Grant{Provider: "anthropic", Mission: "m_nat1", Attempt: "r_nat1", Ticket: "GoodQA goodqa#15040",
 		Model: "test-model", MaxTokens: 400, System: "You are a test agent.", Prompt: "Read notes.txt then echo it.",
-		Worktree: wt, RunDir: run, BaseURL: srv.URL, AnthropicVersion: "test-version", KeyCommand: []string{script},
+		Worktree: wt, RunDir: run, BaseURL: native.APIBaseURL, AnthropicVersion: "test-version", KeyCommand: []string{script},
 		Prices: json.RawMessage(prices), LiveTest: true, MaxTurns: 6, WallSeconds: 60, RestartCap: 3,
 		ShellAllow: []string{`^(ls|cat|echo|wc)( [A-Za-z0-9_./=-]+)*$`}, OracleHooks: hooks(t), RequiredControls: []string{"x"}}
 	g.Caps.Month, g.Caps.Job, g.Caps.Run = 20_000_000, 5_000_000, 1_000_000
+	fakeAPI = srv.URL
+	t.Setenv("FABRIC_NATIVE_CHILD_API", srv.URL) // a child run routes to the same fake
 	return &env{g: g, marker: marker, srv: srv}
 }
 
 func opts(contained bool) native.Options {
-	return native.Options{Starter: fakehost.New(), Boundary: tools.Boundary{Host: "fake", Contained: contained}}
+	return native.Options{Starter: fakehost.New(), Boundary: tools.Boundary{Host: "fake", Contained: contained},
+		HTTP: &http.Client{Transport: toFake{base: fakeAPI}}}
+}
+
+// fakeAPI is the fake server the current test routes to (goodqa#15087 AC-5:
+// the grant names the real API URL, and tests swap the transport). With no
+// fake set, every request fails: no test can reach the real API.
+var fakeAPI string
+
+type toFake struct{ base string }
+
+func (f toFake) RoundTrip(r *http.Request) (*http.Response, error) {
+	if f.base == "" {
+		return nil, errors.New("test transport: no fake API is set")
+	}
+	if r.URL.Scheme+"://"+r.URL.Host != native.APIBaseURL {
+		return nil, fmt.Errorf("test transport: unexpected host %s", r.URL.Host)
+	}
+	u, err := url.Parse(f.base)
+	if err != nil {
+		return nil, err
+	}
+	r2 := r.Clone(r.Context())
+	r2.URL.Scheme, r2.URL.Host, r2.Host = u.Scheme, u.Host, ""
+	return http.DefaultTransport.RoundTrip(r2)
 }
 
 func TestMissionRunEndToEnd(t *testing.T) {

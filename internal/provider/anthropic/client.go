@@ -73,9 +73,7 @@ func New(cfg Config) (*Client, error) {
 	if cfg.BaseURL == "" || cfg.Version == "" || cfg.Key == nil {
 		return nil, errors.New("anthropic: BaseURL, Version and Key are required")
 	}
-	if cfg.HTTP == nil {
-		cfg.HTTP = &http.Client{}
-	}
+	cfg.HTTP = safeHTTP(cfg.HTTP)
 	if cfg.Retry.MaxAttempts == 0 {
 		cfg.Retry = DefaultRetry()
 	}
@@ -98,6 +96,34 @@ func New(cfg Config) (*Client, error) {
 		cfg.Jitter = rand.Float64
 	}
 	return &Client{cfg: cfg}, nil
+}
+
+// safeHTTP returns a copy of c (or a new client) that never follows a
+// redirect and never uses the environment proxy (goodqa#15087 AC-5, red-team
+// F14): a redirect or a proxy would carry the x-api-key header somewhere
+// other than the configured API host. A redirect comes back as its own 3xx
+// response, which the retry matrix treats as a non-2xx answer. A nil or
+// *http.Transport transport is replaced by a clone with Proxy nil; any other
+// RoundTripper (a test double) is kept as is.
+func safeHTTP(c *http.Client) *http.Client {
+	var out http.Client
+	if c != nil {
+		out = *c
+	}
+	switch t := out.Transport.(type) {
+	case nil:
+		out.Transport = noProxy(http.DefaultTransport.(*http.Transport))
+	case *http.Transport:
+		out.Transport = noProxy(t)
+	}
+	out.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &out
+}
+
+func noProxy(t *http.Transport) *http.Transport {
+	n := t.Clone()
+	n.Proxy = nil
+	return n
 }
 
 // APIError is a non-2xx response.

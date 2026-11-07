@@ -1,6 +1,9 @@
 package native
 
 import (
+	"context"
+	"time"
+
 	"fabric/internal/settle"
 	"fabric/internal/store"
 )
@@ -11,6 +14,16 @@ func SetFinishSeams(after func(store.Response, error) error, clock settle.Clock)
 	prevAfter, prevClock := afterFinishExec, settleClock
 	afterFinishExec, settleClock = after, clock
 	return func() { afterFinishExec, settleClock = prevAfter, prevClock }
+}
+
+// NewKeyRing exposes the native key source and its redactor (goodqa#15087
+// AC-5).
+func NewKeyRing(argv []string, ttl time.Duration) (func(context.Context) (string, error), interface{ Redact(string) string }, error) {
+	src, ring, err := newKeyRing(argv, ttl)
+	if err != nil {
+		return nil, nil, err
+	}
+	return src, ring, nil
 }
 
 // DisablePrecheck turns off native's own provider checks and returns the

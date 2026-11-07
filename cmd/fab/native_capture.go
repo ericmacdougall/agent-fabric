@@ -39,7 +39,7 @@ func providerMain(args []string) error {
 	if err != nil {
 		return err
 	}
-	keySrc, err := anthropic.KeyFromCommand(g.KeyCommand, 5*time.Minute)
+	keySrc, err := anthropic.KeyFromCommand(g.KeyCommand, 5*time.Minute, nil)
 	if err != nil {
 		return err
 	}

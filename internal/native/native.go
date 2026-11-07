@@ -117,6 +117,8 @@ func (g Grant) Validate() error {
 	}
 	if g.BaseURL == "" || g.AnthropicVersion == "" || len(g.KeyCommand) == 0 {
 		p = append(p, "base_url, anthropic_version and key_command are required")
+	} else if g.BaseURL != APIBaseURL {
+		p = append(p, "base_url must be exactly "+APIBaseURL)
 	}
 	if g.MaxTurns <= 0 || g.WallSeconds <= 0 {
 		p = append(p, "max_turns and wall_seconds are required")
@@ -159,6 +161,11 @@ type Receipt struct {
 }
 
 func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, error) {
+	// goodqa#15087 AC-5: the key goes to the Anthropic API only; checked
+	// before anything else, so a wrong base_url never runs the key command.
+	if err := checkBaseURL(g.BaseURL); err != nil {
+		return nil, err
+	}
 	prices, err := agent.ParsePrices(g.Prices)
 	if err != nil {
 		return nil, err
@@ -215,12 +222,13 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		allow = append(allow, re)
 	}
 
-	keySrc, err := anthropic.KeyFromCommand(g.KeyCommand, 5*time.Minute)
+	keySrc, keys, err := newKeyRing(g.KeyCommand, 5*time.Minute)
 	if err != nil {
 		return nil, err
 	}
-	key, err := keySrc(ctx) // held in memory only, to redact it from anything a tool prints
-	if err != nil {
+	// The first fetch checks the key before anything is started; every value
+	// the source returns, a rotated one included, is redacted from tool output.
+	if _, err := keySrc(ctx); err != nil {
 		return nil, err
 	}
 	cl, err := anthropic.New(anthropic.Config{BaseURL: g.BaseURL, Version: g.AnthropicVersion, Key: keySrc, HTTP: o.HTTP})
@@ -265,7 +273,7 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		}}
 	loop, err := agent.New(agent.Config{
 		DB: db, Ledger: led, Provider: &anthropic.Provider{C: cl}, Tools: toolset, Guard: oracle,
-		Redact:  policy.Redactor{Literals: []string{key}},
+		Redact:  keys,
 		Attempt: domain.AttemptID(g.Attempt), Fence: fence,
 		Model: g.Model, MaxTokens: g.MaxTokens, System: g.System, Extra: g.Extra, Prompt: g.Prompt,
 		MaxTurns: g.MaxTurns, MaxTotalTokens: g.MaxTotalTokens, Wall: time.Duration(g.WallSeconds) * time.Second, RestartCap: restartCap(g.RestartCap),

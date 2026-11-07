@@ -319,7 +319,13 @@ func TestNativeRunsAdmittedMission(t *testing.T) {
 	})
 
 	t.Run("f refused before the key command", func(t *testing.T) {
-		for _, c := range []string{"paused mission", "unknown attempt with an outcome", "fence mismatch", "expired lease"} {
+		// want names a fragment the refusal must carry, where it matters.
+		want := map[string]string{
+			"attempt on another host": "runs on h_elsewhere",
+			"started, not acked":      "is LEASED",
+		}
+		for _, c := range []string{"paused mission", "unknown attempt with an outcome", "fence mismatch", "expired lease",
+			"attempt on another host", "started, not acked"} {
 			t.Run(c, func(t *testing.T) {
 				st := storetest.Open(t)
 				e := newEnv(t, done("never"))
@@ -346,14 +352,58 @@ func TestNativeRunsAdmittedMission(t *testing.T) {
 				case "expired lease":
 					seedRunning(t, st, e, "", 0)
 					st.Pool().Exec(ctx, "UPDATE attempts SET lease_until = now() - interval '1 second' WHERE id = $1", e.g.Attempt) //nolint:errcheck
+				case "attempt on another host":
+					// Acceptance F1: the flock is host-local, so a live attempt
+					// of another host is not resumed here.
+					seedRunning(t, st, e, "", 0)
+					if _, err := st.Pool().Exec(ctx, "UPDATE attempts SET host = 'h_elsewhere' WHERE id = $1", e.g.Attempt); err != nil {
+						t.Fatal(err)
+					}
+				case "started, not acked":
+					// Acceptance F6: a crash between START_ATTEMPT and ACK_START
+					// leaves a LEASED attempt with no run row; it is refused and
+					// left to the lease expiry and reconcile.
+					m, a := domain.MissionID(e.g.Mission), domain.AttemptID(e.g.Attempt)
+					if err := st.CreateMission(ctx, m, domain.ProviderAnthropicAPI, e.g.Ticket, "", ""); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := st.Execute(ctx, "chat", domain.CommandID("admit-"+string(m)), domain.Command{Kind: domain.CmdAdmitMission, Mission: m}); err != nil {
+						t.Fatal(err)
+					}
+					lock, err := native.LockPath(a)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := st.Execute(ctx, "native-runner", "seed-start", domain.Command{Kind: domain.CmdStartAttempt, Mission: m, Attempt: a,
+						Host: hostid.Default(), Role: "writer", Path: domain.ProviderAnthropicAPI, LockPath: lock}); err != nil {
+						t.Fatal(err)
+					}
+					if s := attemptState(t, st, e.g.Attempt); s != string(domain.AttemptLeased) {
+						t.Fatalf("setup: attempt %s, want LEASED", s)
+					}
 				}
 				cmds := count(t, st, "SELECT count(*) FROM commands")
 				_, err := native.Run(ctx, st, e.g, opts(true))
 				if !errors.Is(err, native.ErrStartRefused) || exists(e.marker) || len(e.srv.Requests()) != 0 {
 					t.Fatalf("%s: %v, key read %v, %d requests; want ErrStartRefused before the key command", c, err, exists(e.marker), len(e.srv.Requests()))
 				}
+				if w := want[c]; w != "" && !strings.Contains(err.Error(), w) {
+					t.Fatalf("%s: refusal %q does not say %q", c, err, w)
+				}
 				if n := count(t, st, "SELECT count(*) FROM commands"); n != cmds {
 					t.Fatalf("%s: commands %d -> %d", c, cmds, n)
+				}
+				if c == "started, not acked" {
+					if s := attemptState(t, st, e.g.Attempt); s != string(domain.AttemptLeased) {
+						t.Fatalf("refused not-acked attempt is %s, want still LEASED", s)
+					}
+					st.Pool().Exec(ctx, "UPDATE attempts SET lease_until = now() - interval '1 second' WHERE id = $1", e.g.Attempt) //nolint:errcheck
+					if _, err := st.ExpireLeases(ctx, 10); err != nil {
+						t.Fatal(err)
+					}
+					if s := attemptState(t, st, e.g.Attempt); s != string(domain.AttemptUnknown) {
+						t.Fatalf("after lease expiry the not-acked attempt is %s, want UNKNOWN for reconcile", s)
+					}
 				}
 			})
 		}
@@ -380,6 +430,7 @@ func TestNativeChildHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
+	fakeAPI = os.Getenv("FABRIC_NATIVE_CHILD_API")            // the parent's fake; empty fails every request
 	if l := os.Getenv("FABRIC_NATIVE_CHILD_LEASE"); l != "" { // TestNativeKilledQuarantined's short lease
 		d, err := time.ParseDuration(l)
 		if err != nil {

@@ -14,7 +14,7 @@ import (
 	"fabric/internal/provider/anthropic/fakeapi"
 )
 
-var canary = "sk-" + "ant-CANARY-0123456789abcdef"
+var canary = "sk-" + "ant-api03-" + strings.Repeat("CANARYx", 12) // the API-key shape (goodqa#15087)
 
 func newClient(t *testing.T, s *fakeapi.Server, sleeps *[]time.Duration) *Client {
 	t.Helper()
@@ -374,22 +374,22 @@ func TestKeyFromCommand(t *testing.T) {
 	if err := os.WriteFile(multi, []byte("#!/bin/sh\necho 'two words'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	ks, err := KeyFromCommand([]string{good}, time.Minute)
+	ks, err := KeyFromCommand([]string{good}, time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if k, err := ks(context.Background()); err != nil || k != canary {
 		t.Fatalf("key %q err %v", k, err)
 	}
-	kb, _ := KeyFromCommand([]string{bad}, time.Minute)
+	kb, _ := KeyFromCommand([]string{bad}, time.Minute, nil)
 	if _, err := kb(context.Background()); err == nil || strings.Contains(err.Error(), canary) {
 		t.Fatalf("failing command: err=%v (must fail and not echo the output)", err)
 	}
-	km, _ := KeyFromCommand([]string{multi}, time.Minute)
+	km, _ := KeyFromCommand([]string{multi}, time.Minute, nil)
 	if _, err := km(context.Background()); err == nil {
 		t.Fatal("multi-token output accepted as a key")
 	}
-	if _, err := KeyFromCommand(nil, time.Minute); err == nil {
+	if _, err := KeyFromCommand(nil, time.Minute, nil); err == nil {
 		t.Fatal("empty command accepted")
 	}
 }
