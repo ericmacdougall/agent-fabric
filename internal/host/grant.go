@@ -134,12 +134,19 @@ type Profile interface {
 }
 
 // Handle names a started run on this host.
+// ErrWorkerManagerBusy reports definite prelaunch contention for the Linux
+// worker manager: no unit or process was started (goodqa#15235 S5b).
+var ErrWorkerManagerBusy = errors.New("worker manager busy")
+
 type Handle struct {
 	Run   domain.AttemptID
 	Token string
 	PID   int
 	PGID  int
 	Unit  string // Linux transient unit name
+	// UnitSerial is the worker manager's run generation, so a stale handle
+	// cannot stop a reused unit (goodqa#15235 S5b). Zero for other hosts.
+	UnitSerial uint64
 	// CGroup is the unit's cgroup path in sysfs, resolved once at Start so
 	// inventory and stop never depend on the user bus (review H4).
 	CGroup string
