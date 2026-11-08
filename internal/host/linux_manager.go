@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -252,6 +253,9 @@ func (l *LinuxManager) preflightUnit(uid int, policy *egress.PolicyDescriptor) e
 	if err != nil {
 		return err
 	}
+	if err := l.checkManagerSupport(); err != nil {
+		return err
+	}
 	unit := fmt.Sprintf("fab-manager-preflight-%d-%d.service", os.Getpid(), time.Now().UnixNano())
 	args := []string{
 		"--user", "--pipe", "--wait", "--collect", "--quiet", "--expand-environment=no",
@@ -270,6 +274,9 @@ func (l *LinuxManager) preflightUnit(uid int, policy *egress.PolicyDescriptor) e
 	args = append(args, workerManagerControlSockets(uid)...)
 	out, err := l.managerOutput("systemd-run", args...)
 	if err != nil {
+		if reason := unsupportedPreflightReason(string(out)); reason != "" {
+			return refuseUnsupported(reason)
+		}
 		return fmt.Errorf("linux unit-isolation preflight failed (socket, proc or IP controls unsupported or ineffective): %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -1019,4 +1026,68 @@ func mgrControlGrant(scratch string) Grant {
 	os.Chmod(jobs, 0o775|os.ModeSetgid)     //nolint:errcheck
 	os.Chmod(g.RunDir, 0o750|os.ModeSetgid) //nolint:errcheck
 	return g
+}
+
+// ErrLinuxManagerUnsupported means this host cannot enforce the worker
+// manager's procfs isolation. Start refuses; nothing falls back to a weaker
+// boundary or to the legacy profile (goodqa#15235 S5b).
+var ErrLinuxManagerUnsupported = errors.New("linux manager unsupported")
+
+// minManagerSystemd is the first systemd with PrivatePIDs (v257).
+const minManagerSystemd = 257
+
+// managerLogf records every unsupported-host refusal; a variable for tests.
+var managerLogf = log.Printf
+
+func refuseUnsupported(reason string) error {
+	err := fmt.Errorf("%w: %s", ErrLinuxManagerUnsupported, reason)
+	managerLogf("fab: %v", err)
+	return err
+}
+
+// parseSystemdVersion reads the major version from `systemctl --version`.
+func parseSystemdVersion(out string) (int, bool) {
+	line, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
+	fields := strings.Fields(line)
+	if len(fields) < 2 || fields[0] != "systemd" {
+		return 0, false
+	}
+	v, err := strconv.Atoi(fields[1])
+	if err != nil || v <= 0 {
+		return 0, false
+	}
+	return v, true
+}
+
+// checkManagerSupport refuses before any unit starts when systemd is too old
+// for PrivatePIDs, or when its version cannot be read (fail closed).
+func (l *LinuxManager) checkManagerSupport() error {
+	ctx, cancel := context.WithTimeout(context.Background(), l.managerTimeout())
+	defer cancel()
+	out, err := l.command(ctx, "systemctl", "--version").Output()
+	if err != nil {
+		return refuseUnsupported(fmt.Sprintf("cannot read the systemd version: %v", err))
+	}
+	v, ok := parseSystemdVersion(string(out))
+	if !ok {
+		return refuseUnsupported("cannot parse the systemd version")
+	}
+	if v < minManagerSystemd {
+		return refuseUnsupported(fmt.Sprintf("PrivatePIDs needs systemd>=%d (found %d); procfs isolation not enforced in user units", minManagerSystemd, v))
+	}
+	return nil
+}
+
+// unsupportedPreflightReason maps preflight output that proves the host
+// cannot enforce procfs isolation to an explicit reason; "" otherwise.
+func unsupportedPreflightReason(out string) string {
+	switch {
+	case strings.Contains(out, "Unknown assignment: PrivatePIDs"):
+		return "PrivatePIDs is not supported by this systemd; procfs isolation not enforced in user units"
+	case strings.Contains(out, "PrivatePIDs is ineffective"):
+		return "PrivatePIDs was accepted but not enforced; procfs isolation not enforced in user units"
+	case strings.Contains(out, "ProcSubset=pid is ineffective"):
+		return "ProtectProc/ProcSubset are not enforced in user units"
+	}
+	return ""
 }

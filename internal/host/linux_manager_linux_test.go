@@ -35,6 +35,10 @@ func TestLinuxManagerIsolationPreflightFailsClosed(t *testing.T) {
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho 'Unknown assignment InaccessiblePaths=' >&2\nexit 1\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// A supported systemd, so the refusal comes from the preflight unit.
+	if err := os.WriteFile(filepath.Join(dir, "systemctl"), []byte("#!/bin/sh\necho systemd 257\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	l := &LinuxManager{Self: "/unused/fab"}
 	err := l.preflightManagerIsolation(os.Getuid())
