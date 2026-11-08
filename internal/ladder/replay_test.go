@@ -10,9 +10,10 @@ import (
 )
 
 type parityFile struct {
-	Seed     int64                      `json:"seed"`
-	Policies map[string]json.RawMessage `json:"policies"`
-	Vectors  []struct {
+	Seed      int64                      `json:"seed"`
+	Reference map[string]string          `json:"reference_sha256"`
+	Policies  map[string]json.RawMessage `json:"policies"`
+	Vectors   []struct {
 		Name   string          `json:"name"`
 		Policy string          `json:"policy"`
 		State  json.RawMessage `json:"state"`

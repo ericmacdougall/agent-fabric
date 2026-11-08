@@ -37,7 +37,7 @@ var ErrInput = errors.New("ladder input refused")
 // safeKey is escalation.py SAFE_KEY: task names are file stems.
 var safeKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
-var rungName = regexp.MustCompile(`^R[0-9]+$`)
+var rungName = regexp.MustCompile(`^R[0-9]{1,2}$`) // model_tiers _RUNG (S1A-RT2-1)
 
 // ReadInput reads a regular file of at most limit bytes. The final path
 // component is opened with O_NOFOLLOW and O_NONBLOCK and the type is
@@ -193,7 +193,12 @@ func DecodeState(path string, body []byte) (LedgerState, error) {
 	if !safeKey.MatchString(st.Task) {
 		return st, refuse(where, "task", "is not a safe task key")
 	}
-	if stem := strings.TrimSuffix(filepath.Base(path), ".json"); stem != st.Task {
+	// escalation.py only ever reads <task>.json (S1A-RT2-7).
+	base := filepath.Base(path)
+	if !strings.HasSuffix(base, ".json") {
+		return st, refuse(where, "file name", "must end in .json")
+	}
+	if stem := strings.TrimSuffix(base, ".json"); stem != st.Task {
 		return st, refuse(where, "task", "does not match the file name")
 	}
 	raw, ok = m["events"]
@@ -370,6 +375,40 @@ func shortFingerprint(fp *string) string {
 	return "sha256:" + hex.EncodeToString(sum[:])[:12]
 }
 
+// ExitCode is the CLI exit status for err: 0 for nil, 3 for a refused
+// input or policy (ErrInput, ErrPolicy), 1 otherwise (S1A-RT2-4).
+func ExitCode(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, ErrInput), errors.Is(err, ErrPolicy):
+		return 3
+	}
+	return 1
+}
+
+// asciiJSON rewrites every rune above U+007E as a \u escape (a surrogate
+// pair above U+FFFF). encoding/json already escapes C0 controls, and a
+// non-ASCII rune can only occur inside a string, so the decoded value is
+// unchanged while bidi and C1 controls never reach a terminal raw
+// (S1A-RT2-6).
+func asciiJSON(b []byte) string {
+	var out strings.Builder
+	out.Grow(len(b))
+	for _, r := range string(b) {
+		switch {
+		case r <= 0x7e:
+			out.WriteRune(r)
+		case r <= 0xffff:
+			fmt.Fprintf(&out, `\u%04x`, r)
+		default:
+			r -= 0x10000
+			fmt.Fprintf(&out, `\u%04x\u%04x`, 0xd800+(r>>10), 0xdc00+(r&0x3ff))
+		}
+	}
+	return out.String()
+}
+
 // Format renders a status as text, or as indented JSON.
 func Format(s LadderStatus, asJSON bool) (string, error) {
 	if asJSON {
@@ -377,7 +416,7 @@ func Format(s LadderStatus, asJSON bool) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return string(b) + "\n", nil
+		return asciiJSON(b) + "\n", nil
 	}
 	blocked := "-"
 	if len(s.BlockedBy) > 0 {

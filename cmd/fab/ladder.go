@@ -33,7 +33,7 @@ func ladderMain(args []string) error {
 		return usageError{errors.New("ladder status: --state and --policy are required")}
 	}
 	st, err := ladder.StatusFromFiles(*statePath, *policyPath)
-	if errors.Is(err, ladder.ErrInput) || errors.Is(err, ladder.ErrPolicy) {
+	if ladder.ExitCode(err) == 3 {
 		// A refused input is a refusal (exit 3), not an internal error
 		// (S1A-RT-9b), so a caller can tell bad files from a crash.
 		return usageError{err}
