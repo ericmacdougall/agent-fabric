@@ -104,6 +104,21 @@ func CheckStream(evs []harness.Event) error {
 	return nil
 }
 
+// sameFinal checks that what Wait reports is what the stream recorded: a sink
+// stores the stream, so a divergence would give the caller one answer and the
+// record another.
+func sameFinal(t T, evs []harness.Event, f harness.Final) {
+	t.Helper()
+	got, ok := finalOf(evs)
+	if !ok {
+		t.Fatalf("no final event in the stream")
+		return
+	}
+	if got.Outcome != f.Outcome || got.ExitCode != f.ExitCode {
+		t.Fatalf("stream final %+v differs from Wait %+v", got, f)
+	}
+}
+
 func finalOf(evs []harness.Event) (harness.Final, bool) {
 	for _, e := range evs {
 		if e.Kind == harness.KindFinal {
@@ -147,9 +162,7 @@ func run(t T, c Case) {
 				t.Errorf("normal run emitted no %s event", k)
 			}
 		}
-		if got, _ := finalOf(evs); got.Outcome != f.Outcome {
-			t.Errorf("Wait outcome %q differs from the final event %q", f.Outcome, got.Outcome)
-		}
+		sameFinal(t, evs, f)
 	})
 
 	t.Run("unknown_event_is_data", func(t T) {
@@ -172,6 +185,7 @@ func run(t T, c Case) {
 		if f.Outcome != harness.OutcomeDone {
 			t.Fatalf("an unknown event changed the outcome to %q", f.Outcome)
 		}
+		sameFinal(t, evs, f)
 	})
 
 	t.Run("exit_without_result_is_failed", func(t T) {
@@ -187,18 +201,33 @@ func run(t T, c Case) {
 		if f.ExitCode == 0 || f.Reason == "" {
 			t.Fatalf("a failure must carry the exit status and a reason: %+v", f)
 		}
+		sameFinal(t, rec.Snapshot(), f)
 	})
 
 	t.Run("secrets_never_leave", func(t T) {
 		a, secret := c.Secret(t)
 		rec := &Recorder{}
 		s := start(t, a, rec)
-		wait(t, s)
-		for _, e := range rec.Snapshot() {
-			if strings.Contains(string(e.Payload), secret) {
-				t.Fatalf("event %d (%s) carries the secret", e.Seq, e.Kind)
+		f := wait(t, s)
+		evs := rec.Snapshot()
+		marker := false
+		for _, e := range evs {
+			p := string(e.Payload)
+			if strings.Contains(p, "[REDACTED]") {
+				marker = true
+			}
+			// no window of the secret may survive, so a redactor that keeps
+			// the tail (or the head) of a key is caught
+			for i := 0; i+5 <= len(secret); i++ {
+				if strings.Contains(p, secret[i:i+5]) {
+					t.Fatalf("event %d (%s) carries part of the secret: %q", e.Seq, e.Kind, secret[i:i+5])
+				}
 			}
 		}
+		if !marker {
+			t.Fatalf("no [REDACTED] marker in the stream: the scenario never exercised redaction")
+		}
+		sameFinal(t, evs, f)
 	})
 
 	t.Run("sink_failure_is_not_success", func(t T) {
@@ -214,6 +243,28 @@ func run(t T, c Case) {
 				t.Fatalf("seq gap after a sink failure: event %d has seq %d", i, e.Seq)
 			}
 		}
+	})
+
+	t.Run("stop_ends_a_running_session", func(t T) {
+		rec := &Recorder{}
+		s := start(t, c.Block(t), rec)
+		ctx, cancel := context.WithTimeout(context.Background(), waitFor)
+		defer cancel()
+		if !rec.WaitFor(waitFor, func(e []harness.Event) bool { return len(e) >= 1 }) {
+			t.Fatalf("blocked session emitted nothing")
+		}
+		if err := s.Stop(ctx); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+		f := wait(t, s)
+		evs := rec.Snapshot()
+		if err := CheckStream(evs); err != nil {
+			t.Fatalf("%v", err)
+		}
+		if f.Outcome != harness.OutcomeStopped {
+			t.Fatalf("a stopped session ended %q, want stopped", f.Outcome)
+		}
+		sameFinal(t, evs, f)
 	})
 
 	t.Run("lifecycle", func(t T) {
@@ -278,6 +329,7 @@ func run(t T, c Case) {
 		if err := CheckStream(evs); err != nil {
 			t.Fatal(err)
 		}
+		sameFinal(t, evs, f)
 		if interactive {
 			if f.Outcome != harness.OutcomeStopped {
 				t.Fatalf("outcome %q, want stopped", f.Outcome)

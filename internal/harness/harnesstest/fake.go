@@ -35,6 +35,8 @@ const (
 	BreakInputAfterEndOK
 	BreakInterruptTwiceErr
 	BreakStopTwiceErr
+	BreakStopReportsDone
+	BreakWaitDiverges
 )
 
 // Fake is a scriptable adapter built on harness.Emitter.
@@ -45,6 +47,7 @@ type Fake struct {
 	Break       Break
 	Secret      string
 	NoRedact    bool // mutant: send text through unredacted
+	Red         harness.Redactor
 }
 
 func (f *Fake) Name() string { return f.AName }
@@ -74,6 +77,9 @@ func (f *Fake) Start(ctx context.Context, spec harness.StartSpec, sink harness.S
 	if f.NoRedact {
 		red = identity{}
 	}
+	if f.Red != nil {
+		red = f.Red
+	}
 	em, err := harness.NewEmitter(f.AName, spec.SessionID, sink, red)
 	if err != nil {
 		return nil, err
@@ -89,21 +95,19 @@ func (s *fakeSession) ID() string { return s.id }
 func (s *fakeSession) finish(f harness.Final) {
 	s.mu.Lock()
 	s.ended = true
-	s.final = f
 	s.mu.Unlock()
-	_ = s.em.Final(context.Background(), f)
+	got, _ := s.em.FinalOutcome(context.Background(), f)
 	s.mu.Lock()
-	s.final.Outcome = s.finalOutcome(f)
+	s.final = got
+	if s.f.Break == BreakWaitDiverges {
+		if got.Outcome == harness.OutcomeDone {
+			s.final.Outcome = harness.OutcomeFailed
+		} else {
+			s.final.Outcome = harness.OutcomeDone
+		}
+	}
 	s.mu.Unlock()
 	close(s.done)
-}
-
-// finalOutcome mirrors the emitter's rewrite so Wait reports what was emitted.
-func (s *fakeSession) finalOutcome(f harness.Final) string {
-	if s.em.Err() != nil && f.Outcome == harness.OutcomeDone {
-		return harness.OutcomeFailed
-	}
-	return f.Outcome
 }
 
 func (s *fakeSession) run() {
@@ -112,6 +116,7 @@ func (s *fakeSession) run() {
 	switch s.f.Mode {
 	case ModeSecret:
 		_ = s.em.Message(ctx, "assistant", "found "+s.f.Secret+" in env")
+		_ = s.em.Unknown(ctx, "weird event", `{"leak":"`+s.f.Secret+`"}`)
 	default:
 		_ = s.em.Message(ctx, "assistant", "hello")
 	}
@@ -132,7 +137,11 @@ func (s *fakeSession) run() {
 		s.finish(harness.Final{Outcome: harness.OutcomeFailed, Reason: "harness exited without a result", ExitCode: 3})
 		return
 	}
-	s.finish(harness.Final{Outcome: harness.OutcomeDone, ExitCode: 0})
+	reason := ""
+	if s.f.Mode == ModeSecret {
+		reason = "finished with " + s.f.Secret
+	}
+	s.finish(harness.Final{Outcome: harness.OutcomeDone, Reason: reason, ExitCode: 0})
 }
 
 func (s *fakeSession) loop() {
@@ -158,7 +167,11 @@ func (s *fakeSession) loop() {
 			if left := len(s.inbox); left > 0 {
 				reason = fmt.Sprintf("undelivered_inputs=%d", left)
 			}
-			s.finish(harness.Final{Outcome: harness.OutcomeStopped, Reason: reason, ExitCode: -1})
+			out := harness.OutcomeStopped
+			if s.f.Break == BreakStopReportsDone {
+				out = harness.OutcomeDone
+			}
+			s.finish(harness.Final{Outcome: out, Reason: reason, ExitCode: -1})
 			return
 		}
 	}
@@ -228,12 +241,22 @@ type Recorder struct {
 	Events []harness.Event
 	// FailAfter, when > 0, makes Emit fail once that many events are stored.
 	FailAfter int
+	// FailNow makes every Emit fail.
+	FailNow bool
+	// PanicAfter, when > 0, makes Emit panic once that many events are stored.
+	PanicAfter int
 }
 
 // Emit implements harness.Sink.
 func (r *Recorder) Emit(ctx context.Context, e harness.Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.FailNow {
+		return fmt.Errorf("recorder: store unavailable")
+	}
+	if r.PanicAfter > 0 && len(r.Events) >= r.PanicAfter {
+		panic("recorder: boom")
+	}
 	if r.FailAfter > 0 && len(r.Events) >= r.FailAfter {
 		return fmt.Errorf("recorder: store unavailable")
 	}
