@@ -321,9 +321,9 @@ at all. An operator-only role for these commands is follow-up work.
   on its own. To post the same text again on purpose, submit a new effect
   with a new `--key`. The readback reads at most 5 pages of 200 comments
   (1,000), archived ones included. A longer thread reads UNKNOWN ("comment
-  history exceeded the page budget") and stays UNKNOWN on every later
-  reconcile: `fab effect resolve` settles only QUARANTINED effects, so
-  there is no operator exit for it yet (goodqa#15260).
+  history exceeded the page budget") and moves to QUARANTINED, because a
+  later pass cannot read more; check the ticket by hand and settle it with
+  `fab effect resolve --outcome applied|not_applied` (goodqa#15260).
 - **Final admission.** Every launch, gated or not, rechecks the attempt's
   fence, lease and intent revision against the database clock just before
   the runner starts. A database error at that moment abandons the attempt

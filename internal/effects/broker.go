@@ -132,6 +132,11 @@ const (
 	ObsNotApplied Observation = "NOT_APPLIED"
 	ObsConflict   Observation = "CONFLICT"
 	ObsUnknown    Observation = "UNKNOWN"
+	// ObsExhausted: the readback was well formed but ran out of budget
+	// before it could prove presence or absence. A later pass cannot do
+	// better (the history only grows), so the effect quarantines for an
+	// operator instead of staying UNKNOWN forever (goodqa#15260).
+	ObsExhausted Observation = "EXHAUSTED"
 )
 
 // Executor is the per-kind transport (Kimi's EffectExecutor, DESIGN.md 3.3).
@@ -615,7 +620,7 @@ func (b *Broker) Reconcile(ctx context.Context, exec Executor, id string) (Effec
 		state = Confirmed
 	case ObsNotApplied:
 		state = NotApplied
-	case ObsConflict:
+	case ObsConflict, ObsExhausted:
 		state = Quarantined
 	default:
 		state = Unknown // still unresolved; a later sweep tries again
