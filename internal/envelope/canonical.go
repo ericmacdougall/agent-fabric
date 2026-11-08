@@ -42,6 +42,12 @@ var (
 )
 
 // Marshal encodes v with encoding/json and returns its canonical form.
+//
+// It inherits encoding/json's coercion of invalid UTF-8 to U+FFFD, so two Go
+// strings that differ only in invalid bytes marshal to the same bytes. The
+// strict rejection of invalid UTF-8 applies to Canonicalize on raw JSON; code
+// that must refuse such strings validates them before calling Marshal. Integer
+// values beyond +-2^53 are refused (see Canonicalize); carry them as strings.
 func Marshal(v any) ([]byte, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -65,6 +71,12 @@ func Canonicalize(in []byte) ([]byte, error) {
 	if p.i != len(p.b) {
 		return nil, ErrTrailingBytes
 	}
+	// Number output can be longer than its input (1e20 prints as 21 digits).
+	// Capping the output too keeps "canonical bytes re-canonicalise to
+	// themselves" true for every accepted document.
+	if out.Len() > MaxBytes {
+		return nil, ErrTooLarge
+	}
 	return out.Bytes(), nil
 }
 
@@ -85,9 +97,6 @@ func (p *parser) skip() {
 }
 
 func (p *parser) value(out *bytes.Buffer, depth int) error {
-	if depth > MaxDepth {
-		return ErrTooDeep
-	}
 	if p.i >= len(p.b) {
 		return ErrSyntax
 	}
@@ -118,6 +127,9 @@ func (p *parser) value(out *bytes.Buffer, depth int) error {
 }
 
 func (p *parser) array(out *bytes.Buffer, depth int) error {
+	if depth >= MaxDepth { // at most MaxDepth nested containers, arrays and objects alike
+		return ErrTooDeep
+	}
 	p.i++ // [
 	out.WriteByte('[')
 	p.skip()
@@ -158,6 +170,9 @@ type member struct {
 }
 
 func (p *parser) object(out *bytes.Buffer, depth int) error {
+	if depth >= MaxDepth {
+		return ErrTooDeep
+	}
 	p.i++ // {
 	p.skip()
 	var ms []member
