@@ -246,6 +246,50 @@ func TestNativeRefusesReplayFromOtherWorktree(t *testing.T) {
 	}
 }
 
+// Red-team K3: two new runs of one attempt id from different worktrees both
+// find no row at planStart. The winner starts the attempt between the
+// loser's start rule and its flock; the loser re-checks under the flock and
+// is refused with ErrWorktreeMismatch before the key command and any write.
+func TestNativeRechecksWorktreeUnderFlock(t *testing.T) {
+	ctx := context.Background()
+	stateDir(t)
+	st := storetest.Open(t)
+	e := newEnv(t, textStep("never"))
+	real := canon(t, e.g.Worktree)
+	winner := e.g
+	winner.Worktree, _ = otherWorktree(t, real, "sibling directory")
+	lock, err := native.LockPath(domain.AttemptID(e.g.Attempt))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before untouched
+	ran := false
+	defer native.SetBeforeLocks(func() {
+		ran = true
+		if n := count(t, st, "SELECT count(*) FROM attempts"); n != 0 {
+			t.Errorf("setup: %d attempts at the loser's start rule, want 0 (caseNew)", n)
+		}
+		if _, err := native.StartNativeForTest(ctx, st, winner, true, lock); err != nil {
+			t.Errorf("winner start: %v", err)
+		}
+		before = snapshot(t, st, e.g.Attempt)
+	})()
+	_, err = native.Run(ctx, st, e.g, opts(true))
+	if !ran {
+		t.Fatal("the seam did not run")
+	}
+	assertMismatch(t, err, canon(t, winner.Worktree), real)
+	if exists(e.marker) || len(e.srv.Requests()) != 0 {
+		t.Fatalf("loser read the key (%v) or sent %d requests", exists(e.marker), len(e.srv.Requests()))
+	}
+	if after := snapshot(t, st, e.g.Attempt); after != before {
+		t.Fatalf("loser changed state after the winner's start: %+v -> %+v", before, after)
+	}
+	if got, _ := storedWorktree(t, st, e.g.Attempt); got != canon(t, winner.Worktree) {
+		t.Fatalf("attempt worktree %q, want the winner's %q", got, canon(t, winner.Worktree))
+	}
+}
+
 // NEG-3: an attempt row with a NULL worktree (written before 0038) is
 // refused with ErrWorktreeUnbound on resume and on replay, never adopted.
 func TestNativeRefusesUnboundAttempt(t *testing.T) {

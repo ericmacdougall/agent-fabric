@@ -246,11 +246,20 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 			return nil, err
 		}
 	}
+	if beforeLocks != nil {
+		beforeLocks()
+	}
 	release, err := ensureLocks(ctx, db, domain.AttemptID(g.Attempt), lockPath)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	// goodqa#15283 red-team K3: planStart read the binding before the flock;
+	// read it again now that the flock is held, before the key command and
+	// any write. (SelfTest has run by now; it reads and writes nothing.)
+	if err := recheckWorktree(ctx, st, g, wt.Path()); err != nil {
+		return nil, err
+	}
 
 	// A resumed attempt is covered before key access and setup. A new attempt
 	// starts heartbeating immediately after its keyed start/ack below.

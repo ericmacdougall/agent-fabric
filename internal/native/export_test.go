@@ -80,6 +80,13 @@ func DisablePrecheck() func() {
 	return func() { skipPrecheck = false }
 }
 
+// SetBeforeLocks installs the red-team K3 seam and returns its restore.
+func SetBeforeLocks(f func()) func() {
+	prev := beforeLocks
+	beforeLocks = f
+	return func() { beforeLocks = prev }
+}
+
 // SetHeartbeatFault installs the heartbeat test seam and returns its
 // restore (goodqa#15087 AC-7).
 func SetHeartbeatFault(f func() error) func() {

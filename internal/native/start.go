@@ -147,13 +147,8 @@ func planExisting(g Grant, worktree string, stored *string, mission, state, path
 	}
 	// goodqa#15283: the worktree binding, before any state rule, so a resume
 	// and a replay are both covered.
-	switch {
-	case stored == nil:
-		return startPlan{}, fmt.Errorf("%w: %w: attempt %s has no recorded worktree (it started before migration 0038), so it cannot be resumed or replayed from %q; reconcile attempt %s and start a new attempt",
-			ErrStartRefused, ErrWorktreeUnbound, g.Attempt, worktree, g.Attempt)
-	case !sameWorktree(*stored, worktree):
-		return startPlan{}, fmt.Errorf("%w: %w: attempt %s is bound to worktree %q, but this grant's worktree %q resolves to %q; run the grant from %q, or reconcile attempt %s and start a new attempt for %q",
-			ErrStartRefused, ErrWorktreeMismatch, g.Attempt, *stored, g.Worktree, worktree, *stored, g.Attempt, worktree)
+	if err := checkBinding(g, worktree, stored); err != nil {
+		return startPlan{}, err
 	}
 	// H3: the state first. An attempt that reconcile owns is refused even
 	// with a recorded outcome; a replay would only meet a reducer refusal.
@@ -187,6 +182,42 @@ func planExisting(g Grant, worktree string, stored *string, mission, state, path
 	}
 	return startPlan{c: caseResume, fence: fence, lockPath: lockPath}, nil
 }
+
+// checkBinding is the worktree binding (goodqa#15283): a stored NULL is
+// ErrWorktreeUnbound; a stored path other than the grant's canonical
+// worktree is ErrWorktreeMismatch, naming both.
+func checkBinding(g Grant, worktree string, stored *string) error {
+	switch {
+	case stored == nil:
+		return fmt.Errorf("%w: %w: attempt %s has no recorded worktree (it started before migration 0038), so it cannot be resumed or replayed from %q; reconcile attempt %s and start a new attempt",
+			ErrStartRefused, ErrWorktreeUnbound, g.Attempt, worktree, g.Attempt)
+	case !sameWorktree(*stored, worktree):
+		return fmt.Errorf("%w: %w: attempt %s is bound to worktree %q, but this grant's worktree %q resolves to %q; run the grant from %q, or reconcile attempt %s and start a new attempt for %q",
+			ErrStartRefused, ErrWorktreeMismatch, g.Attempt, *stored, g.Worktree, worktree, *stored, g.Attempt, worktree)
+	}
+	return nil
+}
+
+// recheckWorktree repeats the binding check with the flock held (red-team
+// K3). planStart runs before the flock, so two new runs of one attempt id
+// from different worktrees can both see no row; the one that loses the race
+// finds the winner's row here and is refused before the key command and any
+// write. No row yet means this run is still the one that starts it.
+func recheckWorktree(ctx context.Context, st *store.Store, g Grant, worktree string) error {
+	var stored *string
+	err := st.Pool().QueryRow(ctx, `SELECT worktree FROM attempts WHERE id = $1`, g.Attempt).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return checkBinding(g, worktree, stored)
+}
+
+// beforeLocks, when set by a test, runs after the start rule and SelfTest and
+// before the flock is taken (red-team K3). Always nil in production.
+var beforeLocks func()
 
 // heartbeatFault, when set by a test, replaces one heartbeat's result.
 var heartbeatFault func() error
