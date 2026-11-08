@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -90,20 +91,38 @@ func (a *assembler) mergeUsage(raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &w); err != nil {
 		return perr("usage: %v", err)
 	}
-	set := func(dst *int64, src *int64) {
-		if src != nil {
-			*dst = *src
+	// Usage is billed, so a negative counter or a server-tool total that would
+	// overflow is refused as a protocol error rather than settled.
+	for _, c := range []struct {
+		name string
+		dst  *int64
+		src  *int64
+	}{
+		{"input_tokens", &a.msg.Usage.Input, w.Input},
+		{"output_tokens", &a.msg.Usage.Output, w.Output},
+		{"cache_creation_input_tokens", &a.msg.Usage.CacheCreate, w.CacheCreate},
+		{"cache_read_input_tokens", &a.msg.Usage.CacheRead, w.CacheRead},
+	} {
+		if c.src == nil {
+			continue
 		}
+		if *c.src < 0 {
+			return perr("usage %s is negative", c.name)
+		}
+		*c.dst = *c.src
 	}
-	set(&a.msg.Usage.Input, w.Input)
-	set(&a.msg.Usage.Output, w.Output)
-	set(&a.msg.Usage.CacheCreate, w.CacheCreate)
-	set(&a.msg.Usage.CacheRead, w.CacheRead)
 	if w.ServerTool != nil {
-		a.msg.Usage.ServerTools = 0
-		for _, n := range w.ServerTool {
-			a.msg.Usage.ServerTools += n
+		var total int64
+		for name, n := range w.ServerTool {
+			if n < 0 {
+				return perr("usage server_tool_use.%s is negative", name)
+			}
+			if n > math.MaxInt64-total {
+				return perr("usage server_tool_use total overflows int64")
+			}
+			total += n
 		}
+		a.msg.Usage.ServerTools = total
 	}
 	a.msg.Usage.Raw = bytes.Clone(raw)
 	return nil
