@@ -39,20 +39,23 @@ func PinWorktree(path string) (*WorktreePin, error) {
 // Path is the canonical worktree.
 func (p *WorktreePin) Path() string { return p.path }
 
+// Every path and error below is quoted (%q): a swapped-in symlink target is
+// attacker-chosen text, and these messages reach tool results and logs, so a
+// control or ANSI byte must arrive escaped (red-team K4).
 func (p *WorktreePin) stat() (unix.Stat_t, error) {
 	var st unix.Stat_t
 	real, err := filepath.EvalSymlinks(p.path)
 	if err != nil {
-		return st, fmt.Errorf("%w: %s no longer resolves: %v", ErrWorktreeMoved, p.path, err)
+		return st, fmt.Errorf("%w: %q no longer resolves: %q", ErrWorktreeMoved, p.path, err)
 	}
 	if real != p.path {
-		return st, fmt.Errorf("%w: %s now resolves to %s", ErrWorktreeMoved, p.path, real)
+		return st, fmt.Errorf("%w: %q now resolves to %q", ErrWorktreeMoved, p.path, real)
 	}
 	if err := unix.Lstat(p.path, &st); err != nil {
-		return st, fmt.Errorf("%w: %s: %v", ErrWorktreeMoved, p.path, err)
+		return st, fmt.Errorf("%w: %q: %q", ErrWorktreeMoved, p.path, err)
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFDIR {
-		return st, fmt.Errorf("%w: %s is not a directory", ErrWorktreeMoved, p.path)
+		return st, fmt.Errorf("%w: %q is not a directory", ErrWorktreeMoved, p.path)
 	}
 	return st, nil
 }
@@ -80,14 +83,14 @@ func (p *WorktreePin) CheckFD(fd int) error {
 	}
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
-		return fmt.Errorf("%w: %s: %v", ErrWorktreeMoved, p.path, err)
+		return fmt.Errorf("%w: %q: %q", ErrWorktreeMoved, p.path, err)
 	}
 	return p.same(st)
 }
 
 func (p *WorktreePin) same(st unix.Stat_t) error {
 	if uint64(st.Dev) != p.dev || st.Ino != p.ino { //nolint:unconvert // Dev is int32 on darwin
-		return fmt.Errorf("%w: %s is now another directory (dev %d ino %d, recorded dev %d ino %d)",
+		return fmt.Errorf("%w: %q is now another directory (dev %d ino %d, recorded dev %d ino %d)",
 			ErrWorktreeMoved, p.path, uint64(st.Dev), st.Ino, p.dev, p.ino) //nolint:unconvert
 	}
 	return nil
