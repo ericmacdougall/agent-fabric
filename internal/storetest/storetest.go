@@ -84,14 +84,16 @@ func Open(t *testing.T) *store.Store {
 	return st
 }
 
-// RunnerDSN gives the test database least-privilege roles (goodqa#14929)
-// and returns a DSN whose sessions run as the runner role. The roles are
-// cluster-wide, so they carry this process's id and are dropped at the end
-// of the test.
-func RunnerDSN(t *testing.T, st *store.Store) string {
+// AppRunnerDSNs gives the test database least-privilege roles and returns
+// directly authenticated app and runner DSNs with distinct test-only passwords.
+// The roles are cluster-wide, so they carry this process's id and are dropped
+// at the end of the test.
+func AppRunnerDSNs(t *testing.T, st *store.Store) (string, string) {
 	t.Helper()
 	r := store.Roles{Prefix: fmt.Sprintf("fabric_s%d", os.Getpid())}
-	if err := st.ApplyRoles(context.Background(), r, "", ""); err != nil {
+	appPassword := fmt.Sprintf("test-app-password-%d", os.Getpid())
+	runnerPassword := fmt.Sprintf("test-runner-password-%d", os.Getpid())
+	if err := st.ApplyRoles(context.Background(), r, appPassword, runnerPassword); err != nil {
 		t.Fatalf("roles: %v", err)
 	}
 	t.Cleanup(func() {
@@ -100,12 +102,27 @@ func RunnerDSN(t *testing.T, st *store.Store) string {
 			st.Pool().Exec(context.Background(), "DROP ROLE "+n)     //nolint:errcheck
 		}
 	})
-	u, err := url.Parse(DSN)
-	if err != nil {
-		t.Fatal(err)
+	dsn := func(role, password string) string {
+		u, err := url.Parse(DSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.User = url.UserPassword(role, password)
+		q := u.Query()
+		q.Del("role")
+		q.Del("session_authorization")
+		q.Del("options")
+		q.Del("user")
+		q.Del("password")
+		u.RawQuery = q.Encode()
+		return u.String()
 	}
-	q := u.Query()
-	q.Set("role", r.Runner())
-	u.RawQuery = q.Encode()
-	return u.String()
+	return dsn(r.App(), appPassword), dsn(r.Runner(), runnerPassword)
+}
+
+// RunnerDSN retains the original runner-only test helper.
+func RunnerDSN(t *testing.T, st *store.Store) string {
+	t.Helper()
+	_, runner := AppRunnerDSNs(t, st)
+	return runner
 }

@@ -145,7 +145,7 @@ func TestTempTableCannotShadowBackstop(t *testing.T) {
 func TestRunnerCheckRefusesExtraPrivileges(t *testing.T) {
 	owner, ctx := openTest(t)
 	r := testRoles(t, owner, ctx)
-	runner := openAs(t, ctx, r.Runner())
+	runner := authorityRunnerLogin(t, owner, ctx, r)
 	if err := runner.CheckRunnerRole(ctx); err != nil {
 		t.Fatalf("the runner role ApplyRoles made is refused: %v", err)
 	}
