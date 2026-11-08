@@ -14,19 +14,23 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// lockRuntimeBase is the controller's systemd runtime directory, derived
+// from its uid and never from the environment (goodqa#15235 S5b red-team L2):
+// a daemon started without XDG_RUNTIME_DIR must lock the same inode as one
+// started as a user service. It persists across logouts only with linger,
+// which the Fabric controller account has. One controller account per worker
+// uid is supported; two controller accounts sharing a worker are not.
+var lockRuntimeBase = func() string { return "/run/user/" + strconv.Itoa(os.Getuid()) }
+
 // workerManagerLockPath returns a controller-owned path, never a predictable
 // inode directly in a shared temporary directory. Dedicated workers cannot
 // traverse or replace the lock when the controller directory remains 0700.
 func workerManagerLockPath(configured string, workerUID int) (string, error) {
 	path := configured
 	if path == "" {
-		base := os.Getenv("XDG_RUNTIME_DIR")
-		if base == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", fmt.Errorf("worker-manager lock home: %w", err)
-			}
-			base = filepath.Join(home, ".local", "state")
+		base := lockRuntimeBase()
+		if st, err := os.Stat(base); err != nil || !st.IsDir() {
+			return "", fmt.Errorf("worker-manager lock base %s is unavailable (controller needs a systemd runtime directory with linger): %v", base, err)
 		}
 		if !filepath.IsAbs(base) {
 			return "", fmt.Errorf("worker-manager lock base %q is not absolute", base)

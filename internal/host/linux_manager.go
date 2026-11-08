@@ -41,7 +41,7 @@ type LinuxManager struct {
 	ReadOnly  []string // extra read roots (toolchains, module caches)
 	ExtraRW   []string // extra writable roots; empty by default (review C2)
 	TCPPorts  []int    // legacy loopback-only test ports; forbidden with EgressConfig
-	LockPath  string   // optional cross-process worker-manager flock; default is per-UID under os.TempDir
+	LockPath  string   // optional cross-process worker-manager flock; default /run/user/<controller uid>/fab/locks
 	// EgressConfig enables the production per-run provider mediator. Start owns
 	// its listener and injects its PolicyDescriptor; Stop closes it before the
 	// serialization gate can fail over. Nil is reserved for loopback-only tests.
@@ -393,7 +393,7 @@ func (l *LinuxManager) Start(g Grant, argv []string, env []string, stdout, stder
 	l.active = h
 	l.launcher = launcher
 	l.mu.Unlock()
-	if err := l.waitUnitReady(h, readyFile); err != nil {
+	if err := l.waitUnitReady(h, readyFile, uid); err != nil {
 		if _, stopErr := l.Stop(h, "start readiness failure", 0); stopErr != nil {
 			return h, fmt.Errorf("linux start readiness: %w; retry Stop with this authenticated handle: %v", err, stopErr)
 		}

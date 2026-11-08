@@ -5,11 +5,15 @@ package host
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type linuxUnitState struct {
@@ -46,15 +50,36 @@ func (l *LinuxManager) linuxUnitState(unit string) (linuxUnitState, error) {
 	return parseLinuxUnitState(out), nil
 }
 
-func readLinuxReadyMarker(path string) (bool, error) {
-	b, err := os.ReadFile(path)
+const linuxReadyContents = "ready\n"
+
+// readLinuxReadyMarker reads the marker the confined launcher creates. The
+// worker can rename or replace entries in run/jobs, so the controller never
+// follows a link, never blocks on a FIFO or device, and reads a bounded
+// amount from a regular single-link file owned by the worker uid
+// (goodqa#15235 S5b red-team L1).
+func readLinuxReadyMarker(path string, workerUID int) (bool, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, unix.ENOENT) {
 			return false, nil
 		}
 		return false, fmt.Errorf("readiness marker: %w", err)
 	}
-	if string(b) != "ready\n" {
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return false, fmt.Errorf("readiness marker stat: %w", err)
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok || !st.Mode().IsRegular() || sys.Nlink != 1 || int(sys.Uid) != workerUID || st.Size() != int64(len(linuxReadyContents)) {
+		return false, errors.New("readiness marker is not a single-link regular file of the expected owner and size")
+	}
+	b, err := io.ReadAll(io.LimitReader(f, int64(len(linuxReadyContents))+1))
+	if err != nil {
+		return false, fmt.Errorf("readiness marker read: %w", err)
+	}
+	if string(b) != linuxReadyContents {
 		return false, fmt.Errorf("readiness marker has invalid contents")
 	}
 	return true, nil
@@ -64,13 +89,17 @@ func readLinuxReadyMarker(path string) (bool, error) {
 // units must additionally be manager-active with a live exact cgroup. If the
 // preserved launcher wait has already finished, the marker is durable proof
 // that even /bin/true ran in the right cgroup and is not a readiness failure.
-func (l *LinuxManager) waitUnitReady(h Handle, readyFile string) error {
+func (l *LinuxManager) waitUnitReady(h Handle, readyFile string, workerUID int) error {
 	deadline := time.Now().Add(l.readinessTimeout())
 	var last error
+	marked := false // latched: once valid, the worker-writable marker is never read again
 	for {
-		marked, err := readLinuxReadyMarker(readyFile)
-		if err != nil {
-			return fmt.Errorf("unit %s readiness: %w", h.Unit, err)
+		if !marked {
+			var err error
+			marked, err = readLinuxReadyMarker(readyFile, workerUID)
+			if err != nil {
+				return fmt.Errorf("unit %s readiness: %w", h.Unit, err)
+			}
 		}
 		if marked {
 			l.mu.Lock()

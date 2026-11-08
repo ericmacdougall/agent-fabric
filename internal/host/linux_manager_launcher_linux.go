@@ -150,7 +150,14 @@ func (l *LinuxManager) asWorkerContext(ctx context.Context, tool string, args ..
 	if l.User == "" {
 		return l.command(ctx, tool, args...)
 	}
-	uid, _ := l.workerUID()
+	uid, err := l.workerUID()
+	if err != nil {
+		// A failed lookup must not become uid 0 (red-team L5): the command
+		// fails at Start/Run with this error and nothing is executed.
+		cmd := l.command(ctx, "sudo")
+		cmd.Err = fmt.Errorf("worker uid lookup: %w", err)
+		return cmd
+	}
 	full := append([]string{"-n", "-u", l.User, "env",
 		fmt.Sprintf("XDG_RUNTIME_DIR=/run/user/%d", uid),
 		fmt.Sprintf("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%d/bus", uid), tool}, args...)

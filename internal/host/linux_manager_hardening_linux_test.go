@@ -129,11 +129,23 @@ func TestWorkerManagerLockReplacementRefusesRelease(t *testing.T) {
 }
 
 func TestDefaultWorkerManagerLockUsesPrivateControllerDirectory(t *testing.T) {
-	base := t.TempDir()
-	t.Setenv("XDG_RUNTIME_DIR", base)
-	path, err := workerManagerLockPath("", 2345)
-	if err != nil {
-		t.Fatal(err)
+	base := lockTestDir(t)
+	orig := lockRuntimeBase
+	lockRuntimeBase = func() string { return base }
+	t.Cleanup(func() { lockRuntimeBase = orig })
+	// goodqa#15235 S5b red-team L2: the environment must not move the lock.
+	var path string
+	for _, env := range [][2]string{{t.TempDir(), t.TempDir()}, {"", t.TempDir()}, {"/nonexistent", "/nonexistent"}} {
+		t.Setenv("XDG_RUNTIME_DIR", env[0])
+		t.Setenv("HOME", env[1])
+		got, err := workerManagerLockPath("", 2345)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if path != "" && got != path {
+			t.Fatalf("lock path moved with the environment: %s then %s", path, got)
+		}
+		path = got
 	}
 	if filepath.Dir(path) != filepath.Join(base, "fab", "locks") {
 		t.Fatalf("unexpected lock path %s", path)
