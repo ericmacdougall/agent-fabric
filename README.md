@@ -32,8 +32,9 @@ What is different: models propose and deterministic code decides, and [docs/revi
 system yet. The code is being built against a design document and an
 independent code inspection; findings are fixed in commits that cite the
 inspection. Treat every claim below as "tested in the ways stated", not as
-production readiness. Fabric is planned to leave shadow-only mode after the
-foundation slices (envelope, streams, tenancy, principals) land.
+production readiness. Each capability is planned to leave shadow-only mode when its
+own live acceptance passes on the deployed build; that is not gated on the
+foundation slices.
 
 ## What exists
 

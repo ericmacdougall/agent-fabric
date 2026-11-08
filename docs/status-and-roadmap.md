@@ -51,7 +51,7 @@ Features run in parallel with the foundation (decision recorded in the ADR). Nei
 - **Foundation lane:** F1, then F2, then F3, then F4. These change data shapes, so each is a schema or contract slice with two spec reviews, a migration rehearsal on a copy of live data, and a rollback statement.
 - **Feature lane:** F6 and F8 first, then F5 and F9. After those, F7, F10, F11 and F12 as their inputs appear; F13 last. The first PRs of the feature lane are pure packages behind an event-sink interface, so they carry no store coupling and move cheaply when the envelope and streams change.
 - **Cheap-migration rules for both lanes** are in the ADR: tenant and stream scope columns on every new table, typed versioned payloads in one nested key, no new fake-mission aggregates, kind-prefix plus ULID ids, and capability class names used verbatim.
-- **Leaving shadow-only:** after F1 to F4.
+- **Leaving shadow-only:** per capability, when a slice's own live acceptance passes on the deployed build. Real work on live must use the interim-rule shapes (`tenant_id` leading key, versioned nested payloads, no fake missions).
 
 ### What is out of scope for this repository
 

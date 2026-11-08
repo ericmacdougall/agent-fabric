@@ -26,7 +26,7 @@ Most of the other capabilities we want already exist in pieces elsewhere: tenanc
 4. **Capabilities, not hooks.** Every outside-world action is an invocation `{class, subject, scope, grant}`. Fabric records grants, leases, decisions and audit; the provider (browser engine, desktop agent, sandbox) enforces. Observations such as screenshots are trace artifacts with digests, not effects. Harness hooks call a Fabric decision point, not the reverse.
 5. **Tenancy.** One shared database, `tenant_id` in every key and unique index, Postgres row-level security. Not a database per tenant. Postgres stays in the personal edition too (managed or bundled): fences, database-time leases and RLS depend on it.
 6. **Sequencing.** Features run in parallel with the foundation. Foundation-first was considered and declined by the owner. Later migrations are an accepted cost, so feature work must keep them cheap (see Interim rules).
-7. **Shadow-only until the foundation lands.** Fabric leaves shadow-only mode after F1 to F4 (envelope, streams, tenancy, principals), so real work does not accumulate under the old shapes.
+7. **Shadow-only exit is per capability.** Leaving shadow-only is not gated on F1 to F4. Each slice leaves shadow-only when its own live acceptance passes on the deployed build. Real work may run on live before the foundation lands, but only through the interim-rule shapes below: `tenant_id` leading the key, versioned nested payloads, and no fake-mission aggregates.
 
 ## The twelve target dimensions
 
@@ -67,6 +67,7 @@ Until F1 to F3 land, feature slices follow these rules so that moving them later
 ## Alternatives rejected
 
 - **Foundation first (F1 to F4, then features).** Safest for data, slowest to show value. Declined by the owner in favour of parallel lanes.
+- **Keep Fabric shadow-only until F1 to F4 land.** Part of foundation-first: it holds every feature back from live use. Declined; exit is per capability, as in decision 7.
 - **Fabric as the org control plane.** Duplicates users, orgs, tickets and UI that GoodQA already has.
 - **Database per tenant.** Operationally heavy; fleet-wide sweeps, leader election and the shared scheduler get harder. Shared database plus RLS is enough, and the runner role is scoped by tenant and attempt.
 - **SQLite for the personal edition.** Loses fences, database-time leases and RLS, which the kernel relies on.
