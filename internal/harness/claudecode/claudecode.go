@@ -51,6 +51,37 @@ type Adapter struct {
 	// DrainGrace is how long, after the leader has exited, the reader keeps
 	// waiting for stdout to reach EOF before closing it. Zero means 2 seconds.
 	DrainGrace time.Duration
+	// DrainHardCap bounds the whole drain after the leader exits, even if the
+	// pipe keeps producing. Zero means 60 seconds.
+	DrainHardCap time.Duration
+}
+
+// idleReader records when data was last read.
+type idleReader struct {
+	r    io.Reader
+	last atomic.Int64
+}
+
+func (i *idleReader) Read(p []byte) (int, error) {
+	n, err := i.r.Read(p)
+	if n > 0 {
+		i.last.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
+
+func (i *idleReader) lastRead() time.Time {
+	if n := i.last.Load(); n != 0 {
+		return time.Unix(0, n)
+	}
+	return time.Time{}
+}
+
+func (a *Adapter) redactor() harness.Redactor {
+	if a.Redact != nil {
+		return a.Redact
+	}
+	return harness.PatternRedactor()
 }
 
 func (a *Adapter) Name() string { return Name }
@@ -66,8 +97,11 @@ type session struct {
 	em   *harness.Emitter
 	proc Proc
 
-	// sendMu orders concurrent Inputs (emit then enqueue). Never taken by the reader.
-	sendMu sync.Mutex
+	// sendSem orders concurrent Inputs; slots bounds queued user messages.
+	// Neither is touched by the reader.
+	sendSem  chan struct{}
+	slots    chan struct{}
+	settling bool // set under mu once the final accounting is read
 	// mu guards the counters and flags below. Held only for short, non-blocking
 	// sections; never across a write, a queue operation or an emit.
 	mu       sync.Mutex
@@ -81,7 +115,7 @@ type session struct {
 
 	stopping atomic.Bool
 	stopOnce sync.Once
-	wq       chan []byte
+	wq       chan qmsg
 	closeIn  chan struct{}
 
 	// owned by the reader goroutine until done is closed
@@ -90,6 +124,13 @@ type session struct {
 
 	done  chan struct{}
 	final harness.Final
+}
+
+// qmsg is one queued stdin line. slot is true for user messages, which hold a
+// queue reservation released once the line is written.
+type qmsg struct {
+	b    []byte
+	slot bool
 }
 
 type toolInfo struct {
@@ -115,7 +156,8 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 		return nil, err
 	}
 	s := &session{a: a, id: spec.SessionID, em: em, proc: proc, tools: map[string]toolInfo{}, done: make(chan struct{}),
-		wq: make(chan []byte, queueSize), closeIn: make(chan struct{})}
+		wq: make(chan qmsg, queueSize+8), closeIn: make(chan struct{}),
+		sendSem: make(chan struct{}, 1), slots: make(chan struct{}, queueSize)}
 	go s.write()
 	go s.read()
 	if spec.Prompt != "" {
@@ -136,17 +178,24 @@ func (s *session) ID() string { return s.id }
 func (s *session) write() {
 	in := s.proc.Stdin()
 	defer in.Close()
+	put := func(m qmsg) bool {
+		_, err := in.Write(m.b)
+		if m.slot {
+			<-s.slots
+		}
+		return err == nil
+	}
 	for {
 		select {
-		case b := <-s.wq:
-			if _, err := in.Write(b); err != nil {
+		case m := <-s.wq:
+			if !put(m) {
 				return
 			}
 		case <-s.closeIn:
 			for {
 				select {
-				case b := <-s.wq:
-					if _, err := in.Write(b); err != nil {
+				case m := <-s.wq:
+					if !put(m) {
 						return
 					}
 				default:
@@ -165,7 +214,7 @@ func (s *session) enqueue(ctx context.Context, v any) error {
 		return err
 	}
 	select {
-	case s.wq <- append(b, '\n'):
+	case s.wq <- qmsg{b: append(b, '\n')}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -186,20 +235,53 @@ func (s *session) ended() bool {
 // send records and queues one user turn. The Turn event precedes the queueing
 // so every reply the process produces follows it in the stream.
 func (s *session) send(ctx context.Context, text string) error {
-	s.sendMu.Lock()
-	defer s.sendMu.Unlock()
+	// Order concurrent Inputs, but give up when ctx ends.
+	select {
+	case s.sendSem <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.done:
+		return harness.ErrSessionEnded
+	}
+	defer func() { <-s.sendSem }()
+	// Reserve queue room first: an input that is refused (ctx, full queue,
+	// ended) leaves no turn record and no count.
+	select {
+	case s.slots <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.done:
+		return harness.ErrSessionEnded
+	}
 	s.mu.Lock()
-	if s.stopping.Load() || s.inClosed || s.ended() {
+	if s.stopping.Load() || s.inClosed || s.settling || s.ended() {
 		s.mu.Unlock()
+		<-s.slots
 		return harness.ErrSessionEnded
 	}
 	s.turn++
 	s.sent++
 	n := s.turn
 	s.mu.Unlock()
-	_ = s.em.Turn(ctx, n)
-	_ = s.em.Message(ctx, "user", text)
-	return s.enqueue(ctx, map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}})
+	// Recording must not depend on the caller's ctx: a cancelled Input would
+	// otherwise make the sink fail and end the session.
+	rctx := context.WithoutCancel(ctx)
+	_ = s.em.Turn(rctx, n)
+	_ = s.em.Message(rctx, "user", text)
+	b, err := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}})
+	if err == nil {
+		select {
+		case s.wq <- qmsg{b: append(b, '\n'), slot: true}: // room is reserved, so this does not block
+			return nil
+		default:
+			err = errors.New("claudecode: input queue unexpectedly full")
+		}
+	}
+	s.mu.Lock()
+	s.sent-- // not queued: not counted as undelivered
+	s.mu.Unlock()
+	<-s.slots
+	return err
 }
 
 func (s *session) Input(ctx context.Context, msg string) error { return s.send(ctx, msg) }
@@ -266,6 +348,8 @@ func (s *session) read() {
 	var panicked atomic.Value
 	readDone := make(chan struct{})
 	out := s.proc.Stdout()
+	idle := &idleReader{r: out}
+	var busy atomic.Bool
 	go func() {
 		defer close(readDone)
 		defer func() {
@@ -273,7 +357,9 @@ func (s *session) read() {
 				panicked.Store(fmt.Sprint(r))
 			}
 		}()
-		readLines(out, claude.MaxLineBytes, func(line []byte, oversize bool) {
+		readLines(idle, claude.MaxLineBytes, func(line []byte, oversize bool) {
+			busy.Store(true)
+			defer busy.Store(false)
 			if oversize {
 				_ = s.em.Unknown(context.Background(), "event exceeds the maximum line size", string(line))
 			} else if len(line) > 0 {
@@ -288,24 +374,55 @@ func (s *session) read() {
 	case <-readDone:
 	case <-s.proc.Exited():
 		// The leader is gone and its group is dead. A descendant that left the
-		// group may still hold stdout open: give the pipe a moment to drain,
-		// then cut it.
+		// group may still hold stdout open. Cut the pipe only when it has been
+		// idle for DrainGrace and the reader is not busy in the sink, or after
+		// a hard cap; a cut is recorded as an unknown event, never silent.
 		grace := s.a.DrainGrace
 		if grace <= 0 {
 			grace = 2 * time.Second
 		}
-		select {
-		case <-readDone:
-		case <-time.After(grace):
-			_ = out.Close()
-			<-readDone
+		hard := s.a.DrainHardCap
+		if hard <= 0 {
+			hard = 60 * time.Second
+		}
+		exitedAt := time.Now()
+		tk := time.NewTicker(20 * time.Millisecond)
+		defer tk.Stop()
+		cut := ""
+	wait:
+		for {
+			select {
+			case <-readDone:
+				break wait
+			case <-tk.C:
+				since := exitedAt
+				if l := idle.lastRead(); l.After(since) {
+					since = l
+				}
+				switch {
+				case time.Since(exitedAt) > hard:
+					cut = "hard drain cap reached"
+				case !busy.Load() && time.Since(since) > grace:
+					cut = "stdout idle after the process exited (a descendant outside the process group holds it open)"
+				}
+				if cut != "" {
+					_ = out.Close()
+					<-readDone
+					break wait
+				}
+			}
+		}
+		if cut != "" {
+			_ = s.em.Unknown(context.Background(), "stdout cut: "+cut, "")
 		}
 	}
+	_ = out.Close()
 	if panicked.Load() != nil {
 		_ = s.proc.Kill()
 	}
 	code, werr := s.proc.Wait()
 	s.mu.Lock()
+	s.settling = true
 	pending := s.sent - s.results
 	results, lastOK, lastSub := s.results, s.lastOK, s.lastSub
 	s.mu.Unlock()
@@ -339,6 +456,11 @@ func (s *session) settle(code int, werr error, stopping bool, pending, results i
 		reason += ": " + werr.Error()
 	}
 	if e := s.proc.Stderr(); e != "" {
+		// Redact the whole tail, then keep its end: the last line is the error.
+		e = s.a.redactor().Redact(e)
+		if len(e) > 700 {
+			e = e[len(e)-700:]
+		}
 		reason += "; stderr: " + e
 	}
 	return harness.Final{Outcome: harness.OutcomeFailed, Reason: reason, ExitCode: code}

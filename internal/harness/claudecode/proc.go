@@ -104,7 +104,7 @@ func (t *tail) String() string {
 	defer t.mu.Unlock()
 	b := t.buf
 	if t.wrapd {
-		if i := bytes.IndexAny(b, " \t\r\n"); i >= 0 {
+		if i := bytes.IndexByte(b, '\n'); i >= 0 {
 			b = b[i:]
 		} else {
 			b = nil
