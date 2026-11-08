@@ -238,9 +238,30 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		return nil, err
 	}
 	defer release()
+
+	// A resumed attempt is covered before key access and setup. A new attempt
+	// starts heartbeating immediately after its keyed start/ack below.
+	fence := plan.fence
+	lctx := ctx
+	var cancel context.CancelCauseFunc
+	stopHeartbeat := func() {}
+	defer func() {
+		if cancel != nil {
+			cancel(nil)
+		}
+		stopHeartbeat()
+	}()
+	startHeartbeat := func() error {
+		if err := st.HeartbeatLive(ctx, domain.AttemptID(g.Attempt), fence); err != nil {
+			return err
+		}
+		lctx, cancel = context.WithCancelCause(ctx)
+		stopHeartbeat = heartbeat(lctx, st, domain.AttemptID(g.Attempt), fence, cancel)
+		return nil
+	}
 	if plan.c == caseResume {
 		// V1: the first heartbeat of a resume needs an unexpired lease.
-		if err := st.HeartbeatLive(ctx, domain.AttemptID(g.Attempt), plan.fence); err != nil {
+		if err := startHeartbeat(); err != nil {
 			return nil, fmt.Errorf("%w: resume of %s: %v", ErrStartRefused, g.Attempt, err)
 		}
 	}
@@ -257,9 +278,9 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 	if err != nil {
 		return nil, err
 	}
-	// The first fetch checks the key before anything is started; every value
-	// the source returns, a rotated one included, is redacted from tool output.
-	if _, err := keySrc(ctx); err != nil {
+	// The first fetch checks a new run's key before anything is started; every
+	// value the source returns, a rotated one included, is redacted from tools.
+	if _, err := keySrc(lctx); err != nil {
 		return nil, err
 	}
 	cl, err := anthropic.New(anthropic.Config{BaseURL: g.BaseURL, Version: g.AnthropicVersion, Key: keySrc, HTTP: o.HTTP})
@@ -270,17 +291,18 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 	// The month cap is keyed on database time, never the host clock, so a
 	// skewed or faked host clock cannot open a fresh month (goodqa#15124).
 	// Read before a new attempt starts, so a failure there leaves nothing to
-	// reconcile; a resume that fails here lapses to UNKNOWN like any other
-	// early error. The month is fixed for the run: a run that spans a month
-	// boundary charges the month it started in (inspection finding 6).
-	month, err := monthSource(ctx, st)
+	// reconcile. nativeProvider refreshes it before every HTTP attempt, so a
+	// run that spans a month boundary charges the month of each request.
+	month, err := monthSource(lctx, st)
 	if err != nil {
 		return nil, fmt.Errorf("native: month key: %w", err)
 	}
 
-	fence := plan.fence
 	if plan.c != caseResume {
 		if fence, err = startNative(ctx, st, g, plan.c == caseNew, lockPath); err != nil {
+			return nil, err
+		}
+		if err := startHeartbeat(); err != nil {
 			return nil, err
 		}
 	}
@@ -298,6 +320,10 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		&tools.Grep{C: conf, Root: g.Worktree, Timeout: 20 * time.Second, MaxOutput: 32 << 10},
 		&tools.Shell{C: conf, Allow: allow, Timeout: 30 * time.Second, MaxOutput: 32 << 10},
 	}
+	// Every tool refuses to start once the attempt lease is stale or expired.
+	for i, tool := range toolset {
+		toolset[i] = freshTool{Tool: tool, st: st, attempt: domain.AttemptID(g.Attempt), fence: fence}
+	}
 	if o.ReviewGate {
 		if toolset, err = wrapReviewTools(toolset, st, reviewStore, g, keys); err != nil {
 			return nil, err
@@ -310,8 +336,9 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 			{Resource: agent.SpendResource("job", g.Mission), Total: g.Caps.Job},
 			{Resource: agent.SpendResource("run", g.Attempt), Total: g.Caps.Run},
 		}}
+	provider := &nativeProvider{base: &anthropic.Provider{C: cl}, st: st, ledger: led, attempt: domain.AttemptID(g.Attempt), fence: fence}
 	loop, err := agent.New(agent.Config{
-		DB: db, Ledger: led, Provider: &anthropic.Provider{C: cl}, Tools: toolset, Guard: oracle,
+		DB: db, Ledger: led, Provider: provider, Tools: toolset, Guard: oracle,
 		Redact:  keys,
 		Attempt: domain.AttemptID(g.Attempt), Fence: fence,
 		Model: g.Model, MaxTokens: g.MaxTokens, System: g.System, Extra: g.Extra, Prompt: g.Prompt,
@@ -321,10 +348,6 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 	if err != nil {
 		return nil, err
 	}
-	lctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	stop := heartbeat(lctx, st, domain.AttemptID(g.Attempt), fence, cancel)
-	defer stop()
 	out, err := loop.Run(lctx)
 	for {
 		if cause := context.Cause(lctx); cause != nil && lctx.Err() != nil && ctx.Err() == nil {

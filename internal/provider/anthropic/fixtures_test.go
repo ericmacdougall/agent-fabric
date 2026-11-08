@@ -79,7 +79,7 @@ func replayClient(t *testing.T, st fakeapi.Step) (*Client, *fakeapi.Server, *[]t
 	srv := fakeapi.New(st)
 	t.Cleanup(srv.Close)
 	var sl []time.Duration
-	c, err := New(Config{BaseURL: srv.URL, Version: "v", Key: func(context.Context) (string, error) { return canary, nil },
+	c, err := New(Config{BaseURL: ProductionBaseURL, HTTP: srv.HTTPClient(), Version: "v", Key: func(context.Context) (string, error) { return canary, nil },
 		Retry:  RetryPolicy{MaxAttempts: 1, BaseBackoff: time.Second, MaxBackoff: time.Second, MaxRetryAfter: time.Minute},
 		Sleep:  func(_ context.Context, d time.Duration) error { sl = append(sl, d); return nil },
 		Jitter: func() float64 { return 0 }})

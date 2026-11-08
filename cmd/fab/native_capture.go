@@ -69,7 +69,7 @@ func providerMain(args []string) error {
 			return err
 		}
 		_, _, sendErr := cl.Send(ctx, body, anthropic.Hooks{BeforeAttempt: func(int) error {
-			held += prices.WorstCase(len(body), g.MaxTokens)
+			held += prices.WorstCase(len(body), g.MaxTokens, 0)
 			if held > g.Caps.Run {
 				return fmt.Errorf("capture: worst-case total %d exceeds the %d micro-USD cap; stopping before %s", held, g.Caps.Run, name)
 			}

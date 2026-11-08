@@ -22,7 +22,7 @@ import (
 func TestMain(m *testing.M) { os.Exit(storetest.Main(m, "agent")) }
 
 // canary is built at run time so no key-shaped literal sits in the source.
-var canary = "sk-" + "ant-CANARY-" + "0123456789abcdefXYZ"
+var canary = "sk-" + "ant-api03-" + strings.Repeat("CANARYx", 12)
 
 const (
 	attemptID = domain.AttemptID("r_t1")
@@ -106,8 +106,8 @@ func newRig(t *testing.T, steps ...fakeapi.Step) *rig {
 	}
 	for _, q := range []string{
 		`INSERT INTO missions (id, ticket, state, provider) VALUES ('m_t1', 'goodqa#15040', '{}'::jsonb, 'anthropic-api')`,
-		`INSERT INTO attempts (id, mission_id, fence, revision, generation, state, host, role, path, lock_path)
-			VALUES ('r_t1', 'm_t1', 1, 0, 0, 'RUNNING', 'h_test', 'worker', 'anthropic-api', '/nonexistent/fabric-rig/native-locks/r_t1.lock')`,
+		`INSERT INTO attempts (id, mission_id, fence, revision, generation, state, host, role, path, lock_path, lease_until)
+			VALUES ('r_t1', 'm_t1', 1, 0, 0, 'RUNNING', 'h_test', 'worker', 'anthropic-api', '/nonexistent/fabric-rig/native-locks/r_t1.lock', now() + interval '1 hour')`,
 	} {
 		if _, err := st.Pool().Exec(ctx, q); err != nil {
 			t.Fatalf("seed: %v", err)
@@ -116,7 +116,7 @@ func newRig(t *testing.T, steps ...fakeapi.Step) *rig {
 	srv := fakeapi.New(steps...)
 	t.Cleanup(srv.Close)
 	cl, err := anthropic.New(anthropic.Config{
-		BaseURL: srv.URL, Version: "test-version",
+		BaseURL: anthropic.ProductionBaseURL, Version: "test-version", HTTP: srv.HTTPClient(),
 		Key:   func(context.Context) (string, error) { return canary, nil },
 		Retry: anthropic.RetryPolicy{MaxAttempts: 3, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, MaxRetryAfter: time.Minute},
 	})

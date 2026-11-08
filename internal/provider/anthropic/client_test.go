@@ -19,7 +19,7 @@ var canary = "sk-" + "ant-api03-" + strings.Repeat("CANARYx", 12) // the API-key
 func newClient(t *testing.T, s *fakeapi.Server, sleeps *[]time.Duration) *Client {
 	t.Helper()
 	c, err := New(Config{
-		BaseURL: s.URL, Version: "test-version",
+		BaseURL: ProductionBaseURL, HTTP: s.HTTPClient(), Version: "test-version",
 		Key:    func(context.Context) (string, error) { return canary, nil },
 		Retry:  RetryPolicy{MaxAttempts: 4, BaseBackoff: time.Second, MaxBackoff: 8 * time.Second, MaxRetryAfter: time.Minute},
 		Sleep:  func(_ context.Context, d time.Duration) error { *sleeps = append(*sleeps, d); return nil },
@@ -213,7 +213,7 @@ func TestSSELimits(t *testing.T) {
 	evs := fakeapi.Text(big, 1, 1)
 	s := fakeapi.New(fakeapi.Step{Events: evs})
 	defer s.Close()
-	c, _ := New(Config{BaseURL: s.URL, Version: "v", Key: func(context.Context) (string, error) { return canary, nil },
+	c, _ := New(Config{BaseURL: ProductionBaseURL, HTTP: s.HTTPClient(), Version: "v", Key: func(context.Context) (string, error) { return canary, nil },
 		SSE: SSELimits{MaxLine: 1000, MaxEvent: 1 << 20, MaxBytes: 1 << 20, MaxEvents: 1000}})
 	_, recs, err := c.Send(context.Background(), body(t), Hooks{})
 	if !errors.Is(err, ErrSSELimit) {
@@ -398,7 +398,7 @@ func TestCaptureNeverSeesKey(t *testing.T) {
 	s := fakeapi.New(ok("captured"))
 	defer s.Close()
 	var got []Capture
-	c, _ := New(Config{BaseURL: s.URL, Version: "v", Key: func(context.Context) (string, error) { return canary, nil },
+	c, _ := New(Config{BaseURL: ProductionBaseURL, HTTP: s.HTTPClient(), Version: "v", Key: func(context.Context) (string, error) { return canary, nil },
 		Capture: func(cp Capture) { got = append(got, cp) }})
 	if _, _, err := c.Send(context.Background(), body(t), Hooks{}); err != nil {
 		t.Fatal(err)

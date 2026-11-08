@@ -47,7 +47,10 @@ func OperationID(idemKey string) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
 }
 
-var trailerRE = regexp.MustCompile(`(?m)^fab-effect: ([A-Za-z0-9._:-]{1,64})\s*$`)
+var (
+	trailerRE = regexp.MustCompile(`(?m)^fab-effect: ([A-Za-z0-9._:-]{1,64})\s*$`)
+	idemKeyRE = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,64}$`)
+)
 
 type commentRequest struct {
 	IssueID string `json:"issue_id"`
@@ -58,6 +61,11 @@ type commentRequest struct {
 func (g *GoodQA) Kind() string { return "ticket_comment" }
 
 func (g *GoodQA) Validate(spec IntentSpec) error {
+	// Readback finds a post only by its trailer; a key outside the trailer
+	// grammar would never be found and would always reconcile NOT_APPLIED.
+	if !idemKeyRE.MatchString(spec.IdemKey) {
+		return errors.New("ticket_comment idempotency key must match [A-Za-z0-9._:-]{1,64}")
+	}
 	var r commentRequest
 	if err := json.Unmarshal(spec.Request, &r); err != nil {
 		return err
@@ -161,6 +169,7 @@ func (g *GoodQA) Reconcile(ctx context.Context, e Effect) (Observation, string, 
 		pages = 5
 	}
 	cursor := ""
+	seenCursors := map[string]bool{}
 	matches := 0
 	for page := 0; page < pages; page++ {
 		args := map[string]any{"issueId": r.IssueID, "order": "asc", "limit": 200}
@@ -185,9 +194,8 @@ func (g *GoodQA) Reconcile(ctx context.Context, e Effect) (Observation, string, 
 			if !ok {
 				return ObsUnknown, "readback page has a malformed comment", nil
 			}
-			if c["archivedAt"] != nil && c["archivedAt"] != "" {
-				continue
-			}
+			// Archived comments are still historical evidence of a write.
+			// Ignoring one could turn an applied effect into NOT_APPLIED.
 			body, ok := c["body"].(string)
 			if !ok {
 				return ObsUnknown, "readback page has a comment without a body", nil
@@ -198,15 +206,20 @@ func (g *GoodQA) Reconcile(ctx context.Context, e Effect) (Observation, string, 
 				}
 			}
 		}
-		more := false
-		if v, present := data["hasMore"]; present {
-			if more, ok = v.(bool); !ok {
-				return ObsUnknown, "readback page has a malformed hasMore", nil
-			}
+		more, ok := data["hasMore"].(bool)
+		if !ok {
+			return ObsUnknown, "readback malformed: hasMore must be a boolean", nil
 		}
-		cursor, _ = data["nextCursor"].(string)
-		if more && cursor == "" {
-			return ObsUnknown, "readback page says more comments follow but gives no cursor", nil
+		if more {
+			next, ok := data["nextCursor"].(string)
+			if !ok || strings.TrimSpace(next) == "" {
+				return ObsUnknown, "readback page says more comments follow but gives no cursor", nil
+			}
+			if seenCursors[next] {
+				return ObsUnknown, "readback malformed: continuation cursor did not advance", nil
+			}
+			seenCursors[next] = true
+			cursor = next
 		}
 		if !more {
 			switch matches {
@@ -325,9 +338,9 @@ func (g *GoodQA) call(ctx context.Context, tool string, args map[string]any) (ma
 	var data map[string]any
 	if err := json.Unmarshal([]byte(env.Result.Content[0].Text), &data); err != nil {
 		if env.Result.IsError {
-			// Validation refusals arrive as plain text ("MCP error -32602 ...").
-			// Nothing was written: a definite refusal, not UNKNOWN.
-			return map[string]any{"__error__": "validation_error", "__text__": firstN(env.Result.Content[0].Text, 160)}, nil
+			// Plain-text MCP errors do not establish whether a write happened.
+			// Only structured machine codes can support a definite refusal.
+			return map[string]any{"__error__": "ambiguous", "__text__": firstN(env.Result.Content[0].Text, 160)}, nil
 		}
 		return nil, errors.New("goodqa tool payload is not a JSON object")
 	}

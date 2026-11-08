@@ -90,7 +90,9 @@ func (d *DB) fenced(ctx context.Context, attempt domain.AttemptID, fence int64, 
 	defer tx.Rollback(context.Background()) //nolint:errcheck // no-op after commit
 	var cur int64
 	var state string
-	err = tx.QueryRow(ctx, `SELECT fence, state FROM attempts WHERE id = $1 FOR SHARE`, string(attempt)).Scan(&cur, &state)
+	var leaseFresh bool
+	err = tx.QueryRow(ctx, `SELECT fence, state, lease_until IS NOT NULL AND lease_until > now()
+		FROM attempts WHERE id = $1 FOR SHARE`, string(attempt)).Scan(&cur, &state, &leaseFresh)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: attempt %s", domain.ErrNotFound, attempt)
 	}
@@ -104,6 +106,10 @@ func (d *DB) fenced(ctx context.Context, attempt domain.AttemptID, fence int64, 
 	case domain.AttemptLeased, domain.AttemptPreparing, domain.AttemptRunning:
 	default:
 		return fmt.Errorf("%w: attempt %s is %s", domain.ErrInvalidTransition, attempt, state)
+	}
+	// An expired lease may already be reclaimed by the sweep: write nothing.
+	if !leaseFresh {
+		return fmt.Errorf("%w: attempt %s lease has expired", domain.ErrInvalidTransition, attempt)
 	}
 	if err := f(tx); err != nil {
 		return err
