@@ -395,3 +395,46 @@ func TestAuthorityRunnerCannotReadReviewGateRequests(t *testing.T) {
 		t.Fatalf("runner without review-gate SELECT failed its check: %v", err)
 	}
 }
+
+// A runner holding SELECT on a review table must fail its own check, not only
+// lose the grant at the next ApplyRoles (goodqa#15235).
+func TestAuthorityCheckRefusesRunnerReadingReviewTables(t *testing.T) {
+	owner, ctx := openTest(t)
+	r := testRoles(t, owner, ctx)
+	runner := authorityRunnerLogin(t, owner, ctx, r)
+	for _, table := range []string{"review_gate_requests", "review_gate_results"} {
+		if _, err := owner.pool.Exec(ctx, "GRANT SELECT ON public."+table+" TO "+r.Runner()); err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.CheckRunnerRole(ctx); err == nil || !strings.Contains(err.Error(), "review-table SELECT") {
+			t.Errorf("CheckRunnerRole accepted SELECT on %s: %v", table, err)
+		}
+		if _, err := owner.pool.Exec(ctx, "REVOKE SELECT ON public."+table+" FROM "+r.Runner()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runner.CheckRunnerRole(ctx); err != nil {
+		t.Fatalf("restored runner role failed its check: %v", err)
+	}
+}
+
+// A NOINHERIT membership inherits nothing, but the runner can SET ROLE to it,
+// so a write grant held only by that role still counts against the runner.
+func TestAuthorityCheckScansNoInheritMemberRoleWrites(t *testing.T) {
+	owner, ctx := openTest(t)
+	r := testRoles(t, owner, ctx)
+	runner := authorityRunnerLogin(t, owner, ctx, r)
+	delegated := r.Prefix + "_noinherit_writer"
+	if _, err := owner.pool.Exec(ctx, "CREATE ROLE "+delegated+" NOLOGIN; GRANT UPDATE ON public.attempts TO "+delegated+"; GRANT "+delegated+" TO "+r.Runner()+" WITH INHERIT FALSE"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		owner.pool.Exec(context.Background(), "REVOKE "+delegated+" FROM "+r.Runner()+"; REVOKE ALL ON public.attempts FROM "+delegated+"; DROP ROLE IF EXISTS "+delegated) //nolint:errcheck
+	})
+	if _, err := runner.pool.Exec(ctx, "UPDATE public.attempts SET host = host WHERE false"); sqlCode(err) != "42501" {
+		t.Fatalf("control: the NOINHERIT role must not leak UPDATE into the runner session: %v", err)
+	}
+	if err := runner.CheckRunnerRole(ctx); err == nil || !strings.Contains(err.Error(), "attempts") {
+		t.Errorf("CheckRunnerRole ignored a NOINHERIT member role that can UPDATE attempts: %v", err)
+	}
+}
