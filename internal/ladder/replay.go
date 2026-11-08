@@ -21,6 +21,9 @@ import (
 type PolicyRung struct {
 	Writable            bool `json:"writable"`
 	NeedsUserPermission bool `json:"needs_user_permission"`
+	// ReviewerRung is optional display data (goodqa#15324 S1b): the rung one
+	// above, from model_tiers.json. Empty when the policy file omits it.
+	ReviewerRung string `json:"reviewer_rung,omitempty"`
 }
 
 // Limits are model_tiers.json ladder_limits. MaxTotalReviewUSD keeps the

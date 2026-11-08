@@ -303,6 +303,16 @@ func DecodePolicy(path string, body []byte) (Policy, error) {
 				return p, err
 			}
 		}
+		if v, ok := rm["reviewer_rung"]; ok && kind(v) != 'n' { // null: a rung with no reviewer
+			rr, err := str(where, "rungs."+name+".reviewer_rung", v)
+			if err != nil {
+				return p, err
+			}
+			if !rungName.MatchString(rr) {
+				return p, refuse(where, "rungs."+name+".reviewer_rung", "is not a rung name")
+			}
+			r.ReviewerRung = rr
+		}
 		p.Rungs[name] = r
 	}
 	raw, ok = m["ladder_limits"]

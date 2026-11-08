@@ -35,6 +35,10 @@ const (
 	// goodqa#15085: an operator ends a quarantine pause once no attempt is
 	// live or unresolved, with a recorded reason.
 	CmdUnpauseMission CommandKind = "UNPAUSE_MISSION"
+
+	// goodqa#15324 S1b: one command records an already-classified ladder
+	// record (a receipt, a claim, a spend or a top-rung approval).
+	CmdRecordLadderReceipt CommandKind = "RECORD_LADDER_RECEIPT"
 )
 
 // Command is one request to change a mission. The fields used depend on Kind;
@@ -84,6 +88,8 @@ type Command struct {
 	Vacuous bool `json:"vacuous,omitempty"`
 	// FINISH_ATTEMPT ready_for_review (H3): the claims to arbitrate.
 	Claims []Claim `json:"claims,omitempty"`
+	// RECORD_LADDER_RECEIPT: the classified record (goodqa#15324).
+	Ladder *LadderRecord `json:"ladder,omitempty"`
 }
 
 // Claim is one "AC-n passes, see receipt" assertion in a checkpoint.
@@ -126,6 +132,10 @@ const (
 	EvMissionSucceeded EventKind = "MISSION_SUCCEEDED"
 	// goodqa#15085: PAUSED -> ADMITTED by an operator.
 	EvMissionUnpaused EventKind = "MISSION_UNPAUSED"
+
+	// goodqa#15324 S1b: ladder events live only on m_ladder-<task> missions.
+	EvLadderReceipt     EventKind = "LADDER_RECEIPT"
+	EvLadderTopApproved EventKind = "LADDER_TOP_APPROVED"
 )
 
 // knownEventKinds is every kind this build's reducer interprets. A new kind
@@ -138,6 +148,7 @@ var knownEventKinds = map[EventKind]bool{
 	EvEffectResubmitted: true, EvEffectResolved: true, EvMissionReleased: true, EvAcceptanceRevoked: true,
 	EvClaimRefused: true, EvDispatchDeferred: true, EvMissionParked: true,
 	EvLiveVerified: true, EvMissionSucceeded: true, EvMissionUnpaused: true,
+	EvLadderReceipt: true, EvLadderTopApproved: true,
 }
 
 // KnownEventKinds lists the kinds this build interprets, sorted.
@@ -191,6 +202,9 @@ type Event struct {
 	Vacuous    bool         `json:"vacuous,omitempty"`
 	Claims     []Claim      `json:"claims,omitempty"`
 	Target     string       `json:"target,omitempty"` // LIVE_VERIFIED
+	// Ladder is the ONLY key a ladder event adds (PL-2): a nested object, so
+	// no ladder field can collide with an Event key in the 9abc522 decoder.
+	Ladder *LadderRecord `json:"ladder,omitempty"`
 }
 
 // RequestHash is the canonical SHA-256 of a command body. Two commands with
