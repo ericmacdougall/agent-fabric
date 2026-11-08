@@ -180,7 +180,10 @@ func collect(ctx context.Context, tx pgx.Tx, o Options) (*Snapshot, error) {
 	add(gauge("fabric_schema_level", "Numeric prefix of the latest applied migration.", float64(migrationLevel(latest))))
 
 	add(c.grouped("fabric_missions", "Missions by execution and terminal state.", "gauge",
-		`SELECT execution, terminal, count(*) FROM missions GROUP BY 1, 2`, "execution", "terminal"))
+		`SELECT execution, terminal, count(*) FROM missions
+		WHERE NOT (starts_with(id, 'm_ladder-') AND execution = 'IDLE' AND terminal = 'NONE'
+		           AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = missions.id))
+		GROUP BY 1, 2`, "execution", "terminal"))
 	add(c.grouped("fabric_attempts_active", "Active attempts by state and lease freshness (live: lease unexpired).", "gauge",
 		`SELECT state, CASE WHEN lease_until > now() THEN 'live' ELSE 'stale' END, count(*)
 		   FROM attempts WHERE state IN ('LEASED', 'PREPARING', 'RUNNING') GROUP BY 1, 2`, "state", "lease"))

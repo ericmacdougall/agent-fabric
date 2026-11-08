@@ -233,6 +233,9 @@ func (s *Store) CreateMission(ctx context.Context, id domain.MissionID, provider
 	if _, err := domain.ParseMissionID(string(id)); err != nil {
 		return err
 	}
+	if err := reserveLadderPrefix(id); err != nil { // goodqa#15324: only a ladder record creates one
+		return err
+	}
 	if _, err := domain.ParseProvider(string(provider)); err != nil {
 		return err
 	}
@@ -396,6 +399,15 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		}
 	}
 
+	// goodqa#15324 S1b: the first record of a task creates its ladder mission
+	// in this transaction, after a pure check, so a refusal leaves no row.
+	isLadder := cmd.Kind == domain.CmdRecordLadderReceipt && domain.IsLadderMission(cmd.Mission)
+	if isLadder {
+		if err := ladderPrepare(ctx, tx, actor, cmd); err != nil {
+			return Response{}, err
+		}
+	}
+
 	var stateJSON []byte
 	var provider string
 	err = tx.QueryRow(ctx, "SELECT state, provider FROM missions WHERE id = $1 FOR UPDATE", string(cmd.Mission)).Scan(&stateJSON, &provider)
@@ -449,6 +461,22 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		return Response{}, fmt.Errorf("%w: mission %s holds %q; this build does not write to it", domain.ErrUnsupportedEvent, cmd.Mission, foreign)
 	case !errors.Is(err, pgx.ErrNoRows):
 		return Response{}, err
+	}
+
+	// goodqa#15324 S1b, after the lock and the replay lookup: row identity,
+	// receipt-sha dedupe and the cap, all against the locked state.
+	if isLadder {
+		var snap domain.Mission
+		if err := json.Unmarshal(stateJSON, &snap); err != nil {
+			return Response{}, fmt.Errorf("mission %s snapshot: %w", cmd.Mission, err)
+		}
+		dup, err := ladderGuard(ctx, tx, cmd, snap)
+		if err != nil {
+			return Response{}, err
+		}
+		if dup != nil {
+			return *dup, nil
+		}
 	}
 
 	// Review F1: an ask wake needs an answered ask of this mission. Checked
