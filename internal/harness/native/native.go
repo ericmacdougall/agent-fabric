@@ -189,9 +189,14 @@ func NewObserver(em *harness.Emitter) *Observer { return &Observer{em: em} }
 
 // Finish emits the session's Final for a loop outcome and returns it as
 // recorded. A run is only done if the loop ended done and every event was
-// recorded.
-func (o *Observer) Finish(ctx context.Context, out agent.Outcome, err error) harness.Final {
-	f, _ := o.em.FinalOutcome(ctx, finalFor(out, err, nil))
+// recorded. stopped says the caller ended the run by cancelling its context
+// (Stop), which settles as stopped rather than failed.
+func (o *Observer) Finish(ctx context.Context, out agent.Outcome, err error, stopped bool) harness.Final {
+	var cause error
+	if stopped {
+		cause = errStopped
+	}
+	f, _ := o.em.FinalOutcome(ctx, finalFor(out, err, cause))
 	return f
 }
 

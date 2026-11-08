@@ -114,3 +114,38 @@ func TestRunRedactsKeyInEvents(t *testing.T) {
 		t.Fatal("no redaction marker: the secret never reached an event, so the test proves nothing")
 	}
 }
+
+type cancelSink struct {
+	harnesstest.Recorder
+	cancel context.CancelFunc
+}
+
+func (c *cancelSink) Emit(ctx context.Context, e harness.Event) error {
+	err := c.Recorder.Emit(ctx, e)
+	if e.Kind == harness.KindTurn {
+		c.cancel() // Stop arrives while the first request is being made
+	}
+	return err
+}
+
+// Cancelling the caller's context (fab harness run on SIGINT) settles the
+// trace as stopped, with a conforming stream.
+func TestRunStoppedByContextSettlesAsStopped(t *testing.T) {
+	e := newEnv(t, steps()...)
+	st := storetest.Open(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &cancelSink{cancel: cancel}
+	o := opts(true)
+	o.Sink = sink
+	_, _ = native.Run(ctx, st, e.g, o)
+	evs := sink.Snapshot()
+	if err := harness.CheckStream(evs); err != nil {
+		t.Fatal(err)
+	}
+	var f harness.Final
+	_ = json.Unmarshal(evs[len(evs)-1].Payload, &f)
+	if f.Outcome != harness.OutcomeStopped {
+		t.Fatalf("final %+v, want stopped", f)
+	}
+}
