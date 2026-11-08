@@ -64,6 +64,8 @@ func TestGoodQAReconcileMalformedPageIsUnknown(t *testing.T) {
 		`{"comments":[],"hasMore":"false"}`,
 		`{"comments":[],"hasMore":true}`,
 		`{"comments":[],"hasMore":true,"nextCursor":""}`,
+		// goodqa#15235 g3: a page without hasMore cannot prove the listing ended.
+		`{"comments":[]}`,
 	} {
 		payload = p
 		obs, note, err := g.Reconcile(context.Background(), e)
@@ -76,8 +78,7 @@ func TestGoodQAReconcileMalformedPageIsUnknown(t *testing.T) {
 	}
 	// Well-formed pages still decide.
 	for p, want := range map[string]Observation{
-		`{"comments":[],"hasMore":false}`: ObsNotApplied,
-		`{"comments":[]}`:                 ObsNotApplied,
+		`{"comments":[],"hasMore":false}`:                                              ObsNotApplied,
 		`{"comments":[{"id":"c1","body":"x\n\n` + Trailer + `k1\n"}],"hasMore":false}`: ObsCommitted,
 	} {
 		payload = p
