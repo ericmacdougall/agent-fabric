@@ -4514,8 +4514,8 @@
   "expect": "TestDaemonRefusesUnresolvableProvider",
   "edits": [
    [
-    "\tstartProvider, err := resolveStartProvider(*provider)\n\tif err != nil {\n\t\treturn err\n\t}\n",
-    "\tstartProvider := providerPath(*provider)\n"
+    "\tdp, err := newDaemonProvider(*provider, schemaPath, hooksDir)\n\tif err != nil {\n\t\treturn err\n\t}\n",
+    "\tdp, _ := newDaemonProvider(*provider, schemaPath, hooksDir)\n"
    ]
   ]
  },
@@ -4581,6 +4581,32 @@
    [
     "\t\tif bin = l.Resolve(l.Binary); bin == \"\" {\n",
     "\t\tif r := l.Resolve(l.Binary); r != \"\" {\n\t\t\tbin = r\n\t\t} else if false {\n"
+   ]
+  ]
+ },
+ {
+  "id": "M356_k3_s1_callsite_launch_pins_start_file",
+  "invariant": "production_launch_resolves_per_launch",
+  "pkg": "./cmd/fab",
+  "file": "cmd/fab/job.go",
+  "expect": "TestDaemonLaunchComesFromDaemonProvider",
+  "edits": [
+   [
+    "\tcfg.Launch = dp.Launch\n",
+    "\tcfg.Launch = productionLaunch(dp.Path, schemaPath, hooksDir)\n"
+   ]
+  ]
+ },
+ {
+  "id": "M357_k3_s1_helper_launch_pins_start_file",
+  "invariant": "production_launch_resolves_per_launch",
+  "pkg": "./cmd/fab",
+  "file": "cmd/fab/job.go",
+  "expect": "TestNewDaemonProvider",
+  "edits": [
+   [
+    "Launch: productionLaunch(operator, schemaPath, hooksDir)}",
+    "Launch: productionLaunch(p, schemaPath, hooksDir)}"
    ]
   ]
  }

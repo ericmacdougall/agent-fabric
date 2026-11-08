@@ -319,7 +319,11 @@ at all. An operator-only role for these commands is follow-up work.
     with `--version`. If `--provider` does not resolve to a file when fabd
     starts, `fab daemon` refuses to start (`provider "…" cannot be
     resolved to a file; refusing to start fabd`), on every host and even
-    with `--trust-provider`, so the control is never skipped. Any other
+    with `--trust-provider`, so an unresolvable provider can never
+    silently skip the control (with `--trust-provider` the containment
+    gate, this control included, is skipped by design). The read-allow-back
+    directory and the control's file are fixed when fabd starts: restart
+    fabd after moving the provider install to another directory. Any other
     tool on `PATH` under a home is unreadable, so install toolchains
     outside `$HOME` or list them there;
   - the worker's git uses the run's own global config

@@ -2,6 +2,9 @@ package main
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -195,4 +198,88 @@ func TestProviderPathRefusesUnresolvableSymlink(t *testing.T) {
 	if p := providerPath(link); p != "" {
 		t.Errorf("providerPath with a dangling symlink = %q, want \"\"", p)
 	}
+}
+
+// goodqa#15161 review S1 on 2abd23a: fabd's launch keeps the operator's
+// name while the control and the read-allow-back use the start-time file.
+// Handing the scheduler the resolved file instead would pin one version: an
+// update would be ignored and, once pruned, every launch refused.
+func TestNewDaemonProvider(t *testing.T) {
+	bin, link, v1, _ := providerTree(t)
+	t.Setenv("PATH", bin)
+	for _, name := range []string{"provider-k3", link} {
+		dp, err := newDaemonProvider(name, "/srv/wr/checkpoint.schema.json", "")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if dp.Path != realPathT(t, v1) {
+			t.Errorf("%s: Path = %q, want the start-time file %q", name, dp.Path, realPathT(t, v1))
+		}
+		if dp.Launch.Binary != name || dp.Launch.Resolve == nil {
+			t.Errorf("%s: Launch.Binary = %q (Resolve set: %v); want the operator's name, re-resolved per launch", name, dp.Launch.Binary, dp.Launch.Resolve != nil)
+		}
+	}
+	if dp, err := newDaemonProvider("no-such-provider-k3-15161", "/x", ""); err == nil || dp.Path != "" || dp.Launch.Binary != "" {
+		t.Errorf("unresolvable provider: %+v, %v; want an error and nothing built", dp.Path, err)
+	}
+}
+
+// Review S1, the call site: daemonMain hands the scheduler dp.Launch and
+// nothing else, and productionLaunch is built in one place only, from the
+// operator's name. A unit test of newDaemonProvider cannot see the line in
+// daemonMain, so this reads the source.
+func TestDaemonLaunchComesFromDaemonProvider(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var launchSets, launchCalls []string
+	for _, pkg := range pkgs {
+		for _, f := range pkg.Files {
+			for _, d := range f.Decls {
+				fn, ok := d.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					switch n := n.(type) {
+					case *ast.AssignStmt:
+						for i, l := range n.Lhs {
+							if sel, ok := l.(*ast.SelectorExpr); ok && sel.Sel.Name == "Launch" && i < len(n.Rhs) {
+								if x, ok := sel.X.(*ast.Ident); ok && x.Name == "cfg" {
+									launchSets = append(launchSets, fn.Name.Name+":"+exprString(n.Rhs[i]))
+								}
+							}
+						}
+					case *ast.CallExpr:
+						if id, ok := n.Fun.(*ast.Ident); ok && id.Name == "productionLaunch" && len(n.Args) > 0 {
+							launchCalls = append(launchCalls, fn.Name.Name+":"+exprString(n.Args[0]))
+						}
+					}
+					return true
+				})
+			}
+		}
+	}
+	if len(launchSets) != 1 || launchSets[0] != "daemonMain:dp.Launch" {
+		t.Errorf("cfg.Launch assignments = %v; want exactly [daemonMain:dp.Launch]", launchSets)
+	}
+	if len(launchCalls) != 1 || launchCalls[0] != "newDaemonProvider:operator" {
+		t.Errorf("productionLaunch calls = %v; want exactly [newDaemonProvider:operator]", launchCalls)
+	}
+}
+
+func exprString(e ast.Expr) string {
+	switch e := e.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		return exprString(e.X) + "." + e.Sel.Name
+	case *ast.StarExpr:
+		return "*" + exprString(e.X)
+	case *ast.CallExpr:
+		return exprString(e.Fun) + "(...)"
+	}
+	return "?"
 }

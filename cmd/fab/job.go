@@ -102,7 +102,12 @@ func daemonMain(args []string) error {
 	// named cause on every host and trust level: the containment control
 	// (provider_starts_under_profile) would otherwise have no file to run
 	// and be skipped, and every later launch would be refused one by one.
-	startProvider, err := resolveStartProvider(*provider)
+	// newDaemonProvider also builds the scheduler's launch from the
+	// operator's name, so no call site can hand it the start-time file
+	// (review S1 on 2abd23a).
+	schemaPath := filepath.Join(*workRoot, "checkpoint.schema.json")
+	hooksDir := os.Getenv("FABRIC_HOOKS_DIR")
+	dp, err := newDaemonProvider(*provider, schemaPath, hooksDir)
 	if err != nil {
 		return err
 	}
@@ -110,7 +115,6 @@ func daemonMain(args []string) error {
 	os.Setenv("FABRIC_RUNNER_DSN_ENV", *runnerDSNEnv) // its port joins the worker's TCP allow-list (goodqa#15161)
 	// The schema is written before the profile and the controls, so the
 	// launch_inputs_readable control sees the file a real launch reads.
-	schemaPath := filepath.Join(*workRoot, "checkpoint.schema.json")
 	// The controls used to create the work root (0775, like controlGrant);
 	// the schema is now written first, so create it here (review 716fc04).
 	if err := os.MkdirAll(*workRoot, 0o775); err != nil {
@@ -123,8 +127,8 @@ func daemonMain(args []string) error {
 	// resolution; each launch resolves the name again (productionLaunch),
 	// so an update that repoints the symlink is followed (goodqa#15161
 	// reviews C and N1).
-	darwinLaunchRO = launchInputs(startProvider, os.Getenv("FABRIC_HOOKS_DIR"), schemaPath)
-	darwinProvider = startProvider
+	darwinLaunchRO = launchInputs(dp.Path, hooksDir, schemaPath)
+	darwinProvider = dp.Path
 	ln, err := launcherForThisHost()
 	if err != nil {
 		return err
@@ -148,8 +152,10 @@ func daemonMain(args []string) error {
 		MaxTurns: 40, MaxBudgetUSD: 2, Wall: 45 * time.Minute, WorkRoot: *workRoot, FabBin: selfPath()}
 	cfg.Holds = holds
 	cfg.RunnerDSN = os.Getenv(*runnerDSNEnv)
-	// goodqa#15087 AC-6: the same launch the AC-6 (f) live check runs.
-	cfg.Launch = productionLaunch(*provider, schemaPath, os.Getenv("FABRIC_HOOKS_DIR"))
+	// goodqa#15087 AC-6: the same launch the AC-6 (f) live check runs. It
+	// must stay dp.Launch: the operator's name, re-resolved per launch (N1;
+	// TestDaemonLaunchComesFromDaemonProvider guards this line).
+	cfg.Launch = dp.Launch
 	return withStore(func(ctx context.Context, st *store.Store) error {
 		s := sched.New(st, cfg, ln)
 		if p, ok := runnerProber(*workerUser); ok {
@@ -194,6 +200,23 @@ func resolveStartProvider(provider string) (string, error) {
 		return "", fmt.Errorf("provider %q cannot be resolved to a file; refusing to start fabd (the provider control would have nothing to run)", provider)
 	}
 	return p, nil
+}
+
+// daemonProvider is the provider fabd works with. Path is the file the
+// operator's name resolved to at start: the containment control runs it and
+// the Darwin profile reads it back (review R1). Launch keeps the name and
+// re-resolves it at every launch (N1), so an update is followed.
+type daemonProvider struct {
+	Path   string
+	Launch claude.Launch
+}
+
+func newDaemonProvider(operator, schemaPath, hooksDir string) (daemonProvider, error) {
+	p, err := resolveStartProvider(operator)
+	if err != nil {
+		return daemonProvider{}, err
+	}
+	return daemonProvider{Path: p, Launch: productionLaunch(operator, schemaPath, hooksDir)}, nil
 }
 
 // productionLaunch is the launch fabd hands the scheduler. Binary keeps
