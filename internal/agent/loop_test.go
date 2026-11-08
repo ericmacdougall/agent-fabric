@@ -137,17 +137,27 @@ func (denyAll) Check(context.Context, string, json.RawMessage) agent.Decision {
 	return agent.Decision{Reason: "secret_dump"}
 }
 
+type literalRedactor string
+
+func (r literalRedactor) Redact(s string) string {
+	return strings.ReplaceAll(s, string(r), "[REDACTED]")
+}
+
 func TestToolOutputRedactedAtCreation(t *testing.T) {
-	r := newRig(t, toolStep("", "", "toolu_r", "echo", `{"cmd":"`+canary+`"}`), endStep("ok"))
+	// The tool secret is distinct from the active provider key: an assistant
+	// response containing the active key is now rejected before this boundary.
+	toolSecret := "tool-output-secret-0123456789"
+	r := newRig(t, toolStep("", "", "toolu_r", "echo", `{"cmd":"`+toolSecret+`"}`), endStep("ok"))
+	r.cfgMod = func(c *agent.Config) { c.Redact = literalRedactor(toolSecret) }
 	if _, err, _ := r.life(); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range r.calls() {
-		if bytes.Contains(c.Result, []byte(canary)) {
+		if bytes.Contains(c.Result, []byte(toolSecret)) {
 			t.Fatal("secret persisted in tool result")
 		}
 	}
-	if bytes.Contains(r.srv.Requests()[1].Body, []byte(canary+"\\\"}")) && bytes.Contains(r.srv.Requests()[1].Body, []byte("ran {\\\"cmd\\\":\\\""+canary)) {
+	if bytes.Contains(r.srv.Requests()[1].Body, []byte(toolSecret+"\\\"}")) && bytes.Contains(r.srv.Requests()[1].Body, []byte("ran {\\\"cmd\\\":\\\""+toolSecret)) {
 		t.Fatal("secret sent to the model in a tool result")
 	}
 }

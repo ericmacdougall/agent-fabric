@@ -12,7 +12,7 @@ import (
 // APIBaseURL is the only base_url a grant may name (goodqa#15087 AC-5, main
 // WAL w5a7fb2daf13): the key is sent nowhere else. Tests swap the HTTP
 // transport through Options, never the grant URL.
-const APIBaseURL = "https://api.anthropic.com"
+const APIBaseURL = anthropic.ProductionBaseURL
 
 // checkBaseURL refuses anything but exactly APIBaseURL: another scheme,
 // host, port, path (a trailing "/" included), query or user info. It runs

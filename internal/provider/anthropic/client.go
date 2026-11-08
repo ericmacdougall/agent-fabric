@@ -69,9 +69,16 @@ var captureHeaders = []string{"Content-Type", "Request-Id", "Retry-After", "Anth
 
 type Client struct{ cfg Config }
 
+// ProductionBaseURL is the only Anthropic endpoint the client will use. Tests
+// keep this URL and inject a RoundTripper that routes it to a local fake.
+const ProductionBaseURL = "https://api.anthropic.com"
+
 func New(cfg Config) (*Client, error) {
-	if cfg.BaseURL == "" || cfg.Version == "" || cfg.Key == nil {
-		return nil, errors.New("anthropic: BaseURL, Version and Key are required")
+	if cfg.BaseURL != ProductionBaseURL {
+		return nil, errors.New("anthropic: BaseURL must be exactly " + ProductionBaseURL)
+	}
+	if cfg.Version == "" || cfg.Key == nil {
+		return nil, errors.New("anthropic: Version and Key are required")
 	}
 	cfg.HTTP = safeHTTP(cfg.HTTP)
 	if cfg.Retry.MaxAttempts == 0 {
@@ -256,11 +263,11 @@ func (c *Client) classify(err error, n int) (time.Duration, bool, error) {
 func (c *Client) once(ctx context.Context, body []byte, n int, onEvent func(int)) (*Message, AttemptRecord, error) {
 	rec := AttemptRecord{N: n}
 	key, err := c.cfg.Key(ctx)
-	if err != nil || key == "" {
-		rec.Outcome, rec.Err = "transport", "no api key available"
-		return nil, rec, errors.New("anthropic: api key unavailable")
+	if err != nil || !apiKeyShape.MatchString(key) {
+		rec.Outcome, rec.Err = "transport", "no valid api key available"
+		return nil, rec, errors.New("anthropic: valid api key unavailable")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.cfg.BaseURL, "/")+"/v1/messages", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ProductionBaseURL+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		rec.Outcome = "transport"
 		return nil, rec, err
@@ -285,28 +292,31 @@ func (c *Client) once(ctx context.Context, body []byte, n int, onEvent func(int)
 	}
 	defer resp.Body.Close()
 	rec.Status = resp.StatusCode
-	rec.RequestID = resp.Header.Get("request-id")
+	rec.RequestID = redactSecret(resp.Header.Get("request-id"), key)
+	// Keep the successful wire response for credential reflection checks. The
+	// same buffer backs optional capture, which is redacted before its callback.
+	var raw bytes.Buffer
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.TeeReader(io.LimitReader(resp.Body, 64<<20), &raw), resp.Body}
 	if c.cfg.Capture != nil {
-		var raw bytes.Buffer
-		resp.Body = struct {
-			io.Reader
-			io.Closer
-		}{io.TeeReader(io.LimitReader(resp.Body, 64<<20), &raw), resp.Body}
 		defer func() {
 			h := http.Header{}
 			for _, k := range captureHeaders {
-				if v := resp.Header.Get(k); v != "" {
+				if v := redactSecret(resp.Header.Get(k), key); v != "" {
 					h.Set(k, v)
 				}
 			}
-			c.cfg.Capture(Capture{N: n, RequestBody: body, Status: resp.StatusCode, RequestID: rec.RequestID, Header: h, ResponseBody: raw.Bytes()})
+			responseBody := []byte(redactSecret(raw.String(), key))
+			c.cfg.Capture(Capture{N: n, RequestBody: body, Status: resp.StatusCode, RequestID: rec.RequestID, Header: h, ResponseBody: responseBody})
 		}()
 	}
 	if resp.StatusCode/100 != 2 {
 		rec.Outcome = "http_error"
 		// 4xx/5xx before a stream: the provider did not run the model.
 		rec.MaybeBilled = false
-		ae := parseAPIError(resp)
+		ae := parseAPIError(resp, key)
 		rec.Err = ae.Error()
 		return nil, rec, ae
 	}
@@ -340,6 +350,7 @@ func (c *Client) once(ctx context.Context, body []byte, n int, onEvent func(int)
 			if errors.As(err, &pe) {
 				rec.Outcome = "protocol"
 			}
+			err = scrubErr(err, key)
 			rec.Err = err.Error()
 			return nil, rec, err
 		}
@@ -350,19 +361,53 @@ func (c *Client) once(ctx context.Context, body []byte, n int, onEvent func(int)
 	a.msg.RequestID = rec.RequestID
 	u := a.msg.Usage
 	rec.Usage = &u
+	if key != "" {
+		secret := []byte(key)
+		reflected := bytes.Contains(raw.Bytes(), secret)
+		for _, block := range a.msg.Content {
+			if bytes.Contains(block, secret) {
+				reflected = true
+				break
+			}
+		}
+		if reflected {
+			// Never redact or otherwise rewrite signed assistant blocks. Reject the
+			// whole response before the adapter or loop can persist any content.
+			err := perr("successful response contains the active API key")
+			rec.Outcome, rec.Err = "protocol", err.Error()
+			return nil, rec, err
+		}
+	}
 	rec.Outcome = "ok"
 	return &a.msg, rec, nil
 }
 
+func redactSecret(s, key string) string {
+	if key == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, key, "[redacted]")
+}
+
+// redactedError changes only the displayed text; Unwrap retains the original
+// typed error for errors.Is/errors.As and retry classification.
+type redactedError struct {
+	text  string
+	cause error
+}
+
+func (e *redactedError) Error() string { return e.text }
+func (e *redactedError) Unwrap() error { return e.cause }
+
 func scrubErr(err error, key string) error {
 	if key != "" && strings.Contains(err.Error(), key) {
-		return errors.New(strings.ReplaceAll(err.Error(), key, "[redacted]"))
+		return &redactedError{text: redactSecret(err.Error(), key), cause: err}
 	}
 	return err
 }
 
-func parseAPIError(resp *http.Response) *APIError {
-	ae := &APIError{Status: resp.StatusCode, RequestID: resp.Header.Get("request-id")}
+func parseAPIError(resp *http.Response, key string) *APIError {
+	ae := &APIError{Status: resp.StatusCode, RequestID: redactSecret(resp.Header.Get("request-id"), key)}
 	if v := resp.Header.Get("retry-after"); v != "" {
 		if secs, err := strconv.ParseFloat(v, 64); err == nil && secs >= 0 {
 			ae.RetryAfter, ae.HasRetry = time.Duration(secs*float64(time.Second)), true
@@ -375,7 +420,7 @@ func parseAPIError(resp *http.Response) *APIError {
 		Error struct{ Type, Message string } `json:"error"`
 	}
 	if json.Unmarshal(b, &w) == nil {
-		ae.Type, ae.Message = w.Error.Type, w.Error.Message
+		ae.Type, ae.Message = redactSecret(w.Error.Type, key), redactSecret(w.Error.Message, key)
 	}
 	if ae.Message == "" {
 		ae.Message = "(unparsed error body)"
@@ -383,5 +428,6 @@ func parseAPIError(resp *http.Response) *APIError {
 	if len(ae.Message) > 500 {
 		ae.Message = ae.Message[:500]
 	}
+	ae.Message = redactSecret(ae.Message, key)
 	return ae
 }

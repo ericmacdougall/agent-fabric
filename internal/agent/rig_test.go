@@ -22,7 +22,7 @@ import (
 func TestMain(m *testing.M) { os.Exit(storetest.Main(m, "agent")) }
 
 // canary is built at run time so no key-shaped literal sits in the source.
-var canary = "sk-" + "ant-CANARY-" + "0123456789abcdefXYZ"
+var canary = "sk-" + "ant-api03-" + strings.Repeat("CANARYx", 12)
 
 const (
 	attemptID = domain.AttemptID("r_t1")
@@ -116,7 +116,7 @@ func newRig(t *testing.T, steps ...fakeapi.Step) *rig {
 	srv := fakeapi.New(steps...)
 	t.Cleanup(srv.Close)
 	cl, err := anthropic.New(anthropic.Config{
-		BaseURL: srv.URL, Version: "test-version",
+		BaseURL: anthropic.ProductionBaseURL, Version: "test-version", HTTP: srv.HTTPClient(),
 		Key:   func(context.Context) (string, error) { return canary, nil },
 		Retry: anthropic.RetryPolicy{MaxAttempts: 3, BaseBackoff: time.Millisecond, MaxBackoff: 2 * time.Millisecond, MaxRetryAfter: time.Minute},
 	})

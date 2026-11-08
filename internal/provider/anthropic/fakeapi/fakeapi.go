@@ -77,6 +77,25 @@ func (s *Server) Requests() []Recorded {
 	return append([]Recorded(nil), s.Reqs...)
 }
 
+// HTTPClient routes requests for the pinned production URL to this fake. It
+// lets tests exercise endpoint validation without loosening it or using a real
+// network API.
+func (s *Server) HTTPClient() *http.Client {
+	return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		clone := req.Clone(req.Context())
+		u := *req.URL
+		u.Scheme = "http"
+		u.Host = s.Listener.Addr().String()
+		clone.URL = &u
+		clone.Host = u.Host
+		return http.DefaultTransport.RoundTrip(clone)
+	})}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	sum := sha256.Sum256(body)

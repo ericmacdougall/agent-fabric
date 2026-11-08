@@ -62,7 +62,14 @@ func TestNoRedirect(t *testing.T) {
 			http.Redirect(w, r, target.URL+"/v1/messages", code)
 		}))
 		var sl []time.Duration
-		c, err := New(Config{BaseURL: redir.URL, Version: "test-version",
+		c, err := New(Config{BaseURL: ProductionBaseURL, Version: "test-version",
+			HTTP: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				clone := req.Clone(req.Context())
+				u := *req.URL
+				u.Scheme, u.Host = "http", redir.Listener.Addr().String()
+				clone.URL, clone.Host = &u, u.Host
+				return http.DefaultTransport.RoundTrip(clone)
+			})},
 			Key:   func(context.Context) (string, error) { return canary, nil },
 			Retry: RetryPolicy{MaxAttempts: 2, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, MaxRetryAfter: time.Second},
 			Sleep: func(_ context.Context, d time.Duration) error { sl = append(sl, d); return nil }, Jitter: func() float64 { return 0 }})
@@ -126,17 +133,19 @@ func TestNoEnvProxy(t *testing.T) {
 	t.Setenv("HTTPS_PROXY", proxy.URL)
 	t.Setenv("HTTP_PROXY", proxy.URL)
 	t.Setenv("NO_PROXY", "")
-	var sl []time.Duration
-	cl, err := New(Config{BaseURL: "http://fabric-no-proxy-test.invalid", Version: "v", Key: key,
-		Retry: RetryPolicy{MaxAttempts: 1, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond, MaxRetryAfter: time.Second},
-		Sleep: func(_ context.Context, d time.Duration) error { sl = append(sl, d); return nil }, Jitter: func() float64 { return 0 }})
+	cl := safeHTTP(nil)
+	// Exercise safeHTTP directly: New intentionally rejects this non-production
+	// host before any transport or key source can run.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		"http://fabric-no-proxy-test.invalid/v1/messages", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Go caches the environment proxy on first use (sync.Once), so this part
 	// only catches a transport built after the env is set; the structural
 	// checks above are the main control.
-	if _, _, err := cl.Send(context.Background(), body(t), Hooks{}); err == nil {
+	if resp, err := cl.Do(req); err == nil {
+		resp.Body.Close()
 		t.Fatal("a request to an unresolvable host succeeded")
 	}
 	if n := proxied.Load(); n != 0 {
