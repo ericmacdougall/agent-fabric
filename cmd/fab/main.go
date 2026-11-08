@@ -132,6 +132,7 @@ func usage() {
   mission show M                       snapshot and event log (JSON)
   mission run --provider anthropic --grant F   run a native-loop mission (API key from the grant's key_command)
                                        FABRIC_REVIEW_GATE=1 gates every tool (needs FABRIC_REVIEW_DSN); default off.
+                                       FABRIC_TOOL_EXIT_CLEANUP=1 verifies descendant cleanup after every tool exit; default off.
                                        grant review_gate.mode: shadow (default, no execution), evaluate (no execution), enforce
   review list [--state S] | show HASH  inspect request metadata (never args or prompts)
   review approve --hash H --reason R --expires-in D | review reject --hash H --reason R

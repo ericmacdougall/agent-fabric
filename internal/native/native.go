@@ -155,6 +155,10 @@ type Options struct {
 	// in cmd/fab). Off, Run behaves exactly as before the gate existed and
 	// needs no review DSN. On, every tool is gated and ReviewDSN is required.
 	ReviewGate bool
+	// ToolExitCleanup verifies descendant cleanup after every tool exit
+	// (FABRIC_TOOL_EXIT_CLEANUP=1 in cmd/fab; default off). See
+	// tools.HostConfiner.ExitCleanup.
+	ToolExitCleanup bool
 	// ReviewDSN authenticates the separate trusted app-role review pool. It
 	// must never be the runner DSN or be inherited by a tool worker.
 	ReviewDSN string
@@ -285,7 +289,7 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 	hg := host.Grant{Run: domain.AttemptID(g.Attempt), Mission: domain.MissionID(g.Mission), Fence: fence, Model: g.Model, Effort: "n/a",
 		Rung: "native", TierTableSHA: "native", Profile: "P1", MaxTurns: g.MaxTurns, MaxBudgetUSD: float64(g.Caps.Run) / 1e6,
 		Wall: time.Duration(g.WallSeconds) * time.Second, Worktree: g.Worktree, RunDir: g.RunDir, Token: hex.EncodeToString(tok)}
-	conf := &tools.HostConfiner{Host: starter, Base: hg}
+	conf := &tools.HostConfiner{Host: starter, Base: hg, ExitCleanup: o.ToolExitCleanup}
 	rd, err := tools.NewRead(g.Worktree, 64<<10, 10*time.Second)
 	if err != nil {
 		return nil, err
