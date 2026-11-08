@@ -15,6 +15,9 @@ import (
 func TestAdmitRefusedWithUnsettledEffects(t *testing.T) {
 	parked := domain.Mission{ID: "m_k10p", Terminal: domain.TermNone, Execution: domain.ExecBlocked, ParkedReason: "6 consecutive attempts abandoned before launch"}
 	idle := domain.Mission{ID: "m_k10i", Terminal: domain.TermNone, Execution: domain.ExecIdle}
+	// Review F3 on b47c337: a park recorded while the mission still holds its
+	// slot takes the parkedIdle re-admission branch; the check must come first.
+	parkedHolding := domain.Mission{ID: "m_k10h", Terminal: domain.TermNone, Execution: domain.ExecAdmitted, ParkedReason: "6 consecutive attempts abandoned before launch"}
 	op := Env{Provider: domain.ProviderClaudeCode, Cap: 4, Operator: true}
 	withEnv := func(n int) Env { e := op; e.UnsettledEffects = n; return e }
 	withState := func(m domain.Mission, s domain.EffectState) domain.Mission {
@@ -31,6 +34,7 @@ func TestAdmitRefusedWithUnsettledEffects(t *testing.T) {
 	}{
 		{"parked, broker table", parked, withEnv(1)},
 		{"idle, broker table", idle, withEnv(2)},
+		{"parked holding its slot (parkedIdle), broker table", parkedHolding, withEnv(1)},
 		{"parked, mission state UNKNOWN", withState(parked, domain.EffectUnknown), op},
 		{"idle, mission state QUARANTINED", withState(idle, domain.EffectQuarantined), op},
 		{"idle, mission state DISPATCHED", withState(idle, domain.EffectDispatched), op},
@@ -47,6 +51,7 @@ func TestAdmitRefusedWithUnsettledEffects(t *testing.T) {
 	}{
 		{"parked, none", parked},
 		{"idle, none", idle},
+		{"parked holding its slot (parkedIdle), none", parkedHolding},
 		{"idle, settled CONFIRMED", withState(idle, domain.EffectConfirmed)},
 		{"idle, settled RESOLVED_NOT_APPLIED", withState(idle, domain.EffectResolvedNotApplied)},
 	}

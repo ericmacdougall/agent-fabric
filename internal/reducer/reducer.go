@@ -104,11 +104,15 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		}
 		// goodqa#15166 (Kimi K10): admission leads to a new attempt, which
 		// could dispatch a subject whose earlier effect has an unknown
-		// outcome. Refuse, as unpause does, until every effect is settled.
-		// Each unsettled state has an operator exit: fab effect unresolved
-		// then reconcile, resolve (QUARANTINED) or abandon (an intent).
+		// outcome. Refuse, as unpause and done do, until every effect is
+		// settled. This fails closed: most unsettled states have an operator
+		// exit (fab effect unresolved then reconcile; resolve for QUARANTINED;
+		// abandon for a never-dispatched intent), but not every one does
+		// (review F1 on b47c337: a re-armed intent with dispatches > 0 whose
+		// attempt ended, or an UNKNOWN effect whose readback can never answer).
+		// Those keep the mission un-admittable until an audited exit exists.
 		if n := m.UnsettledEffects() + env.UnsettledEffects; n > 0 {
-			return nil, fmt.Errorf("%w: %d effect(s) of mission %s are unsettled; settle them first (fab effect unresolved, then reconcile, resolve or abandon)", domain.ErrInvalidTransition, n, m.ID)
+			return nil, fmt.Errorf("%w: %d effect(s) of mission %s are unsettled; settle them before admitting it (fab effect show/unresolved; reconcile, resolve or abandon where the state allows)", domain.ErrInvalidTransition, n, m.ID)
 		}
 		if parkedIdle(m) {
 			// goodqa#15082 T2: a park recorded while another attempt was
