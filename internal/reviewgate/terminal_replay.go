@@ -13,7 +13,10 @@ import (
 // terminalForCall finds a durable control outcome by the loop-attached handle,
 // independently of the state fingerprint embedded in newer request hashes.
 // A completed checkpointed call can therefore never become a fresh side effect
-// merely because the world changed after its terminal commit.
+// merely because the world changed after its terminal commit. DISPATCHED is
+// included: a dispatch whose settlement never committed may already have run
+// its tool, so the call is recovered (dispatch_in_progress, then UNKNOWN) and
+// never submitted again under a new fingerprint hash (goodqa#15235 H1).
 func (g *Gate) terminalForCall(ctx context.Context, p Proposal) (Decision, bool, error) {
 	callID := ""
 	for _, handle := range p.Provenance {
@@ -29,7 +32,7 @@ func (g *Gate) terminalForCall(ctx context.Context, p Proposal) (Decision, bool,
 		WHERE r.mission_id = $1 AND r.session_id = $2 AND r.tool = $3
 		  AND r.canonical_proposal::jsonb->'args' = $4::jsonb
 		  AND r.canonical_proposal::jsonb->'provenance' @> jsonb_build_array(jsonb_build_object('id', $5::text))
-		  AND r.state IN ('DENIED', 'UNKNOWN', 'CONFIRMED', 'FAILED_DEFINITE')
+		  AND r.state IN ('DENIED', 'DISPATCHED', 'UNKNOWN', 'CONFIRMED', 'FAILED_DEFINITE')
 		ORDER BY r.created_at DESC, r.request_hash DESC LIMIT 1`,
 		p.MissionID, p.SessionID, p.Tool, string(p.Args), callID))
 	if errors.Is(err, pgx.ErrNoRows) {

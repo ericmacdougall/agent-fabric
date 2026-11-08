@@ -178,6 +178,9 @@ func (t *GatedTool) RunReviewed(ctx context.Context, input json.RawMessage) (age
 		return agent.ReviewRunResult{}, err
 	}
 	if found {
+		if terminal.State == StateDispatched {
+			return t.recoverDispatched(ctx, terminal)
+		}
 		return t.terminal(ctx, terminal)
 	}
 	fresh, err := t.gate.freshProposal(ctx, p)
@@ -229,18 +232,7 @@ func (t *GatedTool) RunReviewed(ctx context.Context, input json.RawMessage) (age
 	case StateAwaitingHuman:
 		return reviewedControl("approval_required", decision.RequestHash, t.gate.mode, true), nil
 	case StateDispatched:
-		outcome, recoverErr := t.gate.Recover(ctx, decision.RequestHash)
-		if recoverErr != nil {
-			return agent.ReviewRunResult{}, recoverErr
-		}
-		if outcome == Unknown {
-			return t.terminal(ctx, Decision{RequestHash: decision.RequestHash, State: StateUnknown})
-		}
-		if outcome == Dispatched {
-			return reviewedControl("dispatch_in_progress", decision.RequestHash, t.gate.mode, true), nil
-		}
-		decision.State = RequestState(outcome)
-		return t.terminal(ctx, decision)
+		return t.recoverDispatched(ctx, decision)
 	}
 
 	// The request hash itself is stable across process replay and is already
@@ -262,6 +254,23 @@ func (t *GatedTool) RunReviewed(ctx context.Context, input json.RawMessage) (age
 		return reviewedControl(string(t.gate.mode)+"_no_execution", decision.RequestHash, t.gate.mode, false), nil
 	}
 	decision.State = RequestState(dispatched.Outcome)
+	return t.terminal(ctx, decision)
+}
+
+// recoverDispatched never executes: it reports an in-flight dispatch as a
+// pause, or settles an expired one as UNKNOWN, or replays what finished.
+func (t *GatedTool) recoverDispatched(ctx context.Context, decision Decision) (agent.ReviewRunResult, error) {
+	outcome, err := t.gate.Recover(ctx, decision.RequestHash)
+	if err != nil {
+		return agent.ReviewRunResult{}, err
+	}
+	if outcome == Unknown {
+		return t.terminal(ctx, Decision{RequestHash: decision.RequestHash, State: StateUnknown})
+	}
+	if outcome == Dispatched {
+		return reviewedControl("dispatch_in_progress", decision.RequestHash, t.gate.mode, true), nil
+	}
+	decision.State = RequestState(outcome)
 	return t.terminal(ctx, decision)
 }
 
