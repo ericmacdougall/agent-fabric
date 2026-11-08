@@ -526,9 +526,15 @@ func TestStartAttemptWrongPath(t *testing.T) {
 		ok(t, st, ctx, "chat", "admit-"+string(m.id), domain.Command{Kind: domain.CmdAdmitMission, Mission: m.id})
 	}
 	lock := func(a string) string { return "/var/lib/fabric/native-locks/" + a + ".lock" }
+	// A native start also names its canonical worktree (goodqa#15283).
 	start := func(m domain.MissionID, a domain.AttemptID, p domain.Provider, lockPath string) domain.Command {
-		return domain.Command{Kind: domain.CmdStartAttempt, Mission: m, Attempt: a, Host: "h_t2", Role: "writer", Path: p, LockPath: lockPath}
+		c := domain.Command{Kind: domain.CmdStartAttempt, Mission: m, Attempt: a, Host: "h_t2", Role: "writer", Path: p, LockPath: lockPath}
+		if p == domain.ProviderAnthropicAPI {
+			c.Worktree = "/srv/wt/" + string(a)
+		}
+		return c
 	}
+	withWorktree := func(c domain.Command, wt string) domain.Command { c.Worktree = wt; return c }
 	refused := []struct {
 		what string
 		cmd  domain.Command
@@ -541,6 +547,11 @@ func TestStartAttemptWrongPath(t *testing.T) {
 		{"native start naming another attempt's lock", start("m_sa", "r_s6", domain.ProviderAnthropicAPI, lock("r_s1"))},
 		{"native start with a .. segment", start("m_sa", "r_s7", domain.ProviderAnthropicAPI, "/var/lib/fabric/../native-locks/r_s7.lock")},
 		{"claude-code start with a lock path", start("m_sc", "r_s8", domain.ProviderClaudeCode, lock("r_s8"))},
+		// goodqa#15283 NEG-7, AC-4: the reducer half of the worktree rule.
+		{"native start with no worktree", withWorktree(start("m_sa", "r_s9", domain.ProviderAnthropicAPI, lock("r_s9")), "")},
+		{"native start with a relative worktree", withWorktree(start("m_sa", "r_s10", domain.ProviderAnthropicAPI, lock("r_s10")), "srv/wt")},
+		{"native start with a .. worktree", withWorktree(start("m_sa", "r_s11", domain.ProviderAnthropicAPI, lock("r_s11")), "/srv/../wt")},
+		{"claude-code start with a worktree", withWorktree(start("m_sc", "r_s12", domain.ProviderClaudeCode, ""), "/srv/wt")},
 	}
 	for i, c := range refused {
 		_, err := st.Execute(ctx, "fabd", domain.CommandID(fmt.Sprintf("start-wrong-%d", i)), c.cmd)
@@ -560,14 +571,14 @@ func TestStartAttemptWrongPath(t *testing.T) {
 	// Positive controls: each launcher on its own mission.
 	ok(t, st, ctx, "fabd", "start-cc", start("m_sc", "r_sc", domain.ProviderClaudeCode, ""))
 	ok(t, st, ctx, "native-runner", "start-api", start("m_sa", "r_sa", domain.ProviderAnthropicAPI, lock("r_sa")))
-	var path, lp string
-	if err := st.pool.QueryRow(ctx, "SELECT path, lock_path FROM attempts WHERE id = 'r_sa'").Scan(&path, &lp); err != nil {
+	var path, lp, wt string
+	if err := st.pool.QueryRow(ctx, "SELECT path, lock_path, worktree FROM attempts WHERE id = 'r_sa'").Scan(&path, &lp, &wt); err != nil {
 		t.Fatal(err)
 	}
-	if path != string(domain.ProviderAnthropicAPI) || lp != lock("r_sa") {
-		t.Fatalf("native attempt row: path %s lock_path %s", path, lp)
+	if path != string(domain.ProviderAnthropicAPI) || lp != lock("r_sa") || wt != "/srv/wt/r_sa" {
+		t.Fatalf("native attempt row: path %s lock_path %s worktree %s", path, lp, wt)
 	}
-	if n := count(t, st, ctx, "SELECT count(*) FROM attempts WHERE id = 'r_sc' AND path = 'claude-code' AND lock_path IS NULL"); n != 1 {
-		t.Fatalf("claude-code attempt row not recorded with its path and no lock_path")
+	if n := count(t, st, ctx, "SELECT count(*) FROM attempts WHERE id = 'r_sc' AND path = 'claude-code' AND lock_path IS NULL AND worktree IS NULL"); n != 1 {
+		t.Fatalf("claude-code attempt row not recorded with its path and no lock_path or worktree")
 	}
 }

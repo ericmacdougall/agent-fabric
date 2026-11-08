@@ -17,7 +17,7 @@ import (
 // attemptMain: `fab attempt start --mission M --id r_x --key K [--host H --role writer]`
 func attemptMain(args []string) error {
 	if len(args) == 0 || args[0] != "start" {
-		return errors.New("attempt start --mission M --id R --path claude-code|anthropic-api [--lock-path P] --key K")
+		return errors.New("attempt start --mission M --id R --path claude-code|anthropic-api [--lock-path P --worktree W] --key K")
 	}
 	fs := flag.NewFlagSet("attempt start", flag.ContinueOnError)
 	mission := fs.String("mission", "", "mission id")
@@ -27,6 +27,7 @@ func attemptMain(args []string) error {
 	key := fs.String("key", "", "idempotency key")
 	path := fs.String("path", "", "launcher path: claude-code or anthropic-api (required; must be the mission's provider)")
 	lockPath := fs.String("lock-path", "", "anthropic-api only: the attempt's liveness lock file, an absolute path ending in /native-locks/<id>.lock")
+	worktree := fs.String("worktree", "", "anthropic-api only, required with --lock-path: the attempt's canonical worktree (absolute, symlinks already resolved)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -40,12 +41,24 @@ func attemptMain(args []string) error {
 		if err := domain.ValidLockPath(domain.AttemptID(*id), *lockPath); err != nil {
 			return usageError{fmt.Errorf("attempt start: --lock-path: %w", err)}
 		}
-	} else if *lockPath != "" {
-		return usageError{errors.New("attempt start: --lock-path is for --path anthropic-api only")}
+		// goodqa#15283: the attempt is bound to its canonical worktree. The
+		// CLI does not canonicalize on the caller's behalf; it refuses a
+		// spelling that is not already canonical.
+		if *worktree == "" {
+			return usageError{errors.New("attempt start: --worktree is required with --lock-path")}
+		}
+		if err := domain.ValidWorktree(*worktree); err != nil {
+			return usageError{fmt.Errorf("attempt start: --worktree: %w", err)}
+		}
+		if real, err := filepath.EvalSymlinks(*worktree); err != nil || real != *worktree {
+			return usageError{fmt.Errorf("attempt start: --worktree %q is not canonical (resolves to %q, %v); pass the resolved path", *worktree, real, err)}
+		}
+	} else if *lockPath != "" || *worktree != "" {
+		return usageError{errors.New("attempt start: --lock-path and --worktree are for --path anthropic-api only")}
 	}
 	return withStore(func(ctx context.Context, st *store.Store) error {
 		resp, err := execute(ctx, st, actor(), *key, domain.Command{Kind: domain.CmdStartAttempt, Mission: domain.MissionID(*mission),
-			Attempt: domain.AttemptID(*id), Host: domain.HostID(*hostID), Role: *role, Path: p, LockPath: *lockPath})
+			Attempt: domain.AttemptID(*id), Host: domain.HostID(*hostID), Role: *role, Path: p, LockPath: *lockPath, Worktree: *worktree})
 		if err != nil {
 			return err
 		}

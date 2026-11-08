@@ -204,13 +204,20 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		return nil, err
 	}
 	starter := o.Starter
-	// goodqa#15087: the start rule reads the mission and attempt before
-	// SelfTest, the key command and any write; a refusal leaves no trace.
-	plan, err := planStart(ctx, st, g)
+	// goodqa#15283: the grant's worktree is canonicalized and pinned before
+	// the start rule and any Execute, so a refused path never burns the keyed
+	// start command. From here on only the canonical path is used.
+	wt, err := canonicalWorktree(g.Worktree)
 	if err != nil {
 		return nil, err
 	}
-	oracle := &policy.Oracle{Hooks: g.OracleHooks, Cwd: g.Worktree, Timeout: 20 * time.Second}
+	// goodqa#15087: the start rule reads the mission and attempt before
+	// SelfTest, the key command and any write; a refusal leaves no trace.
+	plan, err := planStart(ctx, st, g, wt.Path())
+	if err != nil {
+		return nil, err
+	}
+	oracle := nativeOracle(g, wt)
 	if err := oracle.SelfTest(ctx); err != nil {
 		return nil, err
 	}
@@ -305,7 +312,7 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 	}
 
 	if plan.c != caseResume {
-		if fence, err = startNative(ctx, st, g, plan.c == caseNew, lockPath); err != nil {
+		if fence, err = startNative(ctx, st, g, plan.c == caseNew, lockPath, wt.Path()); err != nil {
 			return nil, err
 		}
 		if err := startHeartbeat(); err != nil {
@@ -316,15 +323,10 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 	_, _ = rand.Read(tok)
 	hg := host.Grant{Run: domain.AttemptID(g.Attempt), Mission: domain.MissionID(g.Mission), Fence: fence, Model: g.Model, Effort: "n/a",
 		Rung: "native", TierTableSHA: "native", Profile: "P1", MaxTurns: g.MaxTurns, MaxBudgetUSD: float64(g.Caps.Run) / 1e6,
-		Wall: time.Duration(g.WallSeconds) * time.Second, Worktree: g.Worktree, RunDir: g.RunDir, Token: hex.EncodeToString(tok)}
-	conf := &tools.HostConfiner{Host: starter, Base: hg, ExitCleanup: o.ToolExitCleanup}
-	rd, err := tools.NewRead(g.Worktree, 64<<10, 10*time.Second)
+		Wall: time.Duration(g.WallSeconds) * time.Second, RunDir: g.RunDir, Token: hex.EncodeToString(tok)}
+	toolset, err := nativeToolset(wt, starter, hg, o.ToolExitCleanup, allow)
 	if err != nil {
 		return nil, err
-	}
-	toolset := []agent.Tool{rd,
-		&tools.Grep{C: conf, Root: g.Worktree, Timeout: 20 * time.Second, MaxOutput: 32 << 10},
-		&tools.Shell{C: conf, Allow: allow, Timeout: 30 * time.Second, MaxOutput: 32 << 10},
 	}
 	// Every tool refuses to start once the attempt lease is stale or expired.
 	for i, tool := range toolset {
@@ -387,11 +389,37 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 	return finishNative(ctx, st, db, led, g, fence, out)
 }
 
+// nativeOracle is the run's guard oracle: its hooks see the canonical
+// worktree as cwd, and every hook exec first checks the pin (goodqa#15283).
+func nativeOracle(g Grant, wt *tools.WorktreePin) *policy.Oracle {
+	return &policy.Oracle{Hooks: g.OracleHooks, Cwd: wt.Path(), Timeout: 20 * time.Second, Precheck: wt.Check}
+}
+
+// nativeToolset builds read, grep and shell on the canonical worktree, each
+// refusing with ErrWorktreeMoved once the pin no longer holds
+// (goodqa#15283 AC-5). The host grant's working directory is the canonical
+// path too, whatever the caller set.
+func nativeToolset(wt *tools.WorktreePin, starter tools.Starter, hg host.Grant, exitCleanup bool, allow []*regexp.Regexp) ([]agent.Tool, error) {
+	hg.Worktree = wt.Path()
+	conf := &tools.HostConfiner{Host: starter, Base: hg, ExitCleanup: exitCleanup, Pin: wt}
+	rd, err := tools.NewRead(wt.Path(), 64<<10, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	rd.Pin = wt
+	return []agent.Tool{rd,
+		&tools.Grep{C: conf, Root: wt.Path(), Timeout: 20 * time.Second, MaxOutput: 32 << 10, Pin: wt},
+		&tools.Shell{C: conf, Allow: allow, Timeout: 30 * time.Second, MaxOutput: 32 << 10},
+	}, nil
+}
+
 // startNative registers the mission and starts the attempt through the
 // ordinary commands (so the reducer's event log stays the record), after the
 // start rule chose caseNew (admit first) or caseStartAdmitted (the mission
 // is already admitted: no second admit). It runs with the flock held.
-func startNative(ctx context.Context, st *store.Store, g Grant, admit bool, lockPath string) (int64, error) {
+// worktree is the canonical, pinned worktree the attempt is bound to
+// (goodqa#15283), never the grant's own spelling.
+func startNative(ctx context.Context, st *store.Store, g Grant, admit bool, lockPath, worktree string) (int64, error) {
 	// The native runner creates anthropic-api missions only (goodqa#15087,
 	// main WAL w5a7fb2daf13); an existing mission of another provider is
 	// refused here. (skipPrecheck: test only; the reducer and the database
@@ -409,7 +437,8 @@ func startNative(ctx context.Context, st *store.Store, g Grant, admit bool, lock
 		}
 	}
 	resp, err := st.Execute(ctx, "native-runner", key("start"), domain.Command{Kind: domain.CmdStartAttempt, Mission: domain.MissionID(g.Mission),
-		Attempt: domain.AttemptID(g.Attempt), Host: hostid.Default(), Role: "writer", Path: domain.ProviderAnthropicAPI, LockPath: lockPath})
+		Attempt: domain.AttemptID(g.Attempt), Host: hostid.Default(), Role: "writer", Path: domain.ProviderAnthropicAPI, LockPath: lockPath,
+		Worktree: worktree})
 	if err != nil {
 		return 0, fmt.Errorf("start attempt: %w", err)
 	}

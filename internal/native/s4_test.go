@@ -85,7 +85,7 @@ func TestStartNativeRefusesStartOnlyReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := st.Execute(ctx, "native-runner", key("start"), domain.Command{Kind: domain.CmdStartAttempt, Mission: m, Attempt: a,
-		Host: hostid.Default(), Role: "writer", Path: domain.ProviderAnthropicAPI, LockPath: lock}); err != nil {
+		Host: hostid.Default(), Role: "writer", Path: domain.ProviderAnthropicAPI, LockPath: lock, Worktree: canon(t, e.g.Worktree)}); err != nil {
 		t.Fatal(err)
 	}
 	fence, err := native.StartNativeForTest(ctx, st, e.g, true, lock)
