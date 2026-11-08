@@ -93,6 +93,23 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 	ev := func(kind domain.EventKind) domain.Event {
 		return domain.Event{Kind: kind, Mission: m.ID}
 	}
+	// goodqa#15324 S1b. A ladder mission holds receipts, not work: it refuses
+	// every command but RECORD_LADDER_RECEIPT (so never ADMIT or START), and
+	// that command refuses on any other mission.
+	if domain.IsLadderMission(m.ID) {
+		if cmd.Kind != domain.CmdRecordLadderReceipt {
+			return nil, fmt.Errorf("%w: %s refused", domain.ErrLadderMission, cmd.Kind)
+		}
+		if err := domain.ValidateLadderRecord(cmd.Ladder); err != nil {
+			return nil, err
+		}
+		e := ev(domain.LadderEventKind(cmd.Ladder))
+		e.Ladder = cmd.Ladder.Clone()
+		return []domain.Event{e}, nil
+	}
+	if cmd.Kind == domain.CmdRecordLadderReceipt {
+		return nil, fmt.Errorf("%w: mission %s", domain.ErrNotLadderMission, m.ID)
+	}
 	if m.Terminal != domain.TermNone {
 		return nil, fmt.Errorf("%w: mission is terminal (%s)", domain.ErrInvalidTransition, m.Terminal)
 	}

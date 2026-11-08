@@ -1,0 +1,7064 @@
+{
+ "generator_sha256": "59ba6eea1a3e46c4b7b79c069dbf4373edd057f3291f650a2397e4a0b2b493db",
+ "policy": {
+  "caps": {
+   "_doc": "owner cap (memory feedback-token-budget: at most 4 active owners): owner_types count toward session_owner_agents; helpers (red-team, click-tester, fixer, Explore, Plan) count only toward session_live_agents. The owner count comes from ah owners liveness when the session has a main WAL, else from the SubagentStart live map.",
+   "helper_types": [
+    "red-team",
+    "click-tester",
+    "reviewer",
+    "fixer",
+    "Explore",
+    "Plan",
+    "claude-code-guide",
+    "statusline-setup"
+   ],
+   "live_ttl_seconds": 1800,
+   "owner_types": [
+    "task-owner",
+    "general-purpose",
+    "claude",
+    "fork",
+    ""
+   ],
+   "session_live_agents": 12,
+   "session_owner_agents": 4,
+   "top_assent_max_age_seconds": 43200
+  },
+  "default_effort": "medium",
+  "efforts": [
+   "low",
+   "medium",
+   "high",
+   "xhigh",
+   "max"
+  ],
+  "failures_per_rung": 2,
+  "families": {
+   "claude": {
+    "fable": {
+     "aliases": [
+      "fable"
+     ],
+     "id_pattern": "^claude-fable-",
+     "rung_by_effort": {
+      "high": "R6",
+      "low": "R5",
+      "max": "R6",
+      "medium": "R5",
+      "xhigh": "R6"
+     }
+    },
+    "opus": {
+     "aliases": [
+      "opus"
+     ],
+     "id_pattern": "^claude-opus-",
+     "rung_by_effort": {
+      "high": "R2",
+      "low": "R1",
+      "max": "R4",
+      "medium": "R1",
+      "xhigh": "R3"
+     }
+    },
+    "sonnet": {
+     "aliases": [
+      "sonnet"
+     ],
+     "id_pattern": "^claude-sonnet-",
+     "rung_by_effort": {
+      "*": "R0"
+     }
+    }
+   },
+   "openai": {
+    "astra": {
+     "aliases": [],
+     "id_pattern": "^gpt-[0-9.]+-astra$",
+     "rung_by_effort": {
+      "high": "R6",
+      "low": "R5",
+      "max": "R6",
+      "medium": "R5",
+      "xhigh": "R6"
+     }
+    },
+    "sol": {
+     "aliases": [],
+     "id_pattern": "^gpt-[0-9.]+-sol$",
+     "rung_by_effort": {
+      "high": "R2",
+      "low": "R1",
+      "max": "R4",
+      "medium": "R1",
+      "xhigh": "R3"
+     }
+    },
+    "terra": {
+     "aliases": [],
+     "id_pattern": "^gpt-[0-9.]+-terra$",
+     "rung_by_effort": {
+      "*": "R0"
+     }
+    }
+   }
+  },
+  "ladder_limits": {
+   "max_review_launches": 8,
+   "max_rung_climbs": 3,
+   "max_total_review_usd": 60
+  },
+  "lowest_rung": "R0",
+  "mode": "warn",
+  "preferred_review_harness": {
+   "claude": "openai",
+   "openai": "claude",
+   "unknown": "openai"
+  },
+  "rungs": {
+   "R0": {
+    "effort": "medium",
+    "effort_any": true,
+    "models": {
+     "claude": "sonnet",
+     "openai": "gpt-5.1-terra"
+    },
+    "needs_user_permission": false,
+    "review_budget_usd": 5,
+    "reviewer_rung": "R1",
+    "timeout_minutes": 15,
+    "ultracode": false,
+    "writable": true
+   },
+   "R1": {
+    "effort": "medium",
+    "effort_any": false,
+    "models": {
+     "claude": "opus",
+     "openai": "gpt-6.1-sol"
+    },
+    "needs_user_permission": false,
+    "review_budget_usd": 5,
+    "reviewer_rung": "R2",
+    "timeout_minutes": 15,
+    "ultracode": false,
+    "writable": true
+   },
+   "R2": {
+    "effort": "high",
+    "effort_any": false,
+    "models": {
+     "claude": "opus",
+     "openai": "gpt-6.1-sol"
+    },
+    "needs_user_permission": false,
+    "review_budget_usd": 8,
+    "reviewer_rung": "R3",
+    "timeout_minutes": 20,
+    "ultracode": false,
+    "writable": true
+   },
+   "R3": {
+    "effort": "xhigh",
+    "effort_any": false,
+    "models": {
+     "claude": "opus",
+     "openai": "gpt-6.1-sol"
+    },
+    "needs_user_permission": false,
+    "review_budget_usd": 12,
+    "reviewer_rung": "R4",
+    "timeout_minutes": 25,
+    "ultracode": false,
+    "writable": true
+   },
+   "R4": {
+    "effort": "max",
+    "effort_any": false,
+    "models": {
+     "claude": "opus",
+     "openai": "gpt-6.1-sol"
+    },
+    "needs_user_permission": false,
+    "review_budget_usd": 20,
+    "reviewer_rung": null,
+    "timeout_minutes": 30,
+    "ultracode": false,
+    "writable": false
+   },
+   "R5": {
+    "effort": "medium",
+    "effort_any": false,
+    "models": {
+     "claude": "fable",
+     "openai": "gpt-6-astra"
+    },
+    "needs_user_permission": true,
+    "review_budget_usd": 30,
+    "reviewer_rung": "R6",
+    "timeout_minutes": 40,
+    "ultracode": false,
+    "writable": true
+   },
+   "R6": {
+    "effort": "high",
+    "effort_any": false,
+    "models": {
+     "claude": "fable",
+     "openai": "gpt-6-astra"
+    },
+    "needs_user_permission": true,
+    "review_budget_usd": 30,
+    "reviewer_rung": null,
+    "timeout_minutes": 40,
+    "ultracode": false,
+    "writable": false
+   }
+  },
+  "schema": 1,
+  "top_writing_rung": "R5",
+  "unknown_author_reviewer_rung": "R1"
+ },
+ "reference": {
+  "escalation_py_sha256": "f501898821c34271675b41b409a6e2958752e0af2ba4ce3952533f27e288b7e9",
+  "model_tiers_json_sha256": "dcb221bac11825023db120300dd437f1a5c3305327dfc322f1003a499dc5e9b9"
+ },
+ "refusals": [
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "not-a-sha",
+    "fp": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "launched": true,
+    "rsha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "step": "review"
+   },
+   "why": "non-hex head"
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "fp": "RT-1",
+    "launched": true,
+    "rsha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "step": "review"
+   },
+   "why": "fingerprint is a finding id"
+  }
+ ],
+ "seed": 15324,
+ "steps": [
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "2e5200c223353739bf7def4ca6b0e405fb2012831d9f72e9c24dd3b0887613c9",
+    "spend_micros": 5000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 1,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "spend_micros": 5000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "rsha": "e00b1b24f8c1cd11a23084df45626aac3d062e399ae30ae6a604f2ddb5763c26",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "launches": 1,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 5000000
+   }
+  },
+  {
+   "record": {
+    "class": "CLAIM",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "src": "claim-fix",
+    "step": "claim"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "launches": 1,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 5000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "rsha": "c483205d3d21abd4933988e05e0f00cc3945c32b5ee6d3d295e16d9625281759",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 1,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 5000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "003761848d57e494d05604ec7f578e0ee99bccb0383199a126158ef960dcb4bb",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 1,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 5000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "121fa353d1e799092f3f10428c4a71476e6989627ed1c8130dc49f9c119843c9",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 1,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 5000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "rsha": "f85f18bd0d6e9aac3950d841ba7cdef47e8a2e6454b22080d35e97985ca7eeaa",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 1,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 5000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "bb8ea86001b11599b6a4e52c11fd13102ee03f9c1ec9ea66694ee2f3e7a21cec",
+    "spend_micros": 5000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 2,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 10000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "rsha": "eb7b19c7415974193a3fdcdd495b303962d574f072aea547187ee794e8f6f3cf",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 2,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 10000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "732b52fe1327efc916c457df4ddc0d0b9d4563583259e78201641ff643f8362d",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 2,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 10000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "counted": true,
+    "launched": true,
+    "rsha": "92daaca5a33b785355bf22a57edce73d4467302e1d88a1b5cbde5794ea1cc745",
+    "spend_micros": 5000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 3,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 15000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "rsha": "2c5636280f67651167d53e4685826746904af609ffa6f0c11f7035b507281aaf",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 3,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 15000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "b8d753bd86b04a0afbd44f59b88e27ceca9811d17008317617f3e4644945e483",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 3,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "spend_micros": 15000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "8987e83c93548127c483f64be3e3403be156b0a59f4be51dd054349de3e899d9",
+    "spend_micros": 5000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "launches": 4,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 20000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "a35af32",
+    "counted": true,
+    "fp": "472808b0a9c214a3ccc91020ef5595d21d3c578fbf7bfcdff501b508634de432",
+    "ids": [
+     "RT-1",
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "eef09e7f52ac9563c2b11faebb27d206962612e84b418150ea7ae3fe08ebd12a",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "472808b0a9c214a3ccc91020ef5595d21d3c578fbf7bfcdff501b508634de432",
+    "launches": 5,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 28000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "6db47a85fc7cdfd29de5de6596631ecd42ba196a5752f5aad966989b4aa22056",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "launches": 6,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 36000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "669593e9cb995d1c9e034fc10066f0696aa6dd3bdf8897b7bc2a5fd025bfda38",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "launches": 6,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 36000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "c4a2efff646ef5216759105262dbe3f2d8bc634e7f69df4cf0d03d7ea85af673",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "launches": 7,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 44000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "counted": true,
+    "launched": true,
+    "rsha": "0e223e52c843e48290cbaeb6d96274736d6010e53460a65fdbd8b7ced3f9caaa",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "launches": 8,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 52000000
+   }
+  },
+  {
+   "record": {
+    "class": "CLAIM",
+    "commit": "a35af32",
+    "src": "claim-fix",
+    "step": "claim"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "launches": 8,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 52000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "7fcb10a08fd3c2f6c3c9bbe2eb26fa5148056cb6078adbbf097c29f4a8edcd01",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 9,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 60000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "rsha": "dc5cb24718a01abce001b04c56a9267a5dca88ea68f472e9d40ae1cc441cca67",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 9,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 60000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "counted": true,
+    "launched": true,
+    "rsha": "d98eddc8d56203af2ef5d87d4af90c172de9b2dc65871536e862ccbdcbc3b208",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 10,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 68000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "344d677aea1dd3d95a180ad4b391574646c7ae7b189ca555671763610cffc9fb",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 11,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 76000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 1,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 11,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 76500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 2,
+    "spend_micros": 2000000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 11,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 78500000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "6e14064c4962abea20eebff92997c573806c8f99aa90e405c64effd06676d8aa",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 11,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 78500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "rsha": "617fa5b4ac073097eb26c27be3cccf868fc80894b8457b8891101d62208b5013",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 11,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 78500000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "75621230529581e2d13a9c807f06f1b1516b443870923d69b8096acd4ec15286",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 11,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 78500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "rsha": "332a7f068d13be5649e45cdce7c6a9ad1a2aaa5c1362a05c4941453ad1ef2101",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 11,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 78500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "rsha": "52ff02388e76ed7d3f1fc359b1cc20399785bd020061428c2c721d76f6c6ceee",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 11,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 78500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "launched": true,
+    "rsha": "f77d583bc8cfeca874006a55e717edef9a49661f0a006b4843354c400a304478",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 12,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 86500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "launched": true,
+    "rsha": "989d95c9499ee251c467652a2f6d313a6bfa76897f1b7cc3cf953922dc0aaca2",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 13,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 94500000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "fp": "b4ce97b66c725f35f619604943efdb51c5e92952e3620cc84a94ff666e4c21be",
+    "ids": [
+     "F9",
+     "RT-1"
+    ],
+    "rsha": "0cd02c26cda3f4fc8e7bb0986862a0ce20b0b03b6ca7afdbbb215f01d3fe9ff8",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "b4ce97b66c725f35f619604943efdb51c5e92952e3620cc84a94ff666e4c21be",
+    "launches": 13,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 94500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "5c823de654157ff2c83fdf3c58c765542e0d5705065473572f0697a4f44294ac",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "b4ce97b66c725f35f619604943efdb51c5e92952e3620cc84a94ff666e4c21be",
+    "launches": 14,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 102500000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "175d9e2bbb382e3e699b9b55c961e01c309db14fa018dcea28a9a547e05c9f83",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 15,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 110500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 3,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 15,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 111000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "launched": true,
+    "rsha": "aa4781e0b61753aa91e38721a7eb6f94293ca64d34af615d34e229efe25d2136",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 16,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 119000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "1e73a2b8d3c27f51735c0e19bed3bd6bb06eb84bc297b04b16875cb68727cf67",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "launches": 17,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 127000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "28d1e7f2bb6cf0ee568d26ba2382943ca0019bfad4fe16f5ec0eeae93d0cc6f8",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 18,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "spend_micros": 135000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "a35af32",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "40ff4d83014b1000efb8535c2e0d15a47604f349144258bacdae3f64bf064cb0",
+    "spend_micros": 8000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "launches": 19,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 143000000
+   }
+  },
+  {
+   "record": {
+    "class": "CLAIM",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "src": "claim-fix",
+    "step": "claim"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "launches": 19,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 143000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "4fba83bd292a61752f03ab4b6b8d37ce36b6c8a728e51705f5ba0ab5acf83b89",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "launches": 19,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 143000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "rsha": "9cfab18ae55c63d632c1225fcfd9fb74b63cd1f5bc3b0d349479c804dc188255",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "launches": 19,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 143000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "11d1f73284c27b1a571defe89f5c8c99dad578cb2d8d56270fbc21dc4e4243e3",
+    "spend_micros": 12000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 20,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 155000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "rsha": "8a00a94289a3a27580b80be1fd10613ec3e7e032f18af5ae2a5de84f0d066ae3",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 20,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 155000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "a35af32",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "76055c9ef342f7ede984fb73195b7c62012ee54faf2d38954c642595d0c42bab",
+    "spend_micros": 12000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "launches": 21,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 167000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "launched": true,
+    "rsha": "c67e13a50802d004a15c606faddb512cddc493ee6ed8fe3e07ec7d860f47d8b5",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "launches": 21,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 167000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "rsha": "1cec39321ef398cdafde937348bded1411b21415108b02a5b30956a93e3c3fc6",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "launches": 21,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 167000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "be388eb31723c845220b8578eb4c2bed5f7a18f16d513289f1cdde8ff81ffd22",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "launches": 21,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 167000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "rsha": "0761c3b969ddcffa129dd41ffa9729de6debfb4dca6ef4caa94bca0ae9a94601",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 21,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 167000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "2da0f70d061e2797d55461b6e4290a393f94b2561f8f15c87e6872ceaa34a0b1",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 21,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 167000000
+   }
+  },
+  {
+   "record": {
+    "class": "CLAIM",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "src": "claim-fix",
+    "step": "claim"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 21,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 167000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "fp": "472808b0a9c214a3ccc91020ef5595d21d3c578fbf7bfcdff501b508634de432",
+    "ids": [
+     "RT-1",
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "18246b527d3fde74a1e97addbd7758dd95818ccf76241a037f224381431017e4",
+    "spend_micros": 12000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "472808b0a9c214a3ccc91020ef5595d21d3c578fbf7bfcdff501b508634de432",
+    "launches": 22,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 179000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "794b03081c8946ebd675fa5431f4f438c726495bba644fb8a8c46620c75bdd11",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "472808b0a9c214a3ccc91020ef5595d21d3c578fbf7bfcdff501b508634de432",
+    "launches": 22,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 179000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "4dcefb3aa2b994dbd48ec071aa97f00f6e8591bb0ec2b69c1a5baf2f86936d61",
+    "spend_micros": 12000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 23,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 191000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 4,
+    "spend_micros": 1250000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 23,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 192250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "rsha": "a9b29cae2371d816af8d40b9736e7fcb0ce20ef0a955b6803b2e27dcfd46ea9a",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 23,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 192250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "420a9596497c44ffc2b8ef2555a04b1a7e209ab5d199be238322ba3dfe46b9d3",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 23,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 192250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "b88993da3f618b02a0e5bc0472c7ed33b2ec697fac80a8ca6725827187129ecf",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 23,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 192250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "499258eb5373991087fd715cccfe94516c6e44d1a54df06cb7b3ab55805d4f4e",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 23,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 192250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "launched": true,
+    "rsha": "6d7703f0ffb31ed7f63f62beb92e8880b7da6731bc7dff280a01b6ca790514c9",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 23,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 192250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "launched": true,
+    "rsha": "bd1ade31c12087fdc239a47bf508da1524f45a1df9e6149a2625e2365aac4c02",
+    "spend_micros": 12000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 24,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 204250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 5,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 24,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 204750000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "rsha": "f62d6e01c0e564df51c31ef36843e7e0a379a876d067c8b78d411d5ba89f5c30",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "launches": 24,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 204750000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "rsha": "1c913782ac2222bd78614619a1fceef5304a50718b2746e1c36bf924d49ce1b4",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 24,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "spend_micros": 204750000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "9f36c24319de02a56cca4a21a4b6dbeccf1c2cb40eb10ad8af5d70305ec660e5",
+    "spend_micros": 12000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "launches": 25,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 216750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 6,
+    "spend_micros": 1250000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "launches": 25,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 218000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "12e7af09d5b8fe933a1100b5a8153a134cdcdf1751bf3023a118639aade7af2d",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "launches": 25,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 218000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "b4ce97b66c725f35f619604943efdb51c5e92952e3620cc84a94ff666e4c21be",
+    "ids": [
+     "F9",
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "34e5c8c262d71e4c9c67f7db4b54ac28e448ba3980cb9cfa6b849e004a82d5d9",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "b4ce97b66c725f35f619604943efdb51c5e92952e3620cc84a94ff666e4c21be",
+    "launches": 26,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 248000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "805d1df156455736d95142dd275d6b890b022bef75450ccfa0e0bafbde558907",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "b4ce97b66c725f35f619604943efdb51c5e92952e3620cc84a94ff666e4c21be",
+    "launches": 26,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 248000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "4eae70230e59cc2f8f3693d8edb9dc29fdd432d534daf3917de4f00f77a30e27",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 27,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 278000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "counted": true,
+    "launched": true,
+    "rsha": "db4344b1e5cc554182aca672ede774cbc29eab91a827a8393b179666eec5e633",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 28,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 308000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "32345403b5d94fcc381afdd5e46019ea0c5c39f8bd20bd561ef307313fce4612",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 29,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 338000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "ec945a8e2e7379b6658571482ba41dbb6b02f20bc3055aa7f1dba66922cdf781",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 30,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 368000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "3b1c66ea200e08732078196838c3d4c76b98dfc6d837f7a0c4c57e9b4519aa6a",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 31,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 398000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "07efc6a03709e7fa936ea63a59c0376b033cac9b8b78b0f49641a62be4d78e61",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 32,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 428000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "b6ab322d604a86f11be79343b869db34ed0f466b8103931164919bb5044a7bb7",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 32,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 428000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "abdddcb6c570baa1d6d788eacf6052d94cc814bf48345e214d27f7dfb589f247",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 32,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 428000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "779c393a334356a92985bc3e37cba3b6d8004972447ab173231f0bcb378f67b1",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 33,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 458000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "7b679bd636b7240ab007a38e9db1d6b14a28a117442cfa6e8e60bfe5709d7ee4",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 33,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 458000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "80d02ecf01028c732cd66b32d074586fdbb2b81dbb9964b830208c61d7cd523c",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 33,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 458000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 7,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 33,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 458500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "rsha": "74ed8450721adf455ccbdaf13078261752c91a4f07631a9a294463294b2e2096",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 33,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 458500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "counted": true,
+    "launched": true,
+    "rsha": "644f75f7ce0d1c10c96cdc22626c46a2bf3d2d5400f16bcc7c6fcc1191216e51",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 34,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 488500000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "8446d2a2afe410126301ed067382e12302fc053596ffd33695b3d4e3977627dd",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 34,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 488500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "launched": true,
+    "rsha": "bc45db2f703b1e2d200674f9c63878ab1cfa652a1cd11025b55ffad393dba8ea",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 34,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 488500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "d6676281e21bd55dd674148b844b050a748fd2acc63e75214c3404614b194f4e",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 34,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 488500000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "0d8aff9add56e81c5a46dcbb4a69586740b92f90bc4056f7a42c560c05cdbb1e",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 34,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 488500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "06c13f1897610b4e00f40f8c212bc16fb1341c919f5632e7c502e7755e2dfe7e",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 34,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 488500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "counted": true,
+    "launched": true,
+    "rsha": "d1ee00f007783c3b6e91d2be391b4bb5aeb2a89294539b6b81df235c18b8a143",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 35,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 518500000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "f097ac7d4cdb463d01427d8a0be1ed03543f422aa2ad6e020f311f6a32db7c5a",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "launches": 36,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 548500000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "rsha": "7e77b5eccd25a7f7e651c3d75f165d4df5b40c01b624e34e48ac095bd030c4e6",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 36,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 548500000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "launched": true,
+    "rsha": "7e4ad90e0440ec570c77f5b103ee8d5b713ee8afe97071a54bf7b39618b6ddbe",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 36,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 548500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "rsha": "5519b96210f517162a6f394c740a919c2ef91b13d0b1b6eb03a29c8077cf7fbb",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 36,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 548500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 8,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 36,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 549000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "fc8ff3e3b8ae9410445427156d9688136c630ee60604bf7eeadc99f2e6174631",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 37,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 579000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "8c6d7186a6692429cf77aef25910f66c48ef1fe83a0a70f08e98f0f15437b968",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 37,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 579000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "b8a22b153e064a120d690f45499413118bb39de62f4661893b696b39fa45f061",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 37,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 579000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "rsha": "4db8b6d8ba61952c5e0e90f9cdacf28cc71116cc2a13a655d68197c9a5e96782",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 37,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 579000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "launched": true,
+    "rsha": "eb65eef1c0906f84623f81c48896bf90b1bfd59613ed4dc46bba1457f3a3244d",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 38,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 609000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "8543803ecef9006605f5cbf3ea1a8fce1a12a376419d03316cae407bf18b017b",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 38,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 609000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "4dd00eb25f308a82f6ac81b618cd92d1bc2144768f86a0b8ac787563b11e8e03",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 39,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 639000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "8b5456dbbaaede3a9ca01368c4d433967f91c095dc6b59842509d01add5f9e74",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 39,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 639000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "a35af32",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "53d966e0a0709d2dd2f8ec40a00934677e05908e788f2c5ae708d111e496d778",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 40,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 669000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "launched": true,
+    "rsha": "011a5c24b5bd1c3d791dce54853af44272e6ecd7afe21af53c76fe10bf85d9f6",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 41,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 699000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "472808b0a9c214a3ccc91020ef5595d21d3c578fbf7bfcdff501b508634de432",
+    "ids": [
+     "RT-1",
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "d9aaacc0ce5c9854edea52be61c3f6a1f9a175ac22e1dc4e11aa488a45e24ad0",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 42,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 729000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "counted": true,
+    "launched": true,
+    "rsha": "d2e17d310128150c6725c3ec1f6a0db0ef79ead0217b4af12978a098888df6ba",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 43,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 759000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "counted": true,
+    "launched": true,
+    "rsha": "003e311f3b9e0db90918ecbce6008c6aa2108c5caa23e71b5bbf34dbccdf9608",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 44,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 789000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "launched": true,
+    "rsha": "c2374733504647e0a25a9e2bc00f6c69573ec5ba6a07d932ab02eae2f4672ed7",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 45,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 819000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "rsha": "f0d0a3fd3beab7f2f74b17f8e3ef06f1cdb3009bc39dfa32604d451a6279fd9f",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 45,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 819000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "rsha": "fd06b7f1fde6da48faec03039a8f0d81c77cc0bd511e292a51c40d051e5c65bc",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 45,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 819000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "93b6a52c62d3da1b506900c3a6535e01c92b708f8deeba04325bcaddd0619f2f",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 45,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 819000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "4986438b1691ddbf3b890959b756df4c9b9738cefa8a84a838af9ff277098016",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 46,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 849000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "d8b6690673e4f02c5e2b8a6dbf1e76cdbda5cbf5aaef61d895c103ca7f44875a",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 47,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 879000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "launched": true,
+    "rsha": "179405c0c6604807732565de543f10a0d0cfb689d3023f8f0374b097ee26f1f7",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 48,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 909000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "3037ff27290dff40b69e6054795a689e08105078061cf4a96cbb9f309f3695b7",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 48,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 909000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "rsha": "3124302f513f8a00b5a8d9c641ba4a05a72bcf51fdb6487f9c72cc5ffca207da",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 48,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 909000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "472808b0a9c214a3ccc91020ef5595d21d3c578fbf7bfcdff501b508634de432",
+    "ids": [
+     "RT-1",
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "5b6d8f8c7c81024c72c767134630bcdebaa03c49a067717ff7ddd686a8490e12",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 49,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 939000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "02c52f02bad125da5a9b841a70a4997aed0098895e3d10052f424be964a69245",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 50,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 969000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "0f21e18bb6bce85235057b08b0d882e57fc1c3ec8f8794f0e7f02c3c41b5dd5c",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 50,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 969000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 9,
+    "spend_micros": 2000000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 50,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 971000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "a35af32",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "035f676035679af46a36952c74d9f1ddb90b4a329af1235055019bd1e7db29cf",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 51,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1001000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "114538fb861dd6d34e0a3f2029d7d891222282e0508937ed70a64635aeb65456",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 51,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1001000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "launched": true,
+    "rsha": "2cdda367ebefe2db3e5efb3057d058c00498a48884a233cf1425690d8e803240",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 51,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1001000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "472808b0a9c214a3ccc91020ef5595d21d3c578fbf7bfcdff501b508634de432",
+    "ids": [
+     "RT-1",
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "46905778581147c0922b8957044a877aa0acab002e3a44887a87fd3130e15e37",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 52,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1031000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 10,
+    "spend_micros": 1250000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 52,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1032250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "b0dbefe754d0a4e4516089777570e494500863aa07fe1545960b8b98eeb8a27b",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 53,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1062250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "launched": true,
+    "rsha": "f8392ec91636ac7df38d57a0ef91dc073492159cbd5237657f25946b411b7c42",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 54,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1092250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "8eb14147d9851bc661f956daef864982de75fc34479e8a4a50ed583592644739",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 55,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1122250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 11,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 55,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1122750000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "d02c6399f50c83cd8bb0efe6c253c3f8df31221d30e1854d62808a56caefc42b",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 56,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1152750000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "83bff9bc526413208a881931125e1ef2c76658b97fb545f10e20ceb1dd3e8a70",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 57,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1182750000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "dc59af0faba01cce397b76c5eeaf9f6653c178a2d566ac1024036fcf93f864c2",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 57,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1182750000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "8a3ae5ab46e411a867c939efaadf4b8780a2db9cd47f37d749d501e815c95100",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 57,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1182750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "rsha": "b4b264dc57ffafa6422a6b231f60017ac65ed58add15743dce9084f895e88839",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 57,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1182750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "launched": true,
+    "rsha": "d1ad7e1958e9f6e43f524103b71cb90d035b05ae02f84ecfb0ec50c635d995d9",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 58,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1212750000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "810f3d1e8e483098cb3ecb31d3c5f326672c5d7e7c66df64bcb26475bbd46f34",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 58,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1212750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "launched": true,
+    "rsha": "f5d08aa37c6ac79f759cf6a9f5c9b2c71bebcb3ffe9df810fba8d718a33557b2",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 59,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1242750000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "launched": true,
+    "rsha": "b5ba5e0bec292f98f1c137027dcaa12036730b9d2f2fc051d1c44a403e809624",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 59,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1242750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "adb6a552f4253b6dae8c2b8a1c080802dd595059fc5a17d2f8dc71cce32927c1",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 59,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1242750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "rsha": "53a101763b744ac72367ce1ae31df9cddbcdcfa07858b8875f89b420542e1765",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 59,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1242750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "283d1a71db3c32719039cc44d100931b1870b7a6c762f02913791c6f017a820c",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 59,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1242750000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "75932b06648f460433178cbaec438546f4498d9659bf2d2f9ea845e06bf5f60d",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 59,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1242750000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "9633b75e36a7ff2e8ae5b409988b52b73a6939f873f255ca34357139233efff5",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 60,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1272750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 12,
+    "spend_micros": 1250000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 60,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1274000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "e7f663709a47781737470ea30e7a7fac26a2bc78400a8b1e4bbbdec1eb217134",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 61,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1304000000
+   }
+  },
+  {
+   "record": {
+    "class": "CLAIM",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "src": "claim-fix",
+    "step": "claim"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 61,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1304000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "0c5d00dbc912fedda739539acb655146cbb203cea09486af3e709eeabd85dfce",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 62,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1334000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "6c05ea144946d53660eb600c8a97f454b0e77a9e7c83b8c3a1b1f644fe0a2b07",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 63,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1364000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "8749b7ed6f13af03692e3878152cc0ad3b1615e28817dc57326b826adcf0952a",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 63,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1364000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "rsha": "11a216d380954e45201a9df0f06f8ab5292322e96f6cb1342dfadffd1564be9b",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 63,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1364000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "a35af32",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "ad24a217784ad6df42f41327e6316c04cbea55ead26e59ea56bfd1bcec6d319b",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 64,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1394000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "counted": true,
+    "launched": true,
+    "rsha": "f5a0901d7eb142cb8b5d1874972a346e61e168e47a5ecf665163999339f2e086",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 65,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1424000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "bfbb907914a302201924731b4763cf3c293e5ac5b6c7be0382d4f0acb9fe804d",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 65,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1424000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "counted": true,
+    "launched": true,
+    "rsha": "4a2f7301dc4aefe39ac5a3c0217e3d95bba26d251da73784ad11db16a4259384",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 66,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1454000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "launched": true,
+    "rsha": "3e512599e64f211b49abff791390b86896bf36dd799c412dd02906e127659062",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 67,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1484000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "rsha": "ea244069fdfd566564621e3d164fedda0405069dd5154a059ea0c9fc7f5e8c0f",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 67,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1484000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "d7c2403a0c5d5c320016b32800a06a205d62aa1de85ed63edaf11042df27139b",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 67,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1484000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "472808b0a9c214a3ccc91020ef5595d21d3c578fbf7bfcdff501b508634de432",
+    "ids": [
+     "RT-1",
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "3b5de548f31c432c9234961dde36307b795ff81697ae64a8c97cdfff30ca99b1",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 68,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1514000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "launched": true,
+    "rsha": "8a81d7655e3dc0b0a8be22758552f2d244879559b73e70549af6a279e614b662",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 69,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1544000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "af1577c8e0a475e135856659e9a4537e600407c86d40920cc48ef924437674f2",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 69,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1544000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "322eae8f48dfa0ce6636b8fbd359d121b465b4667ab4b4bdd1a0cd7a346efdc7",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 69,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1544000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 13,
+    "spend_micros": 1250000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 69,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1545250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "rsha": "dcf860241ef7c9327a4876a6ea81d7cde71397a79f019918bb7a26da5057a363",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 69,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1545250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "rsha": "0f0221a6d283099ec0bd212b65959c293100883b6bb4cbf4a8bb33a2f4a17469",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 69,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1545250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "846c44876fe3925603e3eed45bdedf73954ff724729167e2ae2594f1afa27a11",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 69,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1545250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "3354671e83c5e750e55d6d42d61fe4470a970af24b4eafe247040a7115e9337b",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 69,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1545250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "launched": true,
+    "rsha": "a549bfedf349f3b01bf62e68e858b3bc896b2e28483ca1a680f5cf243a716319",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 69,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1545250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "4278a7f231b27ed0bd039ecc24a330423098ea93346279b073dfc2597c3fe68b",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 70,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1575250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "5ae758f75d5375729bf704fe4be263abbc1e40d90e5906d397eb0a9a8f3860d5",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 71,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1605250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "c52081da3ad91af25a862bf7b11b82797443d8eeb335fce6a93cca2d244e0de5",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 71,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1605250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "counted": true,
+    "launched": true,
+    "rsha": "d13b249e673ff466d38c4206a1905e1f8e357a5a36dc782201c32285a4c117f4",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 72,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1635250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "launched": true,
+    "rsha": "e525e0f5bd64e328c50bea35a0f1d04f1354c76f70832a5286613b84e00d9b18",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 72,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1635250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "rsha": "02abae3429dfd0b25a43b1f0108e24e8a2b445e7d5558b975dc3f1162ce9befd",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 72,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1635250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "eab897bdb04c15e363e971cd870ecd225a422803bb17106987629f4c52342bb8",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 73,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1665250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "5c536e9eaf5718ddcfa356bae4582c537b3b80da16edaee826027509d08aaac5",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 74,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1695250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "e4227fb2faaec35b56af74a7a525f1b6cdb3d2293d95a99ffeb9fc128ce43559",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 75,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1725250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "6f51e49446f4010fe728839d47c95411e18212249129e0b094e7f10f96a85997",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 76,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1755250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "a35af32",
+    "counted": true,
+    "fp": "472808b0a9c214a3ccc91020ef5595d21d3c578fbf7bfcdff501b508634de432",
+    "ids": [
+     "RT-1",
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "305c49b6011105753de53cbabc0c2732821c7fa37775675f481cbcbd3ab32070",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 77,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1785250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 14,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 77,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1785750000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "rsha": "6e51a6f51f87d2f2f58326391102b9af49ebe16b6bc3a72d2afda4245773c38c",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 77,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1785750000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "fp": "9b91711f6dba24313a258146aab77d1ea98a9db34a957a265132d1c37bf151ce",
+    "launched": true,
+    "rsha": "460fca78e9e2c421586bec7e6d5b195d36153c70f3853243143e890e258f8b74",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 77,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1785750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "launched": true,
+    "rsha": "490c7c62cf1c30a59e4621d48939a059afd5ab8908ca04f392a80c9087443715",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 78,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1815750000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "a35af32",
+    "counted": true,
+    "fp": "aaa38737ffb3949a2c356ace6073594a5e75e9b63696eeee96f927091fb98806",
+    "ids": [
+     "F9",
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "f12cc823e29489f467ed4f58e4c9ced101f24b022c4ef6ff1b1edbb2bf9092bd",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 79,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1845750000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "rsha": "afb7a14f7af88188ec9cc1957a03cfe7d8e7554e0020ceba010e979af545fa07",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 79,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1845750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "ed00f27731fc55cffe9d40117d455d92036043f85c209b7129bd7cc34e2311e0",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 79,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1845750000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "279bee91d4477b3bed840f2c5e64f605911c4492ff861aa0c8c31ff9c4b29a1a",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 80,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1875750000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "a35af32",
+    "counted": true,
+    "fp": "b4ce97b66c725f35f619604943efdb51c5e92952e3620cc84a94ff666e4c21be",
+    "ids": [
+     "F9",
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "b40a8b17b2edb2c7657a2a7cf39fbf45462e3f0babd45fb3bd7c6d8f33705bae",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 81,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1905750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "launched": true,
+    "rsha": "33c51a38c6013461c90796c82793abfbf78db2482f5a9cf5a16d920a7832c0e4",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 82,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1935750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "launched": true,
+    "rsha": "bd62433d02086be7a418b1afcb7908a111e217084d2cb70f1033e31aca6aa7f4",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 82,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1935750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 15,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 82,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1936250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "counted": true,
+    "launched": true,
+    "rsha": "8188be5b2819ebe7e1749a4df8161468cd64013dffca584bf935345167ca82b4",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 83,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1966250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "launched": true,
+    "rsha": "f7d796ce999f95eac05ab70fae04efc6ab978be93fa549ae881cfaaefc9ce3e5",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 84,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1996250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "cd72139d98a470c8531d543a8f8224acfb2a0eca56902160a7b63fb252ec9fb0",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 84,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 1996250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "a35af32",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "1fdbab314d0b8a62bd61e2b149ea482e5a481779ba9a50896f91fb65046f9ae9",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 85,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2026250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "a35af32",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "6af722f156bdee08d6d45dfa5d8b609d6abf96609cd8fc4d18e07be88e770f57",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 86,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2056250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "1c27c6045ac0880b75f55ddf2ab2810440bc6828f8a7f42c849a8ce41cf5c7d9",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 87,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2086250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 16,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 87,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2086750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "ae3d21604067539795bc415b6d71641747b5bd67b5791bc33c7a527c9b1c693e",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 87,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2086750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "c1735b1732d7b37309816c3c4e97148a683168ba46322604d04db6ea55980d76",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 87,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2086750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "rsha": "7c52cc2753d44a5baaecb4e6c3df7be45b639b0cf02c8f88e2b20c10f763d316",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 87,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2086750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "a90eab15cd677be78423585a3ebbc7080bcf9d4652c954407d2d3e7c05002f90",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 87,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2086750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "counted": true,
+    "launched": true,
+    "rsha": "0e832280f352197c1d9474c5d13a8912eacda01c91a3f860d7c3ca78fa8d9f70",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 88,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2116750000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 17,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 88,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2117250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "launched": true,
+    "rsha": "3e88f4cadf3fc021f9ca03b372d6a1f742a0633f15e21c18f8b718874b1d6ac8",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 89,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2147250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "launched": true,
+    "rsha": "0ec5a100b8a8a48cd4875338c1c3c087430dbb8c1e9b4fbc3c16824a5be94f71",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 89,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2147250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "rsha": "62296d7e4bcbb501520428a741ef20973e5ad6b9d171566e75991b04c6c485d8",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 89,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2147250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "launched": true,
+    "rsha": "d3e716cdc3a1368fd4ba40088ac0ca209f74eb9a21897a6114de28e0738fafa0",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 89,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2147250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "b549c3e73ff52afd2558c037a1ada2a2de23759014a2022fd3db7af12d48df82",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 90,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2177250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "023c714cd7af6c6ce77ec15bf84421c71dee1bf9774dcc069775d5d1c8abbd8f",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 91,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2207250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "launched": true,
+    "rsha": "43e71d17e731af0d953ac4c591cdcf64a26b7ae73c5dbca39e0b55d9b894d711",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 92,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2237250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "da07c29249b640a7becd5f0dc4e31f2d30ce8e42bf2df9d51092d1253a92db79",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 92,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2237250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "counted": true,
+    "launched": true,
+    "rsha": "6011f280ee8a793f11d1787708031efab1dd5def3a0fc4ef87c239f9bba09c7b",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 93,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2267250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "aaa38737ffb3949a2c356ace6073594a5e75e9b63696eeee96f927091fb98806",
+    "ids": [
+     "F9",
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "23772ec4474dcde139faea76ba18b330621a3b13b40c6f9935a2834959c69644",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 94,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2297250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "2fc3c44db120e38c3ec881f846fb6e90e9ba8927a5bf33557c367a3a67543318",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 95,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2327250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "rsha": "85a361e938060c8652811acdccbe6d2aa7ca3f0c3c9122828ff0744141d09376",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 95,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2327250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "9b9a2959b39568bf53a2d33f39dbdb0958f4bbcd4be042f3f4354e21d20719d0",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 96,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2357250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "912499968065626028558347b440f2eac6c3e972121b094d8cd93df4c0fe0ef8",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 96,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2357250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "0337ace36f9c42b1aa67bb4a907de15f154f1599e8f28dfa04237fd930b07132",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 96,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2357250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "1412ea231042fae025eb5a1646d0f8af3fdaea4636c58f544e16828a924349cc",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 97,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2387250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "launched": true,
+    "rsha": "8989f940584bbce52a0b3d3ea6f108b79ae24c6f0d684e52754664a5a2714007",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 97,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2387250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "1c29d1c7ff1802c99127fcbdc9ebac4bd4a23f2fee539cb98445a2c205d45c71",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 98,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2417250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "40186955eb121be46dfef0ccfe277a7b42a26bf594138551d4d92c4444a19c3f",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 99,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2447250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "launched": true,
+    "rsha": "667e669eee5ee76de06ad8e6770c7b2cae3d9811893054e61a76c5a6bdfde260",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 100,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2477250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "counted": true,
+    "launched": true,
+    "rsha": "9d06254bd44c44d77a6a36612c1c4abcf509af8d6c773436e6c3c60ca5ebe78c",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 101,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2507250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "rsha": "0c60e488c8e4daacc951916da54c33ca595fae34c1b16b42d8ddd24f95aa68a0",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 101,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2507250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "0b007653bd35c715eaea13190603c2b0dbf966db7f1e9d517f80f9fe56eb3c54",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 102,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2537250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "1126b6a95ec7c6b9604d542a8db06438516d2d41ee0ff52b8c22e3cac7221006",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 103,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2567250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "6f0a3bc1883c27e0df36c361ea2b3859c5176d72db5c3f2436e75891dddf19c7",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 103,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2567250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "launched": true,
+    "rsha": "836fdb207b99e72f177a33c03c02e3878d9d62da62fce5392ba6511bdc39c424",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 104,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2597250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "rsha": "7b9048e4ae09cb1fd14b5c515196db69d2a139a9a516aae2f58fb281395d8b6a",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 104,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2597250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "counted": true,
+    "launched": true,
+    "rsha": "e8529cb738eb4613faf6a53ae3b91f3d6499d62d8d5938dad17c2bf56be518bb",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 105,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2627250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 18,
+    "spend_micros": 2000000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 105,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2629250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "launched": true,
+    "rsha": "e9d27efda851d0791faec96c70651767cf1bcde2218f28f9dea467b101ea1bd8",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 105,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2629250000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "launched": true,
+    "rsha": "4692c82777f9313e6504dd239947a1bb4d4ccee73ab5d538b1fd1de01ebc7ed6",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 105,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2629250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "rsha": "9640b6d8b53b2d987c1aa3679e63b3b5568aacbd95dc95d10e1205e944fd56ec",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 105,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2629250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "counted": true,
+    "launched": true,
+    "rsha": "072b4f7e1f2a1f1e6caced7eb3474932e76d4b7fcf6fc34c06a69699a2fc7dbf",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 106,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2659250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "launched": true,
+    "rsha": "2d2e4bb342a6f8a7168b517f2660c6b1c3c77f905c8257da285cda7b2b55a0a7",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 106,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2659250000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "12c0ce201e1c0217ca225521be07e7f35be2f7ad846aeeab94ba16f9ba4e7766",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 107,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2689250000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 19,
+    "spend_micros": 1250000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 107,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2690500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 20,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 107,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2691000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 21,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 107,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2691500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "1c41f74db5dce62691fc28de4aecf62adff11c8779f7ae5f6d02c44ffd2f6468",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 107,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2691500000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "f790d9b6833f6ca92772ce5a64998ce9067e335da53611917325b5603887f5b0",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 108,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2721500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "rsha": "58b6cd7328cadad58024152add43ae64694303edfba4e6f143dcfe62386825c8",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 108,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2721500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "a35af32",
+    "counted": true,
+    "launched": true,
+    "rsha": "fbf0e0339d62ab02adb5ed1f565f93c32190cf59f18aaed9a5431870ab11fd5e",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 109,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2751500000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "launched": true,
+    "rsha": "4a118b8471a5a0e95b5f13d06aa8c006a45e2605a80bedec30d1db146281a899",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 109,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2751500000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "ec9e40b9e8ec56eadaa6a43edfbaa70dcf3ca45637d118a4a949e5a41eae6d9a",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 110,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2781500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "0e2fba211bd277b42d33a7c5ce7eddfdb92522b67842c4b3cc84222898bb453a",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 110,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2781500000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "launched": true,
+    "rsha": "3fe62929bbd87794d58bf329a719740c850d48993af5d0f57d0cca28da6abecc",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 110,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2781500000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "rsha": "1365d30beb875cd29f2871d0fb005dcbe890086b243594b5b6a35bcd3c6dc7cc",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 110,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2781500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "launched": true,
+    "rsha": "f7f1f1073fbf77b18f6152bcc2bd875390a3c33c1cda6fc16cea58e743da6285",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 111,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2811500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "rsha": "e9c531e150493e4e1b8278690785a064ad69317d0b27c54b88df9b6e3b813532",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 111,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2811500000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "fb00147a9ef375964f23e769dcec4d09674ae13135d483e911a6b79411dcd4d8",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 112,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2841500000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "ac3eb6cf43ba18c0deb697c60210357680ff2cc785ac606a30ed98ca7b006500",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 112,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2841500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "counted": true,
+    "launched": true,
+    "rsha": "a80915fdb2534200008847f6a8ca730ce7126427a365a30000230e6e9ea1ad75",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 113,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2871500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "d863a5fcbb4fefa6367c5ec13c401846c8b4896881b7383868b98abd4911c150",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 114,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2901500000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "934efc0109226441d23f9fd37493ba192c8c2303",
+    "counted": true,
+    "fp": "b6f8924dbaef3ab1661dce34ef5262b48257099fcd06e61a18e0811105029e15",
+    "ids": [
+     "RT-1"
+    ],
+    "launched": true,
+    "rsha": "cca06fa834625c880c31a928a2d06b407e78f4648760bf7323fa25abfb4e6c90",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 115,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2931500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 22,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 115,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2932000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "launched": true,
+    "rsha": "6d2b48ecdb5e9787f367bdd6d8dcdd1aad3e1fdeec74541e323ca907cd91406d",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 115,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2932000000
+   }
+  },
+  {
+   "record": {
+    "class": "PASS",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "launched": true,
+    "rsha": "edb4a8330d566ceb817184f91ba3d9cc3a551d28b35f5b25bf93485203d9b7ca",
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 115,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2932000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "73f37bfecef77130f7d9ef7fbe944df0ad7489cb8616f39993aef4d17a8d6409",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 116,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2962000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "7e89275761bcdd66b8e04bffc109d774481c3a03b159c5ae088e196212870926",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 117,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 2992000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "cd7814fba2d2294e917bebf900f7fe61517fdb35",
+    "counted": true,
+    "fp": "469f7b1b492ab29501afc9c653943ad08256a1b1ba621b12d959e5b8100bfc79",
+    "ids": [
+     "RT-2"
+    ],
+    "launched": true,
+    "rsha": "14e8143c97ba8b781a407c80d4efbc10afaed37f71f9eac174002fef6ae93958",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 118,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 3022000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "launched": true,
+    "rsha": "1d62e3bc04d800925f15ac4e7bb7627478573f39fa5c176eafd8dd7add49401f",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 118,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 3022000000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "launched": true,
+    "rsha": "615856e5369b2ddafcb64e1dd29b363d4bb63b13078114c8d6311bf6f2d93d95",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 119,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 3052000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "counted": true,
+    "launched": true,
+    "rsha": "590f996e8ca830255c0d96257f82b32c53cff6e1c1d971695a80ae9e18725b6f",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 120,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 3082000000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "ord": 23,
+    "spend_micros": 500000,
+    "src": "add-spend",
+    "step": "spend"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 120,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 3082500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "310dd9bad0777615a8addf2561e58778d8b5a2cb",
+    "launched": true,
+    "rsha": "88c48c0aba053bc6e428f75fd46a241734d579f1c6035b93029e1c0740d1d055",
+    "src": "test",
+    "step": "test"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 120,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 3082500000
+   }
+  },
+  {
+   "record": {
+    "class": "FAIL",
+    "fp": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "ids": [
+     "F9"
+    ],
+    "rsha": "4e2ccc981c31263d0ca7bb622bb8ffb53fd724142f3e49e7c5b19c56929da84f",
+    "src": "spec_review",
+    "step": "spec_review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 120,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 3082500000
+   }
+  },
+  {
+   "record": {
+    "class": "NOT_COUNTED",
+    "commit": "98c9e9043569a2a574811477d788e5e11bb35300",
+    "counted": true,
+    "launched": true,
+    "rsha": "021aadc0d048f4da22efafd6db564a7a77c2408ce4ce4ff988cebbb38dc49a1e",
+    "spend_micros": 30000000,
+    "src": "review",
+    "step": "review"
+   },
+   "status": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "d4db4c1e844c5f4a3f14a2fda6f6463ba1fd279a6628df838491fa13000ecea0",
+    "launches": 121,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "spend_micros": 3112500000
+   }
+  }
+ ]
+}

@@ -144,7 +144,10 @@ func loadData(ctx context.Context, tx pgx.Tx, o metrics.Options) (*Data, error) 
 	if d.Missions, err = missions(ctx, tx, `SELECT m.id, left(m.ticket, 512), m.execution, m.terminal, m.created_at,
 		COALESCE((SELECT sum(am.cost_micros) FROM agent_messages am JOIN attempts a ON a.id = am.attempt_id
 		           WHERE a.mission_id = m.id), 0)::bigint
-		  FROM missions m ORDER BY (m.terminal = 'NONE') DESC,
+		  FROM missions m
+		  WHERE NOT (starts_with(m.id, 'm_ladder-') AND m.execution = 'IDLE' AND m.terminal = 'NONE'
+		             AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = m.id))
+		  ORDER BY (m.terminal = 'NONE') DESC,
 		   array_position(ARRAY['RUNNING', 'ADMITTED', 'WAITING', 'RESOURCE_EXHAUSTED', 'BLOCKED', 'PAUSED', 'IDLE'], m.execution),
 		   m.created_at, m.id LIMIT 500`); err != nil {
 		return nil, err

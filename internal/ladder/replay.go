@@ -21,6 +21,9 @@ import (
 type PolicyRung struct {
 	Writable            bool `json:"writable"`
 	NeedsUserPermission bool `json:"needs_user_permission"`
+	// ReviewerRung is optional display data (goodqa#15324 S1b): the rung one
+	// above, from model_tiers.json. Empty when the policy file omits it.
+	ReviewerRung string `json:"reviewer_rung,omitempty"`
 }
 
 // Limits are model_tiers.json ladder_limits. MaxTotalReviewUSD keeps the
@@ -79,7 +82,8 @@ var (
 )
 
 func rungNumber(name string) (int, bool) {
-	if len(name) < 2 || name[0] != 'R' {
+	// model_tiers _RUNG is ^R\d{1,2}$ (S1A-RT2-1).
+	if len(name) < 2 || len(name) > 3 || name[0] != 'R' {
 		return 0, false
 	}
 	n, err := strconv.Atoi(name[1:])
@@ -94,7 +98,7 @@ func (p Policy) order() ([]string, error) {
 	names := make([]string, 0, len(p.Rungs))
 	for name := range p.Rungs {
 		if _, ok := rungNumber(name); !ok {
-			return nil, fmt.Errorf("%w: rung name %q", ErrPolicy, name)
+			return nil, fmt.Errorf("%w: a rung name is not R plus one or two digits", ErrPolicy)
 		}
 		names = append(names, name)
 	}
@@ -127,7 +131,7 @@ func (p Policy) nextWritingRung(rung string) (string, error) {
 			return "", nil
 		}
 	}
-	return "", fmt.Errorf("%w: rung %q is not a writing rung", ErrPolicy, rung)
+	return "", fmt.Errorf("%w: the current rung is not a writing rung", ErrPolicy)
 }
 
 // Validate refuses a policy Replay cannot use.
@@ -135,8 +139,14 @@ func (p Policy) Validate() error {
 	if p.FailuresPerRung <= 0 {
 		return fmt.Errorf("%w: failures_per_rung must be positive", ErrPolicy)
 	}
-	if _, ok := p.Rungs[p.LowestRung]; !ok {
-		return fmt.Errorf("%w: lowest_rung %q is not defined", ErrPolicy, p.LowestRung)
+	lowest, ok := p.Rungs[p.LowestRung]
+	if !ok {
+		// Name the field, never its value (S1A-RT2-2).
+		return fmt.Errorf("%w: lowest_rung is not a defined rung", ErrPolicy)
+	}
+	if !lowest.Writable {
+		// model_tiers.validate: "the lowest rung must be writable" (S1A-RT2-1).
+		return fmt.Errorf("%w: the lowest rung must be writable", ErrPolicy)
 	}
 	if _, err := p.order(); err != nil {
 		return err
@@ -203,15 +213,23 @@ func Replay(p Policy, events []LedgerEvent) (Computed, error) {
 // so 0.29999999999999999 equals 0.3, and an int limit of 2**53+1 is above
 // a float spend of 2**53. Empty text is zero (an absent spend_usd defaults
 // to 0). Non-finite values are refused rather than compared.
+const maxIntDigits = 4300
+
 func pyNumber(text string) (*big.Rat, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return new(big.Rat), nil
 	}
 	if !strings.ContainsAny(text, ".eE") {
+		// CPython 3.11+ refuses int tokens over sys.int_info.default_max_str_digits
+		// (4300) and escalation.py then treats the file as corrupt; refuse
+		// rather than answer for it (S1A-RT2-3).
+		if len(strings.TrimPrefix(text, "-")) > maxIntDigits {
+			return nil, errors.New("integer has too many digits")
+		}
 		r, ok := new(big.Rat).SetString(text)
 		if !ok {
-			return nil, fmt.Errorf("not a number: %q", text)
+			return nil, errors.New("not a number")
 		}
 		return r, nil
 	}

@@ -96,6 +96,11 @@ func refuse(format string, a ...any) error {
 // only reads, so a refusal comes before SelfTest, the key command and any
 // write. worktree is the grant's canonical worktree (canonicalWorktree).
 func planStart(ctx context.Context, st *store.Store, g Grant, worktree string) (startPlan, error) {
+	// goodqa#15324 S1b: a ladder mission holds receipts, never work. Refused
+	// before SelfTest, the key command and any write, row or no row.
+	if domain.IsLadderMission(domain.MissionID(g.Mission)) {
+		return startPlan{}, refuse("mission %s is a ladder mission; it holds receipts and is never started", g.Mission)
+	}
 	var (
 		mission, state, path, lockPath, host string
 		fence                                int64

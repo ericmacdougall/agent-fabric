@@ -57,6 +57,9 @@ func (s *Store) EnsureMissionSpec(ctx context.Context, m MissionSpec) (Ensured, 
 	if _, err := domain.ParseMissionID(string(m.ID)); err != nil {
 		return Created, err
 	}
+	if err := reserveLadderPrefix(m.ID); err != nil { // goodqa#15324: only a ladder record creates one
+		return Created, err
+	}
 	if _, err := domain.ParseProvider(string(m.Provider)); err != nil {
 		return Created, err
 	}
@@ -131,6 +134,8 @@ func (s *Store) ListMissions(ctx context.Context) ([]MissionRow, error) {
 		 AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = missions.id
 		                 AND a.state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING')))
 		FROM missions
+		WHERE NOT (starts_with(id, 'm_ladder-') AND execution = 'IDLE' AND terminal = 'NONE'
+		           AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = missions.id))
 		ORDER BY (execution IN ('ADMITTED','RUNNING','WAITING','PAUSED')) DESC, priority, id`)
 	if err != nil {
 		return nil, err

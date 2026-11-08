@@ -22,4 +22,9 @@ var (
 	ErrLiveTestMissing = errors.New("done needs a live_test receipt for the deployed commit")
 	// ErrUnsupportedEvent: the log holds an event kind this build cannot interpret.
 	ErrUnsupportedEvent = errors.New("unsupported event kind")
+	// goodqa#15324 S1b ladder refusals.
+	ErrInvalidReceipt   = errors.New("invalid ladder record")
+	ErrNotLadderMission = errors.New("ladder records go only on a ladder mission")
+	ErrLadderMission    = errors.New("a ladder mission accepts only ladder records")
+	ErrTooManyReceipts  = errors.New("too many ladder receipts")
 )
