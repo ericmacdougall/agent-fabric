@@ -485,7 +485,7 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	}
 
 	env := reducer.Env{Cap: cap, Operator: domain.IsOperator(actor), Provider: domain.Provider(provider)}
-	if cmd.Kind == domain.CmdCompleteMission || cmd.Kind == domain.CmdUnpauseMission {
+	if cmd.Kind == domain.CmdCompleteMission || cmd.Kind == domain.CmdUnpauseMission || cmd.Kind == domain.CmdAdmitMission {
 		// Review N1: the broker's effects for this mission that are not
 		// settled, in this transaction. A new intent or dispatch holds its
 		// live attempt row (0020), and done needs no live attempt, so none
