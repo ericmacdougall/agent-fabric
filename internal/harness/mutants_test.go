@@ -3,6 +3,7 @@ package harness_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"fabric/internal/harness"
@@ -127,6 +128,23 @@ func TestConformanceCatchesMutants(t *testing.T) {
 		{"input accepted after end", base(true, harnesstest.BreakInputAfterEndOK)},
 		{"second interrupt errors", base(false, harnesstest.BreakInterruptTwiceErr)},
 		{"second stop errors", base(true, harnesstest.BreakStopTwiceErr)},
+		{"stream final differs from Wait", base(false, harnesstest.BreakWaitDiverges)},
+		{"stop reports done", base(false, harnesstest.BreakStopReportsDone)},
+		{"stop reports done (interactive)", base(true, harnesstest.BreakStopReportsDone)},
+		{"secret tail kept", func() harnesstest.Case {
+			c := base(false, 0)
+			c.Secret = func(harnesstest.T) (harness.Adapter, string) {
+				return &harnesstest.Fake{AName: "fake", Mode: harnesstest.ModeSecret, Secret: secret, Red: keepTail{}}, secret
+			}
+			return c
+		}()},
+		{"secret scenario never exercises redaction", func() harnesstest.Case {
+			c := base(false, 0)
+			c.Secret = func(harnesstest.T) (harness.Adapter, string) {
+				return &harnesstest.Fake{AName: "fake", Mode: harnesstest.ModeNormal}, secret
+			}
+			return c
+		}()},
 		{"secret not redacted", func() harnesstest.Case {
 			c := base(false, 0)
 			c.Secret = func(harnesstest.T) (harness.Adapter, string) {
@@ -154,4 +172,14 @@ func failAfter(next harness.Sink, n int) harness.Sink {
 		count++
 		return next.Emit(ctx, e)
 	})
+}
+
+// keepTail redacts all but the last six characters of the secret.
+type keepTail struct{}
+
+func (keepTail) Redact(s string) string {
+	if i := strings.Index(s, secret); i >= 0 {
+		return s[:i] + "[REDACTED]" + secret[len(secret)-6:] + s[i+len(secret):]
+	}
+	return s
 }
