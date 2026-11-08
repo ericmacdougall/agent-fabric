@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,6 +51,8 @@ func main() {
 		err = importMain(os.Args[2:])
 	case "expire-leases":
 		err = expireMain(os.Args[2:])
+	case "reconcile":
+		err = reconcileMain(os.Args[2:])
 	case "host":
 		err = hostMain(os.Args[2:])
 	case "attempt":
@@ -88,11 +91,19 @@ func exitCode(err error) int {
 		return 0
 	}
 	var ref *store.Refusal
-	if errors.As(err, &ref) {
+	var ue usageError
+	var rr reconcileRefused
+	if errors.As(err, &ref) || errors.As(err, &ue) || errors.As(err, &rr) {
 		return 3
 	}
 	return 1
 }
+
+// usageError is a refused invocation, exit 3 like a refusal: a required
+// flag is missing or holds an invalid value (goodqa#15087).
+type usageError struct{ error }
+
+func (e usageError) Unwrap() error { return e.error }
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: fab <command> [flags]
@@ -121,8 +132,9 @@ func usage() {
   provider capture --grant F --out DIR [--scenarios text,tool,thinking,badauth,badrequest]   record real API streams
   import --slots F --queue F           one-off #14882 import (shadow)
   expire-leases [--limit N]            bounded lease sweep
+  reconcile [--host H]                 one expire + quarantine pass for this host (no fabd); exit 3 while a fabd holds the host
   host controls --scratch DIR          run this host's negative controls
-  __sandbox --rw DIR ... -- argv       (linux) apply Landlock then exec`)
+  __sandbox --env-keep NAMES --rw DIR ... -- argv (linux) apply Landlock, exec with only NAMES`)
 }
 
 func withStore(f func(context.Context, *store.Store) error) error {
@@ -191,12 +203,17 @@ func missionMain(args []string) error {
 		prio := fs.Int("priority", 100, "queue position (lower first)")
 		needs := fs.String("needs", "", "host label needed, e.g. heavy")
 		source := fs.String("source", "", "provenance of this mission (R12 grammar)")
+		provider := fs.String("provider", "", "claude-code (fabd runs it on the Claude Code binary) or anthropic-api (only `fab mission run --grant` runs it); required, never changes")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
+		prov, err := domain.ParseProvider(*provider)
+		if err != nil {
+			return usageError{fmt.Errorf("mission new: --provider: %w", err)}
+		}
 		return withStore(func(ctx context.Context, st *store.Store) error {
 			err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: domain.MissionID(*id), Name: *name, Ticket: *ticket, Repo: *repo,
-				Branch: *branch, Priority: *prio, HostNeeds: *needs, Source: *source})
+				Branch: *branch, Priority: *prio, HostNeeds: *needs, Source: *source, Provider: prov})
 			if err == nil {
 				fmt.Println("mission", *id, "registered (IDLE)")
 			}
@@ -217,10 +234,21 @@ func printMissions(ctx context.Context, st *store.Store) error {
 	if err != nil {
 		return err
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "MISSION\tPRIO\tEXEC\tCAND\tDELIV\tREV/FENCE/GEN\tTICKET\tNAME")
+	return writeMissions(os.Stdout, rows)
+}
+
+// writeMissions is the mission table of `fab status` (goodqa#15087: with
+// each mission's provider, and the awaiting state of an admitted
+// anthropic-api mission that only `fab mission run --grant` starts).
+func writeMissions(out io.Writer, rows []store.MissionRow) error {
+	w := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(w, "MISSION\tPROVIDER\tPRIO\tEXEC\tCAND\tDELIV\tREV/FENCE/GEN\tTICKET\tNAME")
 	for _, r := range rows {
-		fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%d/%d/%d\t%s\t%s\n", r.ID, r.Priority, r.Execution, r.Candidate, r.Delivery,
+		exec := string(r.Execution)
+		if r.AwaitingGrant {
+			exec += " (awaiting mission run --grant)"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%d/%d/%d\t%s\t%s\n", r.ID, r.Provider, r.Priority, exec, r.Candidate, r.Delivery,
 			r.Version.IntentRevision, r.Version.AttemptFence, r.Version.CandidateGeneration, r.Ticket, r.Name)
 	}
 	return w.Flush()

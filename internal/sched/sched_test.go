@@ -56,7 +56,7 @@ func TestAC2WaitWithoutPolling(t *testing.T) {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: "m_ac2", Name: "ac2", Ticket: "GoodQA goodqa#14791", Source: "file:" + "sched_test.go"}); err != nil {
+	if err := st.CreateMissionSpec(ctx, store.MissionSpec{Provider: domain.ProviderClaudeCode, ID: "m_ac2", Name: "ac2", Ticket: "GoodQA goodqa#14791", Source: "file:" + "sched_test.go"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Execute(ctx, "test", "admit", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_ac2"}); err != nil {

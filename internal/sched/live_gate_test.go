@@ -121,7 +121,7 @@ func TestLiveGatedRestart(t *testing.T) {
 		}
 	}
 	for _, m := range []domain.MissionID{a, b} {
-		if err := st.CreateMission(ctx, m, "GoodQA goodqa#14922", "fabric", "main"); err != nil {
+		if err := st.CreateMission(ctx, m, domain.ProviderClaudeCode, "GoodQA goodqa#14922", "fabric", "main"); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := st.Execute(ctx, "chat", domain.CommandID("admit-"+string(m)), domain.Command{Kind: domain.CmdAdmitMission, Mission: m}); err != nil {

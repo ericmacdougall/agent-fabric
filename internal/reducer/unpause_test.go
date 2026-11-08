@@ -18,13 +18,13 @@ func TestUnpauseIsOperatorOnly(t *testing.T) {
 		t.Fatalf("setup: execution %s, want PAUSED", m.Execution)
 	}
 	cmd := domain.Command{Kind: domain.CmdUnpauseMission, Mission: id, Reason: "runner confirmed gone"}
-	if _, err := Decide(m, cmd, Env{Cap: 4}); !errors.Is(err, domain.ErrInvalidTransition) {
+	if _, err := Decide(m, cmd, Env{Provider: domain.ProviderClaudeCode, Cap: 4}); !errors.Is(err, domain.ErrInvalidTransition) {
 		t.Errorf("a non-operator unpaused a mission: %v", err)
 	}
-	if _, err := Decide(m, domain.Command{Kind: domain.CmdUnpauseMission, Mission: id}, Env{Cap: 4, Operator: true}); !errors.Is(err, domain.ErrInvalidTransition) {
+	if _, err := Decide(m, domain.Command{Kind: domain.CmdUnpauseMission, Mission: id}, Env{Provider: domain.ProviderClaudeCode, Cap: 4, Operator: true}); !errors.Is(err, domain.ErrInvalidTransition) {
 		t.Errorf("an unpause without a reason was accepted: %v", err)
 	}
-	evs, err := Decide(m, cmd, Env{Cap: 1, SlotsUsed: 1, Operator: true})
+	evs, err := Decide(m, cmd, Env{Provider: domain.ProviderClaudeCode, Cap: 1, SlotsUsed: 1, Operator: true})
 	if err != nil || len(evs) != 1 || evs[0].Kind != domain.EvMissionUnpaused {
 		t.Fatalf("operator unpause: %v %+v", err, evs)
 	}
@@ -32,10 +32,10 @@ func TestUnpauseIsOperatorOnly(t *testing.T) {
 	if after.Execution != domain.ExecAdmitted || after.Attempts[a].State != domain.AttemptQuarantined {
 		t.Errorf("after unpause: execution %s, attempt %s; want ADMITTED, QUARANTINED", after.Execution, after.Attempts[a].State)
 	}
-	if _, err := Decide(after, cmd, Env{Cap: 4, Operator: true}); !errors.Is(err, domain.ErrInvalidTransition) {
+	if _, err := Decide(after, cmd, Env{Provider: domain.ProviderClaudeCode, Cap: 4, Operator: true}); !errors.Is(err, domain.ErrInvalidTransition) {
 		t.Errorf("an admitted mission was unpaused: %v", err)
 	}
-	if _, err := Decide(after, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "writer"}, Env{Cap: 4}); err != nil {
+	if _, err := Decide(after, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "writer"}, Env{Provider: domain.ProviderClaudeCode, Cap: 4}); err != nil {
 		t.Errorf("an unpaused mission could not start: %v", err)
 	}
 }

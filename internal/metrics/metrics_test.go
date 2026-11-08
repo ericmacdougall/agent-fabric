@@ -55,14 +55,14 @@ const hostileTitle = `goodqa#999 SECRET-TITLE sk-live-xyz "} injected{a="b`
 
 func seed(t *testing.T, pool *pgxpool.Pool) {
 	exec(t, pool,
-		`INSERT INTO missions (id, ticket, execution, terminal, state) VALUES
-			('m_1', 'goodqa#1', 'RUNNING', 'NONE', '{}'),
-			('m_2', 'goodqa#2', 'IDLE', 'NONE', '{}'),
-			('m_3', '`+strings.ReplaceAll(hostileTitle, "'", "''")+`', 'RUNNING"} x{y="1', 'NONE', '{}')`,
-		`INSERT INTO attempts (id, mission_id, fence, revision, generation, state, lease_until) VALUES
-			('a_1', 'm_1', 1, 0, 0, 'RUNNING', now() + interval '1 hour'),
-			('a_2', 'm_2', 1, 0, 0, 'LEASED', now() - interval '1 hour'),
-			('a_3', 'm_1', 2, 0, 0, 'ENDED', NULL)`,
+		`INSERT INTO missions (id, ticket, execution, terminal, state, provider) VALUES
+			('m_1', 'goodqa#1', 'RUNNING', 'NONE', '{}', 'claude-code'),
+			('m_2', 'goodqa#2', 'IDLE', 'NONE', '{}', 'claude-code'),
+			('m_3', '`+strings.ReplaceAll(hostileTitle, "'", "''")+`', 'RUNNING"} x{y="1', 'NONE', '{}', 'claude-code')`,
+		`INSERT INTO attempts (id, mission_id, fence, revision, generation, state, lease_until, path) VALUES
+			('a_1', 'm_1', 1, 0, 0, 'RUNNING', now() + interval '1 hour', 'claude-code'),
+			('a_2', 'm_2', 1, 0, 0, 'LEASED', now() - interval '1 hour', 'claude-code'),
+			('a_3', 'm_1', 2, 0, 0, 'ENDED', NULL, 'claude-code')`,
 		`INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state, dispatches, updated_at) VALUES
 			('e_1', 'm_1', 'a_1', 1, 'ticket_comment', 's1', 'k1', '{}', 'x', 'CONFIRMED', 1, now()),
 			('e_2', 'm_1', 'a_1', 1, 'publish', 's2', 'k2', '{}', 'x', 'QUARANTINED', 0, now() - interval '100 seconds'),

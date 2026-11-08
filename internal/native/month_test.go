@@ -21,13 +21,13 @@ func preSpend(t *testing.T, st *store.Store, resource string, micros int64) {
 	t.Helper()
 	ctx := context.Background()
 	m, a := domain.MissionID("m_premonth"), domain.AttemptID("r_premonth")
-	if err := st.CreateMissionSpec(ctx, store.MissionSpec{ID: m, Name: "earlier run", Ticket: "GoodQA goodqa#15086", Priority: 100, Source: "ticket:GoodQA goodqa#15086"}); err != nil {
+	if err := st.CreateMissionSpec(ctx, store.MissionSpec{Provider: domain.ProviderClaudeCode, ID: m, Name: "earlier run", Ticket: "GoodQA goodqa#15086", Priority: 100, Source: "ticket:GoodQA goodqa#15086"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Execute(ctx, "native-runner", "pre-admit", domain.Command{Kind: domain.CmdAdmitMission, Mission: m}); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := st.Execute(ctx, "native-runner", "pre-start", domain.Command{Kind: domain.CmdStartAttempt, Mission: m, Attempt: a, Host: "h_local", Role: "writer"})
+	resp, err := st.Execute(ctx, "native-runner", "pre-start", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: m, Attempt: a, Host: "h_local", Role: "writer"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,14 @@ func preSpend(t *testing.T, st *store.Store, resource string, micros int64) {
 // recorded against another month does not block the run (the control).
 func TestMonthCeilingStopsLoop(t *testing.T) {
 	ctx := context.Background()
-	thisMonth := func() string { return time.Now().UTC().Format("200601") }
+	// Run keys the month on database time (goodqa#15124), so the test does too.
+	thisMonth := func(st *store.Store) string {
+		m, err := st.DBMonth(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
 	for _, tc := range []struct {
 		name      string
 		thisMonth bool // spend charged to the month Run will use; otherwise to 199901
@@ -68,16 +75,16 @@ func TestMonthCeilingStopsLoop(t *testing.T) {
 			// the case, the seed and the run disagree, so the case runs again
 			// once (it cannot turn over twice in a few seconds).
 			for try := 0; try < 2; try++ {
-				month := thisMonth()
+				st := storetest.Open(t)
+				month := thisMonth(st)
 				spentIn := "199901"
 				if tc.thisMonth {
 					spentIn = month
 				}
-				st := storetest.Open(t)
 				preSpend(t, st, agent.SpendResource("month", spentIn), 19_999_950)
 				e := newEnv(t, fakeapi.Step{Events: fakeapi.Text("finished", 50, 5)})
 				r, err := native.Run(ctx, st, e.g, opts(true))
-				if thisMonth() != month && try == 0 {
+				if thisMonth(st) != month && try == 0 {
 					continue
 				}
 				if err != nil {

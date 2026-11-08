@@ -33,6 +33,7 @@ type fakeLauncher struct {
 	mu       sync.Mutex
 	stateAt  []string // the attempt row state at each Start call
 	argvs    [][]string
+	envs     [][]string
 	block    chan struct{}
 }
 
@@ -43,6 +44,7 @@ func (f *fakeLauncher) Start(g host.Grant, argv, env []string, stdout, stderr *o
 	f.mu.Lock()
 	f.stateAt = append(f.stateAt, st)
 	f.argvs = append(f.argvs, append([]string(nil), argv...))
+	f.envs = append(f.envs, append([]string(nil), env...))
 	f.mu.Unlock()
 	return host.Handle{Run: g.Run}, f.startErr
 }
@@ -56,7 +58,7 @@ func ownerSetup(t *testing.T, id domain.MissionID) (*store.Store, *fakeLauncher,
 	t.Helper()
 	st := storetest.Open(t)
 	ctx := context.Background()
-	if err := st.CreateMission(ctx, id, "GoodQA goodqa#14922", "fabric", "main"); err != nil {
+	if err := st.CreateMission(ctx, id, domain.ProviderClaudeCode, "GoodQA goodqa#14922", "fabric", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Execute(ctx, "chat", domain.CommandID("admit-"+string(id)), domain.Command{Kind: domain.CmdAdmitMission, Mission: id}); err != nil {

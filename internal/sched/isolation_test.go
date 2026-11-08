@@ -28,7 +28,7 @@ func TestPerMissionErrorDoesNotStopTheLoop(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := st.CreateMission(ctx, "m_d1b", "GoodQA goodqa#14922", "fabric", "main"); err != nil {
+	if err := st.CreateMission(ctx, "m_d1b", domain.ProviderClaudeCode, "GoodQA goodqa#14922", "fabric", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Execute(ctx, "chat", "admit-m_d1b", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_d1b"}); err != nil {
@@ -66,7 +66,7 @@ func TestDispatchErrorParksOnlyThatMission(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfg.WorkRoot, "wt", "m_bad"), nil, 0o644); err != nil { // a file where the worktree goes
 		t.Fatal(err)
 	}
-	if err := st.CreateMission(ctx, "m_good", "GoodQA goodqa#14922", "fabric", "main"); err != nil {
+	if err := st.CreateMission(ctx, "m_good", domain.ProviderClaudeCode, "GoodQA goodqa#14922", "fabric", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Execute(ctx, "chat", "admit-m_good", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_good"}); err != nil {
@@ -98,7 +98,7 @@ func TestDispatchErrorParksOnlyThatMission(t *testing.T) {
 func TestDispatchRawErrorParksOnlyThatMission(t *testing.T) {
 	st, ln, cfg := ownerSetup(t, "m_err")
 	ctx := context.Background()
-	if err := st.CreateMission(ctx, "m_ok", "GoodQA goodqa#14922", "fabric", "main"); err != nil {
+	if err := st.CreateMission(ctx, "m_ok", domain.ProviderClaudeCode, "GoodQA goodqa#14922", "fabric", "main"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Execute(ctx, "chat", "admit-m_ok", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_ok"}); err != nil {

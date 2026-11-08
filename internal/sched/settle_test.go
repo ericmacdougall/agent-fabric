@@ -27,7 +27,7 @@ func settleCase(t *testing.T, id string, code int, lines ...string) (string, boo
 	a := domain.AttemptID("r_" + id + "_1")
 	st, ln, cfg := ownerSetup(t, m)
 	ctx := context.Background()
-	resp, err := st.Execute(ctx, "fabd", domain.CommandID("start:"+string(a)), domain.Command{Kind: domain.CmdStartAttempt, Mission: m, Attempt: a, Host: cfg.Host, Role: "writer"})
+	resp, err := st.Execute(ctx, "fabd", domain.CommandID("start:"+string(a)), domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: m, Attempt: a, Host: cfg.Host, Role: "writer"})
 	if err != nil {
 		t.Fatal(err)
 	}

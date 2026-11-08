@@ -99,7 +99,7 @@ func count(t *testing.T, st *Store, ctx context.Context, sql string, args ...any
 
 func mk(t *testing.T, st *Store, ctx context.Context, id domain.MissionID) {
 	t.Helper()
-	if err := st.CreateMission(ctx, id, "GoodQA goodqa#14791", "fabric", "main"); err != nil {
+	if err := st.CreateMission(ctx, id, domain.ProviderClaudeCode, "GoodQA goodqa#14791", "fabric", "main"); err != nil {
 		t.Fatalf("create %s: %v", id, err)
 	}
 }
@@ -115,7 +115,7 @@ func ok(t *testing.T, st *Store, ctx context.Context, actor, key string, cmd dom
 
 func startAttempt(t *testing.T, st *Store, ctx context.Context, id domain.MissionID, attempt domain.AttemptID) int64 {
 	t.Helper()
-	resp := ok(t, st, ctx, "fabd", "start:"+string(attempt), domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: attempt, Host: "h_t2", Role: "writer"})
+	resp := ok(t, st, ctx, "fabd", "start:"+string(attempt), domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: attempt, Host: "h_t2", Role: "writer"})
 	return resp.Events[0].Fence
 }
 
@@ -165,10 +165,10 @@ func TestMigrateRefusesChangedMigration(t *testing.T) {
 
 func TestMissionMustNameTicket(t *testing.T) {
 	st, ctx := openTest(t)
-	if err := st.CreateMission(ctx, "m_noticket", "", "", ""); err == nil {
+	if err := st.CreateMission(ctx, "m_noticket", domain.ProviderClaudeCode, "", "", ""); err == nil {
 		t.Fatal("mission without a ticket was accepted (R5)")
 	}
-	if err := st.CreateMission(ctx, "bad id", "GoodQA goodqa#1", "", ""); !errors.Is(err, domain.ErrInvalidID) {
+	if err := st.CreateMission(ctx, "bad id", domain.ProviderClaudeCode, "GoodQA goodqa#1", "", ""); !errors.Is(err, domain.ErrInvalidID) {
 		t.Fatalf("bad id: want ErrInvalidID, got %v", err)
 	}
 }
@@ -224,7 +224,7 @@ func TestConcurrentSameKey(t *testing.T) {
 	st, ctx := openTest(t)
 	mk(t, st, ctx, "m_1")
 	ok(t, st, ctx, "chat", "admit", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_1"})
-	cmd := domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_1", Attempt: "r_1", Host: "h_t2", Role: "writer"}
+	cmd := domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_1", Attempt: "r_1", Host: "h_t2", Role: "writer"}
 	const n = 16
 	var wg sync.WaitGroup
 	results := make([]Response, n)
@@ -436,7 +436,7 @@ func TestLeaseExpiry(t *testing.T) {
 		t.Fatalf("second sweep: %v %v", exp, err)
 	}
 	// No relaunch while UNKNOWN.
-	_, err = st.Execute(ctx, "fabd", "start:r_2", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_1", Attempt: "r_2", Host: "h_t2", Role: "writer"})
+	_, err = st.Execute(ctx, "fabd", "start:r_2", domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: "m_1", Attempt: "r_2", Host: "h_t2", Role: "writer"})
 	if !errors.Is(err, domain.ErrUnknownUnresolved) {
 		t.Fatalf("relaunch during UNKNOWN: want ErrUnknownUnresolved, got %v", err)
 	}
@@ -720,8 +720,8 @@ func TestOversizedRequestNotStored(t *testing.T) {
 func TestCatalogAndAsks(t *testing.T) {
 	st, ctx := openTest(t)
 	specs := []MissionSpec{
-		{ID: "m_b", Name: "second", Ticket: "GoodQA goodqa#2", Priority: 20, Source: "file:/x/active-slots.json"},
-		{ID: "m_a", Name: "first", Ticket: "GoodQA goodqa#1", Priority: 10, Source: "inferred: from the queue file -- test"},
+		{Provider: domain.ProviderClaudeCode, ID: "m_b", Name: "second", Ticket: "GoodQA goodqa#2", Priority: 20, Source: "file:/x/active-slots.json"},
+		{Provider: domain.ProviderClaudeCode, ID: "m_a", Name: "first", Ticket: "GoodQA goodqa#1", Priority: 10, Source: "inferred: from the queue file -- test"},
 	}
 	for _, s := range specs {
 		if err := st.CreateMissionSpec(ctx, s); err != nil {
@@ -733,10 +733,10 @@ func TestCatalogAndAsks(t *testing.T) {
 	if err := st.CreateMissionSpec(ctx, again); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateMissionSpec(ctx, MissionSpec{ID: "m_c", Ticket: "GoodQA goodqa#3", Source: "agent said so"}); err == nil {
+	if err := st.CreateMissionSpec(ctx, MissionSpec{Provider: domain.ProviderClaudeCode, ID: "m_c", Ticket: "GoodQA goodqa#3", Source: "agent said so"}); err == nil {
 		t.Fatal("mission with a non-grammatical source accepted (R12)")
 	}
-	if err := st.CreateMissionSpec(ctx, MissionSpec{ID: "m_d", Source: "file:/x"}); err == nil {
+	if err := st.CreateMissionSpec(ctx, MissionSpec{Provider: domain.ProviderClaudeCode, ID: "m_d", Source: "file:/x"}); err == nil {
 		t.Fatal("mission without a ticket accepted (R5)")
 	}
 	ok(t, st, ctx, "chat", "admit-b", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_b"})

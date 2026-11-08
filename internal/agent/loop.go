@@ -64,6 +64,10 @@ type Loop struct {
 	settleE error
 }
 
+// ErrSubscriptionBilling refuses a loop configured for subscription
+// billing. Subscription work runs as a claude-code mission under fabd.
+var ErrSubscriptionBilling = errors.New("agent: subscription billing is refused: the native loop runs on an API key only; subscription work runs as a claude-code mission")
+
 func New(c Config) (*Loop, error) {
 	if c.DB == nil || c.Ledger == nil || c.Provider == nil {
 		return nil, errors.New("agent: DB, Ledger and Provider are required")
@@ -78,7 +82,10 @@ func New(c Config) (*Loop, error) {
 		c.BillingMode = BillingAPIKey
 	}
 	if c.BillingMode != BillingAPIKey {
-		return nil, errors.New("agent: subscription billing arrives with slice 5; slice 1 runs API-key attempts only")
+		// goodqa#15087: a subscription is used only through the official
+		// Claude Code binary (provider claude-code); this loop runs on an
+		// API key only.
+		return nil, ErrSubscriptionBilling
 	}
 	if c.MaxResultBytes <= 0 {
 		c.MaxResultBytes = 64 << 10

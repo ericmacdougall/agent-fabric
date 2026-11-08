@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -117,7 +119,13 @@ func (g *GoodQA) Dispatch(ctx context.Context, sub Submission) (Receipt, error) 
 		}
 		return Receipt{Outcome: OutcomeUnknown, Detail: "goodqa error: " + c}, nil
 	}
-	remote, _ := json.Marshal(map[string]any{"comment_id": commentID(data)})
+	// goodqa#15165: a success with no comment id proves nothing; reconcile
+	// reads the issue back and decides.
+	id := commentID(data)
+	if id == "" {
+		return Receipt{Outcome: OutcomeUnknown, Detail: "goodqa reply carried no comment id"}, nil
+	}
+	remote, _ := json.Marshal(map[string]any{"comment_id": id})
 	return Receipt{Outcome: OutcomeConfirmed, Detail: "comment posted", Remote: remote}, nil
 }
 
@@ -166,22 +174,41 @@ func (g *GoodQA) Reconcile(ctx context.Context, e Effect) (Observation, string, 
 		if code, ok := data["__error__"]; ok {
 			return ObsUnknown, fmt.Sprintf("readback refused: %v", code), nil
 		}
-		list, _ := data["comments"].([]any)
+		// goodqa#15165: only a well-formed page can prove absence. A missing
+		// or malformed list, item or paging field is UNKNOWN, never NOT_APPLIED.
+		list, ok := data["comments"].([]any)
+		if !ok {
+			return ObsUnknown, "readback page has no comments list", nil
+		}
 		for _, item := range list {
-			c, _ := item.(map[string]any)
-			if c == nil || c["archivedAt"] != nil && c["archivedAt"] != "" {
+			c, ok := item.(map[string]any)
+			if !ok {
+				return ObsUnknown, "readback page has a malformed comment", nil
+			}
+			if c["archivedAt"] != nil && c["archivedAt"] != "" {
 				continue
 			}
-			body, _ := c["body"].(string)
+			body, ok := c["body"].(string)
+			if !ok {
+				return ObsUnknown, "readback page has a comment without a body", nil
+			}
 			for _, m := range trailerRE.FindAllStringSubmatch(body, -1) {
 				if m[1] == e.IdemKey {
 					matches++
 				}
 			}
 		}
-		more, _ := data["hasMore"].(bool)
+		more := false
+		if v, present := data["hasMore"]; present {
+			if more, ok = v.(bool); !ok {
+				return ObsUnknown, "readback page has a malformed hasMore", nil
+			}
+		}
 		cursor, _ = data["nextCursor"].(string)
-		if !more || cursor == "" {
+		if more && cursor == "" {
+			return ObsUnknown, "readback page says more comments follow but gives no cursor", nil
+		}
+		if !more {
 			switch matches {
 			case 0:
 				return ObsNotApplied, "no comment carries the trailer", nil
@@ -195,12 +222,38 @@ func (g *GoodQA) Reconcile(ctx context.Context, e Effect) (Observation, string, 
 	return ObsUnknown, "comment history exceeded the page budget", nil
 }
 
+// checkEndpoint (goodqa#15168, Kimi K12): the bearer goes only to an https
+// URL or to plain http on a literal loopback IP. The old prefix test let
+// "http://127.0.0.1@other.host/" and "http://127.0.0.1.other.host/" through,
+// sending the key to another host. Userinfo is refused outright, and the
+// host is parsed, not prefix-matched. The URL itself is never echoed, since
+// userinfo could hold a secret.
+func checkEndpoint(raw string) error {
+	bad := errors.New("goodqa endpoint must be https://host/... or http:// on a literal loopback IP, with no userinfo")
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.Host == "" || u.Hostname() == "" {
+		return bad
+	}
+	if u.User != nil || strings.Contains(u.Host, "@") {
+		return errors.New("goodqa endpoint must not carry userinfo")
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if ip := net.ParseIP(u.Hostname()); ip != nil && ip.IsLoopback() {
+			return nil
+		}
+	}
+	return bad
+}
+
 // call performs one MCP tools/call and returns the tool's JSON payload, or a
 // map with "__error__" set to the machine error code. Transport failures are
 // errors (the broker records UNKNOWN). Responses are capped at 8 MB.
 func (g *GoodQA) call(ctx context.Context, tool string, args map[string]any) (map[string]any, error) {
-	if !strings.HasPrefix(g.Endpoint, "https://") && !strings.HasPrefix(g.Endpoint, "http://127.0.0.1") {
-		return nil, errors.New("goodqa endpoint must be https or loopback")
+	if err := checkEndpoint(g.Endpoint); err != nil {
+		return nil, err
 	}
 	keyBytes, err := os.ReadFile(g.KeyFile)
 	if err != nil {
@@ -212,10 +265,14 @@ func (g *GoodQA) call(ctx context.Context, tool string, args map[string]any) (ma
 	}
 	payload, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{"name": tool, "arguments": args}})
-	client := g.Client
-	if client == nil {
-		client = &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: 20 * time.Second}
+	if g.Client != nil {
+		c := *g.Client
+		client = &c
 	}
+	// goodqa#15168: never follow a redirect. The bearer must reach only the
+	// checked endpoint; a 3xx is reported as a transport failure below.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.Endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
@@ -237,6 +294,9 @@ func (g *GoodQA) call(ctx context.Context, tool string, args map[string]any) (ma
 	}
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
 		return map[string]any{"__error__": "forbidden"}, nil
+	}
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return nil, fmt.Errorf("goodqa HTTP %d redirect refused: the endpoint must answer directly", resp.StatusCode)
 	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("goodqa HTTP %d", resp.StatusCode)

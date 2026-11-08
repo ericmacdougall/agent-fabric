@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,9 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"fabric/internal/domain"
 	"fabric/internal/host"
+	"fabric/internal/hostid"
+	"fabric/internal/native"
+	"fabric/internal/provider/claude"
 	"fabric/internal/sched"
 	"fabric/internal/store"
 )
@@ -92,7 +97,38 @@ func daemonMain(args []string) error {
 	if err != nil {
 		return err
 	}
+	// goodqa#15161 review R1: the provider is resolved once, here, before
+	// anything else. An unresolvable provider refuses fabd's start with a
+	// named cause on every host and trust level: the containment control
+	// (provider_starts_under_profile) would otherwise have no file to run
+	// and be skipped, and every later launch would be refused one by one.
+	// newDaemonProvider also builds the scheduler's launch from the
+	// operator's name, so no call site can hand it the start-time file
+	// (review S1 on 2abd23a).
+	schemaPath := filepath.Join(*workRoot, "checkpoint.schema.json")
+	hooksDir := os.Getenv("FABRIC_HOOKS_DIR")
+	dp, err := newDaemonProvider(*provider, schemaPath, hooksDir)
+	if err != nil {
+		return err
+	}
 	os.Setenv("FABRIC_WORKER_USER", *workerUser)
+	os.Setenv("FABRIC_RUNNER_DSN_ENV", *runnerDSNEnv) // its port joins the worker's TCP allow-list (goodqa#15161)
+	// The schema is written before the profile and the controls, so the
+	// launch_inputs_readable control sees the file a real launch reads.
+	// The controls used to create the work root (0775, like controlGrant);
+	// the schema is now written first, so create it here (review 716fc04).
+	if err := os.MkdirAll(*workRoot, 0o775); err != nil {
+		return err
+	}
+	if err := os.WriteFile(schemaPath, []byte(checkpointSchema), 0o644); err != nil {
+		return err
+	}
+	// The read-allow-back and the control use the same start-time
+	// resolution; each launch resolves the name again (productionLaunch),
+	// so an update that repoints the symlink is followed (goodqa#15161
+	// reviews C and N1).
+	darwinLaunchRO = launchInputs(dp.Path, hooksDir, schemaPath)
+	darwinProvider = dp.Path
 	ln, err := launcherForThisHost()
 	if err != nil {
 		return err
@@ -114,21 +150,22 @@ func daemonMain(args []string) error {
 	}
 	cfg := sched.Config{Host: domain.HostID(*hostID), Model: model, Effort: effort, Rung: *rung, TierTableSHA: sha, Profile: *profile,
 		MaxTurns: 40, MaxBudgetUSD: 2, Wall: 45 * time.Minute, WorkRoot: *workRoot, FabBin: selfPath()}
-	cfg.Launch.Binary = *provider
 	cfg.Holds = holds
 	cfg.RunnerDSN = os.Getenv(*runnerDSNEnv)
-	cfg.Launch.SchemaPath = filepath.Join(*workRoot, "checkpoint.schema.json")
-	cfg.Launch.SettingSources = ""
-	cfg.Launch.StrictMCP, cfg.Launch.DisableSlash = true, true
-	cfg.Launch.DisallowedTools = []string{"Agent", "Workflow", "AskUserQuestion", "WebFetch", "WebSearch"}
-	if err := os.WriteFile(cfg.Launch.SchemaPath, []byte(checkpointSchema), 0o644); err != nil {
-		return err
-	}
+	// goodqa#15087 AC-6: the same launch the AC-6 (f) live check runs. It
+	// must stay dp.Launch: the operator's name, re-resolved per launch (N1;
+	// TestDaemonLaunchComesFromDaemonProvider guards this line).
+	cfg.Launch = dp.Launch
 	return withStore(func(ctx context.Context, st *store.Store) error {
 		s := sched.New(st, cfg, ln)
 		if p, ok := runnerProber(*workerUser); ok {
 			s.SetProber(p) // G1: reconcile UNKNOWN attempts whose runner is gone
 		}
+		// goodqa#15087: native attempts read back through their stored lock
+		// path, and fabd holds the host reconcile lock for its whole life.
+		s.SetLockProber(native.ProbeLock)
+		s.RequireReconcileLock()
+		defer s.Close()
 		if *once {
 			for i := 0; i < 50; i++ {
 				worked, err := s.Tick(ctx)
@@ -149,17 +186,49 @@ func daemonMain(args []string) error {
 const checkpointSchema = `{"type":"object","required":["end"],"properties":{"next":{"type":"string","maxLength":200},
 "end":{"type":"object","required":["kind"],"properties":{"kind":{"enum":["checkpoint","wait","ready_for_review","blocked"]},"event":{"type":"string"},"reason":{"type":"string","maxLength":200}}}}}`
 
-func hostname() string {
-	h, _ := os.Hostname()
-	if i := strings.IndexByte(h, '.'); i > 0 {
-		h = h[:i]
+// hostname is the shared default host name (goodqa#15087: fabd and the
+// native runner name a host the same way).
+func hostname() string { return hostid.Name() }
+
+// resolveStartProvider resolves the provider when fabd starts. It refuses
+// with a named cause when the name does not resolve to a file (a typo, a
+// PATH without it, an install mid-update): fabd then does not start,
+// rather than start with the provider control skipped (goodqa#15161 R1).
+func resolveStartProvider(provider string) (string, error) {
+	p := providerPath(provider)
+	if p == "" {
+		return "", fmt.Errorf("provider %q cannot be resolved to a file; refusing to start fabd (the provider control would have nothing to run)", provider)
 	}
-	return strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
-			return r
-		}
-		return '-'
-	}, strings.ToLower(h))
+	return p, nil
+}
+
+// daemonProvider is the provider fabd works with. Path is the file the
+// operator's name resolved to at start: the containment control runs it and
+// the Darwin profile reads it back (review R1). Launch keeps the name and
+// re-resolves it at every launch (N1), so an update is followed.
+type daemonProvider struct {
+	Path   string
+	Launch claude.Launch
+}
+
+func newDaemonProvider(operator, schemaPath, hooksDir string) (daemonProvider, error) {
+	p, err := resolveStartProvider(operator)
+	if err != nil {
+		return daemonProvider{}, err
+	}
+	return daemonProvider{Path: p, Launch: productionLaunch(operator, schemaPath, hooksDir)}, nil
+}
+
+// productionLaunch is the launch fabd hands the scheduler. Binary keeps
+// the operator's name and Resolve maps it to a file at every launch, so a
+// provider update that repoints the symlink and prunes the old version is
+// followed (goodqa#15161 N1), the launch never execs through a symlink in
+// a directory the Darwin profile denies (review C), and a name that does
+// not resolve refuses the launch (review R3: this wiring is tested).
+func productionLaunch(provider, schemaPath, hooksDir string) claude.Launch {
+	l := claude.ProductionLaunch(provider, schemaPath, hooksDir)
+	l.Resolve = providerPath
+	return l
 }
 
 // resolveRung reads the tier table file and returns (model, effort, sha256 of the file).
@@ -167,6 +236,11 @@ func resolveRung(path, rung string) (string, string, string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", "", "", err
+	}
+	// goodqa#15178: invalid UTF-8 decodes to U+FFFD, so two different
+	// tables could share a digest and a model name could be mangled.
+	if !utf8.Valid(b) {
+		return "", "", "", fmt.Errorf("tier table %s is not valid UTF-8", path)
 	}
 	var t struct {
 		Rungs map[string]struct {
@@ -181,13 +255,28 @@ func resolveRung(path, rung string) (string, string, string, error) {
 	if !ok || r.Models["claude"] == "" || r.Effort == "" {
 		return "", "", "", fmt.Errorf("tier table has no claude model for rung %s", rung)
 	}
-	return r.Models["claude"], r.Effort, domainSHA(b), nil
+	sha, err := domainSHA(b)
+	if err != nil {
+		return "", "", "", err
+	}
+	return r.Models["claude"], r.Effort, sha, nil
 }
 
-func domainSHA(b []byte) string {
-	base, _ := domain.EffectBase("tier-table", json.RawMessage(`"`+strings.ReplaceAll(string(b), `"`, `\"`)+`"`))
-	if len(base) > 16 {
-		return base[:16]
+// domainSHA digests the tier-table bytes as a JSON string. encoding/json
+// escapes them; hand-escaping only quotes made a multi-line file invalid
+// JSON and an empty digest, which the grant refuses (goodqa#15172).
+// HTML escaping stays off so a table that the old code digested correctly
+// (no newline, tab or backslash) keeps its digest.
+func domainSHA(b []byte) (string, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(string(b)); err != nil {
+		return "", err
 	}
-	return base
+	base, err := domain.EffectBase("tier-table", json.RawMessage(bytes.TrimRight(buf.Bytes(), "\n")))
+	if err != nil || len(base) < 16 {
+		return "", fmt.Errorf("tier table digest: %v", err)
+	}
+	return base[:16], nil
 }

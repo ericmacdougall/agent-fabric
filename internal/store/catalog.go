@@ -19,6 +19,9 @@ type MissionSpec struct {
 	Priority  int
 	HostNeeds string
 	Source    string
+	// Provider is required (goodqa#15087): CreateMission takes it explicitly,
+	// with no default.
+	Provider domain.Provider
 }
 
 // sourceGrammar is the provenance rule (R12): user:, ticket:, wal:, file:,
@@ -47,9 +50,14 @@ const (
 )
 
 // EnsureMissionSpec registers m once and reports whether an existing row
-// matches it. A differing row is never overwritten.
+// matches it. A differing row is never overwritten. A provider difference
+// is refused outright (goodqa#15087, main WAL wbdc1146b5e3); every other
+// difference keeps the first import, as before.
 func (s *Store) EnsureMissionSpec(ctx context.Context, m MissionSpec) (Ensured, error) {
 	if _, err := domain.ParseMissionID(string(m.ID)); err != nil {
+		return Created, err
+	}
+	if _, err := domain.ParseProvider(string(m.Provider)); err != nil {
 		return Created, err
 	}
 	if m.Ticket == "" {
@@ -64,11 +72,14 @@ func (s *Store) EnsureMissionSpec(ctx context.Context, m MissionSpec) (Ensured, 
 	}
 	var created bool
 	err = s.pool.QueryRow(ctx, `WITH ins AS (
-			INSERT INTO missions (id, ticket, repo, branch, state, name, priority, host_needs, source)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (id) DO NOTHING RETURNING id)
+			INSERT INTO missions (id, ticket, repo, branch, state, name, priority, host_needs, source, provider)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (id) DO NOTHING RETURNING id)
 		SELECT EXISTS (SELECT 1 FROM ins)`,
-		string(m.ID), m.Ticket, m.Repo, m.Branch, state, m.Name, m.Priority, m.HostNeeds, m.Source).Scan(&created)
+		string(m.ID), m.Ticket, m.Repo, m.Branch, state, m.Name, m.Priority, m.HostNeeds, m.Source, string(m.Provider)).Scan(&created)
 	if err != nil || created {
+		return Created, err
+	}
+	if err := s.checkProvider(ctx, m.ID, m.Provider); err != nil {
 		return Created, err
 	}
 	var same bool
@@ -98,12 +109,28 @@ type MissionRow struct {
 	Terminal  domain.TerminalState
 	Version   domain.Version
 	Seq       int64
+	Provider  domain.Provider
+	// AwaitingGrant: an admitted anthropic-api mission with no live or
+	// unresolved attempt. It holds a slot and only `fab mission run
+	// --grant` starts it; fabd never will (goodqa#15087 AC-3).
+	AwaitingGrant bool
+}
+
+// MissionProvider returns a mission's provider (goodqa#15087).
+func (s *Store) MissionProvider(ctx context.Context, id domain.MissionID) (domain.Provider, error) {
+	var p string
+	err := s.pool.QueryRow(ctx, "SELECT provider FROM missions WHERE id = $1", string(id)).Scan(&p)
+	return domain.Provider(p), err
 }
 
 // ListMissions returns every mission, slot holders first, then by priority.
 func (s *Store) ListMissions(ctx context.Context) ([]MissionRow, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, name, ticket, priority, host_needs, execution, candidate, delivery, terminal,
-		intent_revision, attempt_fence, candidate_generation, seq FROM missions
+		intent_revision, attempt_fence, candidate_generation, seq, provider,
+		(provider = 'anthropic-api' AND execution = 'ADMITTED' AND terminal = 'NONE'
+		 AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = missions.id
+		                 AND a.state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING')))
+		FROM missions
 		ORDER BY (execution IN ('ADMITTED','RUNNING','WAITING','PAUSED')) DESC, priority, id`)
 	if err != nil {
 		return nil, err
@@ -113,7 +140,7 @@ func (s *Store) ListMissions(ctx context.Context) ([]MissionRow, error) {
 	for rows.Next() {
 		var r MissionRow
 		if err := rows.Scan(&r.ID, &r.Name, &r.Ticket, &r.Priority, &r.HostNeeds, &r.Execution, &r.Candidate, &r.Delivery, &r.Terminal,
-			&r.Version.IntentRevision, &r.Version.AttemptFence, &r.Version.CandidateGeneration, &r.Seq); err != nil {
+			&r.Version.IntentRevision, &r.Version.AttemptFence, &r.Version.CandidateGeneration, &r.Seq, &r.Provider, &r.AwaitingGrant); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

@@ -48,6 +48,17 @@ production readiness.
   whatever readback the app reports; a DISPATCHED settle needs a receipt
   naming its dispatch number and outcome, which the app role can still forge
   by hand. No daemon sweeps unresolved effects yet.
+  `fab admit`, `fab unpause` and `fab done` are refused while any of the
+  mission's effects is unsettled (fails closed), and `Retry` re-arms an
+  effect only while its attempt is live at the effect's fence. Runbook: on a
+  refusal naming "effect(s) … are unsettled", the mission is stuck if
+  `SELECT id, state, dispatches FROM effects WHERE mission_id = '<m>' AND
+  state NOT IN ('CONFIRMED', 'FAILED_DEFINITE', 'NOT_APPLIED',
+  'RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED')` shows an INTENT or APPROVED
+  row with `dispatches > 0`, or an UNKNOWN row that `fab effect reconcile`
+  keeps returning to UNKNOWN. Those have no audited exit yet
+  (goodqa#15216, required before the first unattended production
+  mission): the mission stays blocked; do not hand-edit the row.
 - Done means live-tested: `fab done` is refused until `fab live-test` records a
   receipt for the deployed commit of the current candidate, and while any of
   the mission's effects (reducer or broker) is unsettled.
@@ -140,6 +151,105 @@ Database text is sanitized before it is drawn: ticket text, ask questions and re
 
 `fab version` prints the build revision, the same value as `fabric_build_info`.
 
+## Providers
+
+Every mission names its provider when it is created, and it never changes
+(goodqa#15087): `fab mission new --provider claude-code|anthropic-api` is
+required, and the database refuses an UPDATE of `missions.provider`.
+
+- `claude-code`: fabd runs the mission on the Claude Code binary.
+- `anthropic-api`: only `fab mission run --grant F` runs it, through the
+  native loop. That loop accepts only an API-key-shaped key, sends it only to
+  `https://api.anthropic.com` (no proxy), and refuses subscription billing.
+
+Each attempt records the path that started it (`attempts.path`), and the
+database refuses an attempt whose path differs from its mission's provider.
+Fabd always starts `claude-code`, `fab mission run` always starts
+`anthropic-api`, and `fab attempt start` requires `--path` (and
+`--lock-path` for `anthropic-api`). The path is part of the start command's
+request hash, so a start command recorded by an older binary and replayed
+by a newer one is refused as a changed payload. Live had no in-flight
+attempts at the upgrade, so nothing else was done.
+
+Two flags are not the mission provider:
+
+- `fab daemon --provider` is the provider binary fabd launches (`claude`,
+  or a recorded fake for shadow runs).
+- `fab mission run --provider anthropic` is the grant's provider field.
+
+The native month cap is keyed on the database clock, never the host's, and
+a run charges the UTC month it started in, even if it ends in the next one.
+
+### Worker environment
+
+A worker's environment is exactly what fabric builds, whatever fabd, the
+host or the worker user's systemd manager holds. Fabric may set only these
+names: `FAB_RUN`, `FAB_MISSION`, `FAB_ATTEMPT`, `FAB_FENCE`,
+`FAB_RUN_DIR`, `FAB_WORKTREE`, `FABRIC_DSN`, `FABRIC_HOME`, `HOME`,
+`PATH`, `LANG`, `USER`, `TMPDIR`, `SHELL`, `CLAUDE_CONFIG_DIR`,
+`CLAUDE_CODE_DISABLE_CLAUDE_MDS`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`,
+`GOCACHE`, `GOMODCACHE` and `GOFLAGS` (`internal/host/env.go`). A launch
+that sets any other name is refused, so a proxy or locale variable the
+claude binary turns out to need is a reviewed code change. On Linux no
+value goes on a command line, where sudo and systemd-run would show it to
+every local account for the whole run (goodqa#15177). fabd writes the pairs
+to `<run dir>/.fab-env-<run>` (mode 0640, new file, never through a
+symlink), every allow-listed name is blanked with `systemd-run -E NAME=`
+(so the manager's value is overridden), and `fab __sandbox --env-keep
+<names> --env-file <file>` reads the file, checks that it names exactly
+those names, removes it and execs the worker with only those pairs. fabd
+removes the file after the run if the worker never read it. The run
+directory's group must include the worker account, as the setgid
+`/srv/fabric/work` tree gives it. The worker is a static fab
+(`CGO_ENABLED=0`, see Deploying).
+
+A claude-code launch always passes `--setting-sources ""`, so no user or
+project settings load. The `--settings` file may hold only `permissions`,
+`hooks` and `model`, and each hook only `type: command`, `command` and
+`timeout` (keys are matched exactly, as Claude Code reads them). Each hook
+command must be a single absolute path under `FABRIC_HOOKS_DIR`, both as
+written and once symlinks are resolved. The worker user must be unable to
+change the settings file, the hooks directory, each hook, or any directory
+or symlink on the way to them: a file or directory owned by the worker or
+writable by group or others (a directory may be writable only if it is
+sticky and owned by root, like `/tmp`), or a symlink not owned by root or
+fabric, refuses the launch. This matters because Claude Code reloads an
+edited settings file in a running session. Managed settings apply whatever
+`--setting-sources` says, so fabric also reads `managed-settings.json`,
+every `managed-settings.d/*.json` and `managed-mcp.json` under
+`/etc/claude-code` (Linux) or `/Library/Application Support/ClaudeCode`
+(macOS). Any of these refuses the launch: an env block; a credential or
+command helper (including `policyHelper`, `processWrapper` and the
+`sandbox` binary paths); managed hooks, plugins or MCP servers (a managed
+MCP server would inherit the worker's `FABRIC_DSN`); or a file that cannot
+be read or parsed. A missing file is fine. The macOS managed-preferences
+profile and server-managed settings are not read; both are controlled by
+the machine's or organisation's administrators.
+
+On Linux, workers start with `systemd-run --expand-environment=no`, so the
+user manager never substitutes `$VAR` in a worker's arguments (a prompt
+included). That flag needs systemd 254 or later; an older systemd rejects
+it and the start fails.
+
+### Upgrades in lockstep
+
+A binary refuses to open or migrate a database that holds a migration it
+does not embed, and names its own latest migration and the foreign one.
+This is checked at start-up only: a long-running process keeps going, and
+for 0026 the `attempts.path` trigger stops an older fabd. Every later
+migration therefore stops every binary built before it, worker-side `fab`
+calls included, until that binary is upgraded too. Upgrade all binaries
+on a host together.
+
+### Database connection
+
+`FABRIC_DSN` must be a direct connection or a session-mode pooler, never
+a transaction-pooling pgbouncer. The host reconcile lock (held by fabd and
+`fab reconcile`) and each native attempt's agent-run lock are session
+advisory locks. Behind transaction pooling they exclude no one: two
+reconcilers could run at once, and a second native process could run the
+same attempt.
+
 ## Operator actions
 
 Some states wait for a human on purpose. Clearing them needs an explicit
@@ -166,6 +276,14 @@ at all. An operator-only role for these commands is follow-up work.
   quarantined attempt stays QUARANTINED: nothing checks by machine that its
   runner is gone, so check the host before unpausing. An older binary refuses to write to a
   mission whose log has a `MISSION_UNPAUSED` event, so roll back with care.
+- **Operator reconcile.** `fab reconcile` runs one reconcile pass for this
+  host, under the host reconcile lock (exit 3 while fabd or another pass
+  holds it). Its commands stay under actor `fabd`, so a pass and fabd replay
+  each other. To tell the operator pass apart, it writes one stderr line,
+  `fab reconcile: operator pass host=<host> actor="<FABRIC_ACTOR>" pid=<pid>
+  expired=<n> quarantined=<n>`, and adds one to
+  `fabric_sched_counter_total{name="reconcile_operator_passes_total"}`. A
+  refused or failed pass writes no such line and does not count.
 - **Final admission.** Every launch, gated or not, rechecks the attempt's
   fence, lease and intent revision against the database clock just before
   the runner starts. A database error at that moment abandons the attempt
@@ -183,6 +301,70 @@ at all. An operator-only role for these commands is follow-up work.
 - macOS cannot see the environment of Apple platform binaries; attribution
   uses an inherited descriptor as a second signal, and a platform binary that
   calls `setsid` and closes inherited descriptors is still invisible.
+- A macOS worker runs as fabd's own user, so its file, process-info and
+  network access is limited by the Seatbelt profile (goodqa#15161):
+  - `HOME` must be an absolute directory other than `/`, or the launch is
+    refused;
+  - every read under `$HOME`, under the account's directory-service home
+    (an overridden `HOME` does not move it) and under `/Users` is denied.
+    Reads are also denied in the directories holding other runs and other
+    missions' worktrees, unless the work root sits in a shared temp
+    directory. Only the run's directory, its worktree and the reviewed
+    launch inputs are allowed back. The secret paths stay denied even
+    inside those;
+  - the ancestors of what is allowed back can still be stat'ed (metadata
+    only), so git, `realpath` and Node can canonicalise paths;
+  - the launch inputs are the provider's installed directory (after
+    symlinks), `FABRIC_HOOKS_DIR`, the schema file and any extra absolute
+    paths in `FABRIC_DARWIN_EXTRA_RO` (for example nvm's node directory
+    when `claude` is an npm install). An entry is refused when it is `/`,
+    a home, an account's home under `/Users`, or a directory holding a
+    home, the directory of other runs, or a secret path (so not
+    `~/.config`, `~/Library`, `~/.docker` or `~/.config/fabric`). Each
+    launch resolves the provider name again and runs the resolved file,
+    not a symlink in a denied bin directory, so a provider update that
+    repoints the symlink is followed; a name that does not resolve (or a
+    symlink that cannot be followed) refuses that launch by name, never
+    falling back to the symlink or an older file. The control
+    `provider_starts_under_profile` runs the file resolved at fabd start
+    with `--version`. If `--provider` does not resolve to a file when fabd
+    starts, `fab daemon` refuses to start (`provider "…" cannot be
+    resolved to a file; refusing to start fabd`), on every host and even
+    with `--trust-provider`, so an unresolvable provider can never
+    silently skip the control (with `--trust-provider` the containment
+    gate, this control included, is skipped by design). The read-allow-back
+    directory and the control's file are fixed when fabd starts: restart
+    fabd after moving the provider install to another directory. Any other
+    tool on `PATH` under a home is unreadable, so install toolchains
+    outside `$HOME` or list them there;
+  - the worker's git uses the run's own global config
+    (`GIT_CONFIG_GLOBAL`), because git exits on a denied `~/.gitconfig`;
+  - reading other processes' arguments or environment (process info and
+    `kern.procargs2`) is denied;
+  - network is denied except outbound TCP to 443 and the database ports of
+    `FABRIC_DSN` and the runner DSN (5432 when a postgres URL names no
+    port), plus the DNS resolver socket. Seatbelt filters by port, not
+    host, so any host on those ports is reachable; that is port-scoped,
+    not mediated, egress. Unix-domain sockets are denied too, so tools
+    that use a path socket for their own IPC (gpg-agent, ssh
+    ControlMaster, some language servers) fail. An empty port list means
+    443 on macOS but no TCP at all on Linux;
+  - the profile is still allow-default for mach IPC, signals and launchd:
+    a worker that asks launchd or LaunchServices to start a process gets
+    an unsandboxed one, and it can signal fabd. These denies are
+    goodqa#15196.
+  The negative controls check a sample of this on the host before an
+  untrusted provider runs:
+  - `home_reads_default_denied`: canaries in each home are unreadable, and
+    a run-dir file is readable in the same run;
+  - `network_limited_to_allowed_ports`: an allowed loopback port is
+    reached and another is refused;
+  - `launch_inputs_readable`: every launch input is readable;
+  - `provider_starts_under_profile`: the provider starts with `--version`.
+  The unit test `TestDarwinProfileDefaultDeny` covers the rest:
+  `kern.procargs2`, unix sockets, git with the worker's environment in a
+  worktree under a home that holds a `.gitconfig`, and the sibling and
+  allow-back boundaries.
 - The grant is an in-process struct, not a signed envelope; there is no
   separate host agent yet; the worker still carries a runner database DSN
   (asks and effects).
@@ -199,6 +381,15 @@ at all. An operator-only role for these commands is follow-up work.
   database directly until the runner-role restrictions (migration 0017,
   `fab db roles`) pass independent review. Runners must connect as the
   runner role (`FABRIC_RUNNER_DSN`), never as the app or owner role.
+  Fabd hands a worker only that login, checked as a runner role before the
+  first launch whether or not `--hold` is set; without it the worker gets
+  no `FABRIC_DSN` at all, never fabd's own (goodqa#15173). The check
+  refuses a runner login holding any write on any table beyond the
+  runner's list (column grants, DELETE, TRUNCATE and TRIGGER included), or
+  CREATE in the schema (goodqa#15167). Only the owner writes `fabric_schema`
+  (0029, goodqa#15163), and every function runs with a pinned
+  `search_path` that searches `pg_temp` last, so a session's temporary
+  table cannot shadow a table a trigger reads (0029, goodqa#15164).
   Since 0018 a runner may only submit, dispatch, settle and retry effects
   for a running attempt, request jobs for one, and raise open asks; approval,
   effect readback and answers need the app role. These guards bind the
@@ -230,17 +421,34 @@ Go 1.22, `pgx/v5` and `x/sys` only.
 1. Back up the database first (`pg_dump -Fc`), check the dump with
    `pg_restore --list`, and keep the previous `fab` binary for rollback.
 2. Build from a fresh `git clone` checked out at the release commit, with
-   `go build -buildvcs=true -o <path> ./cmd/fab`. Check that `git status
-   --porcelain` is empty and that `<path> version` prints the commit's
-   12-character prefix; refuse to install a build that prints `devel` or
-   ends in `-dirty`. We observed a build from a `git worktree` checkout
+   `CGO_ENABLED=0 go build -buildvcs=true -o <path> ./cmd/fab`. Check that
+   `git status --porcelain` is empty, that `go version -m <path>` shows
+   `build CGO_ENABLED=0` (a worker is a static fab, so it loads no shared
+   library a worker-user environment could redirect), and that `<path>
+   version` prints the commit's 12-character prefix; refuse to install a
+   build that fails any of these, prints `devel` or ends in `-dirty`. We observed a build from a `git worktree` checkout
    (Go 1.22.2) print `devel`; the version check catches it either way.
-3. Stop anything using the database, then run `fab migrate` as the owner.
+3. Stop anything using the database, fabd included, before installing the
+   new binary (a running fabd launches workers through the installed `fab`,
+   and an old fabd with a new `fab` fails every start), then run
+   `fab migrate` as the owner.
 4. Run `fab db roles` as the owner after every migration, with the same
    password files, so the app and runner roles are granted the new tables;
    without it the app role gets `permission denied` (SQLSTATE 42501).
+   `fab db roles` applies everything in one transaction, so a failed run
+   changes nothing; rerun it after fixing the cause. Since 0029, fabd
+   refuses to start a worker when the runner login holds any grant that
+   `fab db roles` does not give, so skipping this step after an upgrade
+   that changed the runner's grants stops every launch.
 5. Restart, then smoke test: `fab version` and `fab metrics` (exit 0, and
    `fabric_schema_level` is the newest migration).
+
+`fab daemon` (fabd) is deliberately not installed as a service on a Linux
+live host. It stays that way until the worker sandbox passes re-review (see
+Known limits). Live checks run a bounded daemon by hand against the
+recorded fake worker and stop it afterwards. A mission whose attempt
+was quarantined during such a check keeps its slot until an operator
+checks the host and runs `fab release` or `fab unpause`.
 
 Rollback: stop everything using the database, reinstall the previous
 binary, and restore the dump, either into the same database with

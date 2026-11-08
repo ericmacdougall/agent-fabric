@@ -97,7 +97,7 @@ func TestLiveTestNeedsDeployAndCurrentCandidate(t *testing.T) {
 func TestDoneRefusedWhileAttemptLive(t *testing.T) {
 	f, id, gen := deliveredMission(t)
 	mustStep(t, f, liveTest(id, gen, "sha_a"))
-	mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_9", Host: "h_t2", Role: "reviewer"})
+	mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_9", Host: "h_t2", Role: "reviewer"})
 	if _, err := f.step(t, domain.Command{Kind: domain.CmdCompleteMission, Mission: id}); !errors.Is(err, domain.ErrAttemptLive) {
 		t.Fatalf("done with a live attempt: %v, want ErrAttemptLive", err)
 	}
@@ -136,7 +136,7 @@ func TestRevisedIntentClearsLiveTest(t *testing.T) {
 	if m.LiveTest != nil || m.Delivery == domain.DelivLiveVerified || m.Delivery == domain.DelivDelivered || m.DeliveredGeneration != nil {
 		t.Fatalf("after a revised intent: live test %+v, delivery %s, delivered %v", m.LiveTest, m.Delivery, m.DeliveredGeneration)
 	}
-	ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "writer"})
+	ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "writer"})
 	mustStep(t, f, domain.Command{Kind: domain.CmdAckStart, Mission: id, Attempt: "r_2", Fence: ev[0].Fence})
 	reviewed(t, f, id, "r_2", ev[0].Fence, "rcpt_2")
 	mustStep(t, f, domain.Command{Kind: domain.CmdAccept, Mission: id, Attempt: "r_2"})

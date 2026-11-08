@@ -42,7 +42,7 @@ func (f *fleet) env(id domain.MissionID) Env {
 			used++
 		}
 	}
-	return Env{Cap: f.cap, SlotsUsed: used, Operator: true} // the fleet's commands come from the operator
+	return Env{Provider: domain.ProviderClaudeCode, Cap: f.cap, SlotsUsed: used, Operator: true} // the fleet's commands come from the operator
 }
 
 // step runs one command through Decide/Apply/Check exactly as the store does.
@@ -148,6 +148,7 @@ func randomCommand(r *rand.Rand, f *fleet, id domain.MissionID, step int) domain
 			c.Attempt = pickAttempt() // duplicate id
 		}
 		c.Host = "h_t2"
+		c.Path = domain.ProviderClaudeCode
 		c.Role = []string{"writer", "reviewer"}[r.Intn(2)]
 	case 2:
 		c.Kind = domain.CmdAckStart
@@ -440,7 +441,7 @@ func startedMission(t *testing.T) (*fleet, domain.MissionID, domain.AttemptID, i
 	id := domain.MissionID("m_0")
 	mustStep(t, f, domain.Command{Kind: domain.CmdAdmitMission, Mission: id})
 	mustStep(t, f, domain.Command{Kind: domain.CmdSelectCandidate, Mission: id, Head: "sha_a"})
-	ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_1", Host: "h_t2", Role: "writer"})
+	ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_1", Host: "h_t2", Role: "writer"})
 	fence := ev[0].Fence
 	mustStep(t, f, domain.Command{Kind: domain.CmdAckStart, Mission: id, Attempt: "r_1", Fence: fence})
 	return f, id, "r_1", fence
@@ -505,12 +506,12 @@ func TestCapacityIsRefused(t *testing.T) {
 
 func TestPerMissionLiveAttemptsBounded(t *testing.T) {
 	f, id, _, _ := startedMission(t)
-	mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "reviewer"})
-	_, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_3", Host: "h_t2", Role: "writer"})
+	mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "reviewer"})
+	_, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_3", Host: "h_t2", Role: "writer"})
 	if !errors.Is(err, domain.ErrAttemptLive) {
 		t.Fatalf("second writer: want ErrAttemptLive, got %v", err)
 	}
-	if _, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_4", Host: "h_t2", Role: "reviewer"}); !errors.Is(err, domain.ErrAttemptLive) {
+	if _, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_4", Host: "h_t2", Role: "reviewer"}); !errors.Is(err, domain.ErrAttemptLive) {
 		t.Fatalf("second reviewer: want ErrAttemptLive, got %v", err)
 	}
 }
@@ -593,13 +594,13 @@ func TestUnknownAttemptBlocksRelaunch(t *testing.T) {
 	if f.missions[id].Attempts[a].State != domain.AttemptUnknown {
 		t.Fatal("expired lease should be UNKNOWN")
 	}
-	_, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "writer"})
+	_, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "writer"})
 	if !errors.Is(err, domain.ErrUnknownUnresolved) {
 		t.Fatalf("relaunch during UNKNOWN: want ErrUnknownUnresolved, got %v", err)
 	}
 	// A message with the dead fence is still refused after reconciliation.
 	mustStep(t, f, domain.Command{Kind: domain.CmdReconcileAttempt, Mission: id, Attempt: a, Fence: fence, Result: "FAILED_DEFINITE"})
-	ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "writer"})
+	ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "writer"})
 	if ev[0].Fence != fence+1 {
 		t.Fatalf("new fence %d, want %d", ev[0].Fence, fence+1)
 	}
@@ -733,7 +734,7 @@ func TestReadyForReviewArbitration(t *testing.T) {
 		// Reconcile and start a fresh attempt for the next case; carry evidence over by re-recording.
 		mustStep(t, f, domain.Command{Kind: domain.CmdReconcileAttempt, Mission: id, Attempt: a, Fence: fence, Result: "VERIFIED"})
 		a = domain.AttemptID(string(a) + "x")
-		ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: a, Host: "h_t2", Role: "writer"})
+		ev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: a, Host: "h_t2", Role: "writer"})
 		fence = ev[0].Fence
 		mustStep(t, f, domain.Command{Kind: domain.CmdAckStart, Mission: id, Attempt: a, Fence: fence})
 		cur("rcpt_vac", true)

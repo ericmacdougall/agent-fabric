@@ -18,9 +18,19 @@ import (
 // DSN is the per-process test database, valid inside m.Run.
 var DSN string
 
+// ChildDSNEnv names the variable a test sets for a child process it starts
+// (a re-run of its own test binary), so the child uses the parent's
+// database instead of creating its own. A child must not call Open, which
+// empties the database.
+const ChildDSNEnv = "FABRIC_STORETEST_CHILD_DSN"
+
 // Main creates and migrates fabric_<prefix>_<pid>, runs the tests and drops
 // it. Call it as os.Exit(storetest.Main(m, "imp")) from TestMain.
 func Main(m *testing.M, prefix string) int {
+	if child := os.Getenv(ChildDSNEnv); child != "" {
+		DSN = child // a test's child process: the parent owns the database
+		return m.Run()
+	}
 	admin := os.Getenv("FABRIC_TEST_DSN")
 	if admin == "" {
 		fmt.Fprintln(os.Stderr, "FABRIC_TEST_DSN is not set: these tests require a disposable Postgres")

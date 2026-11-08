@@ -15,7 +15,7 @@ type Launch struct {
 	Binary          string   // path to the claude CLI
 	Prompt          string   // the compact checkpoint
 	SessionID       string   // fabric-minted uuid; "" lets the CLI mint one
-	SettingSources  string   // e.g. "user" during migration, "" for none
+	SettingSources  string   // must be "": no user or project settings source (goodqa#15087 AC-6)
 	SettingsPath    string   // worker profile settings file
 	BriefPath       string   // --append-system-prompt-file
 	SchemaPath      string   // --json-schema; when set, a result without structured_output is abandoned
@@ -24,6 +24,15 @@ type Launch struct {
 	StrictMCP       bool
 	DisableSlash    bool
 	PermissionMode  string
+	HooksDir        string // FABRIC_HOOKS_DIR: the only place a --settings hook may run from
+	WorkerUID       *int   // the worker account; it must not own the hooks
+	ManagedRoot     string // managed-settings directory; "" is the system one
+	// Resolve, when set, maps Binary to the file to exec at each launch;
+	// "" refuses the launch, never falls back to Binary. fabd resolves symlinks per launch, so a provider
+	// update that repoints the symlink and prunes old versions is followed
+	// (goodqa#15161 review N1) while the launch never execs through a
+	// symlink in a directory the Darwin profile denies (review C).
+	Resolve func(string) string
 }
 
 // Argv builds the launch line from the grant and the launch config. It is the
@@ -36,11 +45,30 @@ func Argv(g host.Grant, l Launch) (argv []string, env []string, err error) {
 	if l.Binary == "" || l.Prompt == "" {
 		return nil, nil, fmt.Errorf("%w: launch needs a binary and a prompt", host.ErrGrantInvalid)
 	}
+	if l.SettingSources != "" {
+		return nil, nil, refuse("setting sources %q: a worker loads no user or project settings", l.SettingSources)
+	}
+	if err := CheckManaged(l.ManagedRoot); err != nil {
+		return nil, nil, err
+	}
+	if l.SettingsPath != "" {
+		if err := CheckSettingsFile(l.SettingsPath, l.HooksDir, l.WorkerUID); err != nil {
+			return nil, nil, err
+		}
+	}
 	mode := l.PermissionMode
 	if mode == "" {
 		mode = "acceptEdits"
 	}
-	argv = []string{l.Binary, "-p", l.Prompt,
+	bin := l.Binary
+	if l.Resolve != nil {
+		// Never fall back to a stale or unresolved path: a provider that
+		// cannot be resolved now refuses this launch with a named cause.
+		if bin = l.Resolve(l.Binary); bin == "" {
+			return nil, nil, fmt.Errorf("%w: provider %q cannot be resolved to a file now (missing, or removed by an update); refusing the launch", host.ErrGrantInvalid, l.Binary)
+		}
+	}
+	argv = []string{bin, "-p", l.Prompt,
 		"--output-format", "stream-json", "--verbose",
 		"--model", g.Model, "--effort", g.Effort,
 		"--max-turns", strconv.Itoa(g.MaxTurns),
@@ -51,11 +79,7 @@ func Argv(g host.Grant, l Launch) (argv []string, env []string, err error) {
 	if l.SessionID != "" {
 		argv = append(argv, "--session-id", l.SessionID)
 	}
-	if l.SettingSources != "" {
-		argv = append(argv, "--setting-sources", l.SettingSources)
-	} else {
-		argv = append(argv, "--setting-sources", "")
-	}
+	argv = append(argv, "--setting-sources", "")
 	if l.SettingsPath != "" {
 		argv = append(argv, "--settings", l.SettingsPath)
 	}
@@ -85,6 +109,10 @@ func Argv(g host.Grant, l Launch) (argv []string, env []string, err error) {
 		"CLAUDE_CONFIG_DIR=" + g.RunDir + "/claude-config",
 		"XDG_CACHE_HOME=" + g.RunDir + "/cache",
 		"XDG_CONFIG_HOME=" + g.RunDir + "/config",
+		// goodqa#15161 review A: git reads ~/.gitconfig even with
+		// XDG_CONFIG_HOME set, and dies when the Darwin profile denies it
+		// (EPERM is not "missing"). The global config is the run's own.
+		"GIT_CONFIG_GLOBAL=" + g.RunDir + "/config/git/config",
 		"GOCACHE=" + g.RunDir + "/cache/go-build",
 		"GOMODCACHE=" + g.RunDir + "/cache/gomod",
 		"GOFLAGS=-modcacherw",
@@ -94,4 +122,18 @@ func Argv(g host.Grant, l Launch) (argv []string, env []string, err error) {
 		"FAB_FENCE=" + strconv.FormatInt(g.Fence, 10),
 	}
 	return argv, env, nil
+}
+
+// ProductionLaunch is the launch configuration fabd uses for every
+// claude-code worker (cmd/fab job), shared so the AC-6 (f) live check runs
+// exactly the production argv.
+func ProductionLaunch(binary, schemaPath, hooksDir string) Launch {
+	return Launch{
+		Binary:          binary,
+		SchemaPath:      schemaPath,
+		HooksDir:        hooksDir,
+		StrictMCP:       true,
+		DisableSlash:    true,
+		DisallowedTools: []string{"Agent", "Workflow", "AskUserQuestion", "WebFetch", "WebSearch"},
+	}
 }

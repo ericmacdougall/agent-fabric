@@ -12,14 +12,14 @@ import (
 // admitted, parked, idle mission holding a slot: it is re-parked to BLOCKED.
 func TestUnpauseOfParkedMissionFreesTheSlot(t *testing.T) {
 	f, id, writer, wfence := startedMission(t)
-	rev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_rev", Host: "h_t2", Role: "reviewer"})
+	rev := mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_rev", Host: "h_t2", Role: "reviewer"})
 	rfence := rev[0].Fence
 	mustStep(t, f, domain.Command{Kind: domain.CmdAckStart, Mission: id, Attempt: "r_rev", Fence: rfence})
 	for n := 1; n <= domain.PrelaunchBudget; n++ {
 		mustStep(t, f, domain.Command{Kind: domain.CmdFinishAttempt, Mission: id, Attempt: writer, Fence: wfence, Outcome: "abandoned", Prelaunch: true, Reason: "dispatch denied"})
 		if n < domain.PrelaunchBudget {
 			writer = domain.AttemptID("r_w" + string(rune('a'+n)))
-			wfence = mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: writer, Host: "h_t2", Role: "writer"})[0].Fence
+			wfence = mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: writer, Host: "h_t2", Role: "writer"})[0].Fence
 		}
 	}
 	mustStep(t, f, domain.Command{Kind: domain.CmdExpireLease, Mission: id, Attempt: "r_rev", Fence: rfence})
@@ -39,10 +39,10 @@ func TestUnpauseOfParkedMissionFreesTheSlot(t *testing.T) {
 func TestUnpauseRefusedWithUnsettledEffects(t *testing.T) {
 	m := domain.Mission{ID: "m_ue", Terminal: domain.TermNone, Execution: domain.ExecPaused}
 	cmd := domain.Command{Kind: domain.CmdUnpauseMission, Mission: "m_ue", Reason: "checked"}
-	if _, err := Decide(m, cmd, Env{Cap: 4, Operator: true, UnsettledEffects: 1}); !errors.Is(err, domain.ErrInvalidTransition) {
+	if _, err := Decide(m, cmd, Env{Provider: domain.ProviderClaudeCode, Cap: 4, Operator: true, UnsettledEffects: 1}); !errors.Is(err, domain.ErrInvalidTransition) {
 		t.Errorf("unpause with an unsettled effect was accepted: %v", err)
 	}
-	if _, err := Decide(m, cmd, Env{Cap: 4, Operator: true}); err != nil {
+	if _, err := Decide(m, cmd, Env{Provider: domain.ProviderClaudeCode, Cap: 4, Operator: true}); err != nil {
 		t.Errorf("unpause with no unsettled effects was refused: %v", err)
 	}
 }

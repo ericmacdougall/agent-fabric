@@ -152,6 +152,17 @@ func TestArgvFromGrantOnly(t *testing.T) {
 	if !contains(env, "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1") || !contains(env, "FAB_RUN="+g.Token) {
 		t.Fatalf("env: %v", env)
 	}
+	// goodqa#15161 review A: git's global config is the run's own, so a
+	// denied ~/.gitconfig never reaches git (host test workerGitEnv mirrors
+	// these three lines).
+	for _, want := range []string{"XDG_CONFIG_HOME=" + g.RunDir + "/config", "GIT_CONFIG_GLOBAL=" + g.RunDir + "/config/git/config"} {
+		if !contains(env, want) {
+			t.Fatalf("env lacks %s: %v", want, env)
+		}
+	}
+	if _, _, err := host.WorkerEnv(env); err != nil {
+		t.Fatalf("launch env not on the worker allow-list: %v", err)
+	}
 	g.Model = ""
 	if _, _, err := Argv(g, l); err == nil {
 		t.Fatal("grant without a model produced a launch line (R23)")
@@ -160,6 +171,33 @@ func TestArgvFromGrantOnly(t *testing.T) {
 	g.Profile = "P2"
 	if _, _, err := Argv(g, l); err == nil {
 		t.Fatal("profile the host does not offer was accepted")
+	}
+}
+
+// goodqa#15161 review N1: the binary is resolved at each launch, so a
+// provider update that repoints the symlink is followed; an unresolvable
+// provider refuses the launch with a named cause, never the stale path.
+func TestArgvResolvesBinaryPerLaunch(t *testing.T) {
+	g := validGrant(t)
+	target := "/opt/claude/versions/1"
+	l := Launch{Binary: "claude", Prompt: "checkpoint", Resolve: func(b string) string {
+		if b != "claude" {
+			t.Fatalf("Resolve got %q, want the configured name", b)
+		}
+		return target
+	}}
+	argv, _, err := Argv(g, l)
+	if err != nil || argv[0] != "/opt/claude/versions/1" {
+		t.Fatalf("first launch argv[0]=%q err=%v", argv[0], err)
+	}
+	target = "/opt/claude/versions/2"
+	if argv, _, _ = Argv(g, l); argv[0] != "/opt/claude/versions/2" {
+		t.Fatalf("second launch did not follow the repointed provider: %q", argv[0])
+	}
+	target = ""
+	argv, _, err = Argv(g, l)
+	if err == nil || argv != nil || !strings.Contains(err.Error(), "cannot be resolved") {
+		t.Fatalf("unresolvable provider launched or refused without the cause: argv=%v err=%v", argv, err)
 	}
 }
 

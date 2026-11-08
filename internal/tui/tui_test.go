@@ -69,14 +69,14 @@ func exec(t *testing.T, pool *pgxpool.Pool, qs ...string) {
 
 func seed(t *testing.T, pool *pgxpool.Pool) {
 	exec(t, pool,
-		`INSERT INTO missions (id, ticket, execution, terminal, state, created_at) VALUES
-			('m_1', 'goodqa#1 build the thing', 'RUNNING', 'NONE', '{}', '2026-01-01T00:00:00Z'),
-			('m_2', 'goodqa#2 write the docs', 'IDLE', 'NONE', '{}', '2026-01-01T00:05:00Z'),
-			('m_3', 'goodqa#3 shipped', 'IDLE', 'SUCCEEDED', '{}', '2025-12-30T00:00:00Z')`,
-		`INSERT INTO attempts (id, mission_id, fence, revision, generation, state, lease_until) VALUES
-			('a_1', 'm_1', 1, 0, 0, 'RUNNING', '2100-01-01T00:00:00Z'),
-			('a_2', 'm_2', 1, 0, 0, 'LEASED', '2026-01-01T00:07:00Z'),
-			('a_3', 'm_3', 1, 0, 0, 'ENDED', NULL)`,
+		`INSERT INTO missions (id, ticket, execution, terminal, state, created_at, provider) VALUES
+			('m_1', 'goodqa#1 build the thing', 'RUNNING', 'NONE', '{}', '2026-01-01T00:00:00Z', 'claude-code'),
+			('m_2', 'goodqa#2 write the docs', 'IDLE', 'NONE', '{}', '2026-01-01T00:05:00Z', 'claude-code'),
+			('m_3', 'goodqa#3 shipped', 'IDLE', 'SUCCEEDED', '{}', '2025-12-30T00:00:00Z', 'claude-code')`,
+		`INSERT INTO attempts (id, mission_id, fence, revision, generation, state, lease_until, path) VALUES
+			('a_1', 'm_1', 1, 0, 0, 'RUNNING', '2100-01-01T00:00:00Z', 'claude-code'),
+			('a_2', 'm_2', 1, 0, 0, 'LEASED', '2026-01-01T00:07:00Z', 'claude-code'),
+			('a_3', 'm_3', 1, 0, 0, 'ENDED', NULL, 'claude-code')`,
 		`INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state, dispatches, created_at, updated_at) VALUES
 			('e_1', 'm_1', 'a_1', 1, 'ticket_comment', 's1', 'k1', '{}', 'x', 'CONFIRMED', 1, '2026-01-01T00:00:30Z', '2026-01-01T00:01:00Z'),
 			('e_2', 'm_1', 'a_1', 1, 'publish', 's2', 'k2', '{}', 'x', 'QUARANTINED', 1, '2026-01-01T00:00:40Z', '2026-01-01T00:02:00Z'),
@@ -427,7 +427,7 @@ func TestHostileTextInert(t *testing.T) {
 	admin, s := open(t, 0)
 	q := strings.ReplaceAll(hostile, "'", "''")
 	exec(t, admin,
-		`INSERT INTO missions (id, ticket, execution, terminal, state) VALUES ('m_h', '`+q+`', 'RUNNING', 'NONE', '{}')`,
+		`INSERT INTO missions (id, ticket, execution, terminal, state, provider) VALUES ('m_h', '`+q+`', 'RUNNING', 'NONE', '{}', 'claude-code')`,
 		`INSERT INTO asks (id, mission_id, kind, question, source, state) VALUES ('k_h', 'm_h', 'decision', '`+q+`', 'user', 'open')`)
 	refresh(t, s)
 	var frames []string

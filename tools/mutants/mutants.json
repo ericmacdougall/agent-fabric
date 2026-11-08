@@ -4505,5 +4505,109 @@
     "prevFailed := false && run.End == EndFailed"
    ]
   ]
+ },
+ {
+  "id": "M350_k3_r1_daemon_skips_start_check",
+  "invariant": "provider_unresolvable_refuses_fabd_start",
+  "pkg": "./cmd/fab",
+  "file": "cmd/fab/job.go",
+  "expect": "TestDaemonRefusesUnresolvableProvider",
+  "edits": [
+   [
+    "\tdp, err := newDaemonProvider(*provider, schemaPath, hooksDir)\n\tif err != nil {\n\t\treturn err\n\t}\n",
+    "\tdp, _ := newDaemonProvider(*provider, schemaPath, hooksDir)\n"
+   ]
+  ]
+ },
+ {
+  "id": "M351_k3_r1_empty_resolution_accepted",
+  "invariant": "provider_unresolvable_refuses_fabd_start",
+  "pkg": "./cmd/fab",
+  "file": "cmd/fab/job.go",
+  "expect": "TestDaemonRefusesUnresolvableProvider",
+  "edits": [
+   [
+    "\tp := providerPath(provider)\n\tif p == \"\" {",
+    "\tp := providerPath(provider)\n\tif false {"
+   ]
+  ]
+ },
+ {
+  "id": "M352_k3_r3_resolve_not_wired",
+  "invariant": "production_launch_resolves_per_launch",
+  "pkg": "./cmd/fab",
+  "file": "cmd/fab/job.go",
+  "expect": "TestProductionLaunchResolvesPerLaunch",
+  "edits": [
+   [
+    "\tl.Resolve = providerPath\n",
+    "\t_ = providerPath\n"
+   ]
+  ]
+ },
+ {
+  "id": "M353_k3_r3_resolved_once_in_helper",
+  "invariant": "production_launch_resolves_per_launch",
+  "pkg": "./cmd/fab",
+  "file": "cmd/fab/job.go",
+  "expect": "TestProductionLaunchResolvesPerLaunch",
+  "edits": [
+   [
+    "\tl.Resolve = providerPath\n",
+    "\tpinned := providerPath(provider)\n\tl.Resolve = func(string) string { return pinned }\n"
+   ]
+  ]
+ },
+ {
+  "id": "M354_k3_r4_symlink_fallback",
+  "invariant": "provider_path_never_the_symlink",
+  "pkg": "./cmd/fab",
+  "file": "cmd/fab/sandbox_inputs.go",
+  "expect": "TestProviderPathRefusesUnresolvableSymlink",
+  "edits": [
+   [
+    "\tr, err := evalSymlinks(abs)\n\tif err != nil {\n\t\treturn \"\"\n\t}",
+    "\tr, err := evalSymlinks(abs)\n\tif err != nil {\n\t\treturn abs\n\t}"
+   ]
+  ]
+ },
+ {
+  "id": "M355_k3_n1_argv_stale_fallback",
+  "invariant": "production_launch_resolves_per_launch",
+  "pkg": "./internal/provider/claude",
+  "file": "internal/provider/claude/launch.go",
+  "expect": "TestArgvResolvesBinaryPerLaunch",
+  "edits": [
+   [
+    "\t\tif bin = l.Resolve(l.Binary); bin == \"\" {\n",
+    "\t\tif r := l.Resolve(l.Binary); r != \"\" {\n\t\t\tbin = r\n\t\t} else if false {\n"
+   ]
+  ]
+ },
+ {
+  "id": "M356_k3_s1_callsite_launch_pins_start_file",
+  "invariant": "production_launch_resolves_per_launch",
+  "pkg": "./cmd/fab",
+  "file": "cmd/fab/job.go",
+  "expect": "TestDaemonLaunchComesFromDaemonProvider",
+  "edits": [
+   [
+    "\tcfg.Launch = dp.Launch\n",
+    "\tcfg.Launch = productionLaunch(dp.Path, schemaPath, hooksDir)\n"
+   ]
+  ]
+ },
+ {
+  "id": "M357_k3_s1_helper_launch_pins_start_file",
+  "invariant": "production_launch_resolves_per_launch",
+  "pkg": "./cmd/fab",
+  "file": "cmd/fab/job.go",
+  "expect": "TestNewDaemonProvider",
+  "edits": [
+   [
+    "Launch: productionLaunch(operator, schemaPath, hooksDir)}",
+    "Launch: productionLaunch(p, schemaPath, hooksDir)}"
+   ]
+  ]
  }
 ]

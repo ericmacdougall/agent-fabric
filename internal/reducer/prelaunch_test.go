@@ -19,7 +19,7 @@ func TestPrelaunchBackoffAndPark(t *testing.T) {
 			if len(last) != 2 || last[1].Kind != domain.EvDispatchDeferred || last[1].BackoffMS != domain.PrelaunchBackoffMS(n) || m.PrelaunchFailures != n {
 				t.Fatalf("failure %d: events %+v, count %d", n, last, m.PrelaunchFailures)
 			}
-			mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: domain.AttemptID("r_" + string(rune('a'+n))), Host: "h_t2", Role: "writer"})
+			mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: domain.AttemptID("r_" + string(rune('a'+n))), Host: "h_t2", Role: "writer"})
 			a = domain.AttemptID("r_" + string(rune('a'+n)))
 			fence = f.missions[id].Version.AttemptFence
 		}
@@ -28,7 +28,7 @@ func TestPrelaunchBackoffAndPark(t *testing.T) {
 	if last[len(last)-1].Kind != domain.EvMissionParked || m.Execution != domain.ExecBlocked || m.ParkedReason == "" {
 		t.Fatalf("after %d: %+v, execution %s", domain.PrelaunchBudget, last, m.Execution)
 	}
-	if _, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_after", Host: "h_t2", Role: "writer"}); err == nil {
+	if _, err := f.step(t, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_after", Host: "h_t2", Role: "writer"}); err == nil {
 		t.Fatal("a parked mission started an attempt")
 	}
 	mustStep(t, f, domain.Command{Kind: domain.CmdAdmitMission, Mission: id, Reason: "fixed the dispatch"})
@@ -40,7 +40,7 @@ func TestPrelaunchBackoffAndPark(t *testing.T) {
 func TestLaunchedFinishResetsPrelaunchCount(t *testing.T) {
 	f, id, a, fence := startedMission(t)
 	mustStep(t, f, domain.Command{Kind: domain.CmdFinishAttempt, Mission: id, Attempt: a, Fence: fence, Outcome: "abandoned", Prelaunch: true, Reason: "hold refused"})
-	mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "writer"})
+	mustStep(t, f, domain.Command{Kind: domain.CmdStartAttempt, Path: domain.ProviderClaudeCode, Mission: id, Attempt: "r_2", Host: "h_t2", Role: "writer"})
 	mustStep(t, f, domain.Command{Kind: domain.CmdFinishAttempt, Mission: id, Attempt: "r_2", Fence: f.missions[id].Version.AttemptFence, Outcome: "abandoned", Reason: "no structured output"})
 	if m := f.missions[id]; m.PrelaunchFailures != 0 || m.DeferMS != 0 {
 		t.Fatalf("a finish from a launched runner kept the count: %+v", m)

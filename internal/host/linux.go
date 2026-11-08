@@ -46,8 +46,9 @@ type Linux struct {
 	// only; containment is not demonstrated).
 	User string
 
-	mu   sync.Mutex
-	cmds map[string]*exec.Cmd
+	mu       sync.Mutex
+	cmds     map[string]*exec.Cmd
+	envFiles map[string]string // unit -> environment file, removed after Wait
 }
 
 func (l *Linux) Name() string { return "linux-cgroup-landlock" }
@@ -86,18 +87,19 @@ func unitName(run string) string {
 	}, run) + ".service"
 }
 
-// Start launches argv under `systemd-run --user --pipe --wait` so the host
-// owns the worker's stdio, wraps it in `fab __sandbox`, and resolves the
-// unit's cgroup path before returning, so later inventory never needs the bus.
-func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.File) (Handle, error) {
-	if err := g.Validate(); err != nil {
-		return Handle{}, err
-	}
-	if l.Self == "" {
-		return Handle{}, errors.New("linux profile: Self (fab binary) not set")
-	}
-	unit := unitName(string(g.Run))
-	args := []string{"--user", "--pipe", "--wait", "--collect", "--quiet", "--unit", unit,
+// startArgs is the systemd-run argument list of a worker and the pairs to
+// write to envFile. The environment is exact (goodqa#15087 AC-6) and off
+// the command line (goodqa#15177): every allow-listed name is blanked with
+// -E NAME=, so no value the worker user's systemd manager holds survives,
+// and `fab __sandbox --env-keep NAMES --env-file FILE` execs the worker
+// with exactly the pairs in the file. No value appears in any argument.
+func (l *Linux) startArgs(g Grant, unit, envFile string, argv, env []string) ([]string, []string, error) {
+	// --expand-environment=no: otherwise the manager substitutes $VAR,
+	// ${VAR} and $$ in every argv element (the prompt included) from the
+	// unit's full environment before __sandbox filters it (inspection
+	// 6355639 F1). A systemd older than 254 rejects the flag, so the start
+	// fails closed rather than expanding.
+	args := []string{"--user", "--pipe", "--wait", "--collect", "--quiet", "--expand-environment=no", "--unit", unit,
 		"--working-directory=" + g.Worktree, "-p", "KillMode=control-group"}
 	for _, p := range []struct{ k, v string }{{"MemoryMax", l.MemoryMax}, {"CPUQuota", l.CPUQuota}, {"TasksMax", l.TasksMax}} {
 		if p.v != "" {
@@ -105,15 +107,19 @@ func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.F
 		}
 	}
 	// Explicit environment only (DESIGN 3.7): never the host's.
-	for _, e := range append([]string{"FAB_RUN=" + g.Token, "HOME=" + os.Getenv("HOME"), "PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"}, env...) {
-		args = append(args, "-E", e)
+	pairs, names, err := WorkerEnv(append([]string{"FAB_RUN=" + g.Token, "HOME=" + os.Getenv("HOME"), "PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"}, env...))
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, n := range WorkerEnvNames {
+		args = append(args, "-E", n+"=")
 	}
 	rw := []string{g.RunDir, os.TempDir()}
 	if g.Profile == "P1" {
 		rw = append(rw, g.Worktree) // review runs cannot write the worktree
 	}
 	rw = append(rw, l.ExtraRW...)
-	sandbox := []string{l.Self, "__sandbox"}
+	sandbox := []string{l.Self, "__sandbox", "--env-keep", strings.Join(names, ","), "--env-file", envFile}
 	for _, d := range l.ReadOnly {
 		sandbox = append(sandbox, "--ro", d)
 	}
@@ -129,18 +135,48 @@ func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.F
 	sandbox = append(sandbox, "--")
 	args = append(args, "--")
 	args = append(args, sandbox...)
-	args = append(args, argv...)
+	return append(args, argv...), pairs, nil
+}
+
+// envFile is where a run's environment waits for `fab __sandbox`: the run
+// directory, which the worker account reaches through its group.
+func envFile(g Grant) string { return filepath.Join(g.RunDir, ".fab-env-"+string(g.Run)) }
+
+// Start launches argv under `systemd-run --user --pipe --wait` so the host
+// owns the worker's stdio, wraps it in `fab __sandbox`, and resolves the
+// unit's cgroup path before returning, so later inventory never needs the bus.
+func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.File) (Handle, error) {
+	if err := g.Validate(); err != nil {
+		return Handle{}, err
+	}
+	if l.Self == "" {
+		return Handle{}, errors.New("linux profile: Self (fab binary) not set")
+	}
+	unit := unitName(string(g.Run))
+	ef := envFile(g)
+	args, pairs, err := l.startArgs(g, unit, ef, argv, env)
+	if err != nil {
+		return Handle{}, err
+	}
+	if err := WriteEnvFile(ef, pairs, l.User != ""); err != nil {
+		return Handle{}, err
+	}
 	cmd := l.asWorker("systemd-run", args...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.Stdin = nil
 	if err := cmd.Start(); err != nil {
+		os.Remove(ef)
 		return Handle{}, fmt.Errorf("systemd-run: %w", err)
 	}
 	l.mu.Lock()
 	if l.cmds == nil {
 		l.cmds = map[string]*exec.Cmd{}
 	}
+	if l.envFiles == nil {
+		l.envFiles = map[string]string{}
+	}
 	l.cmds[unit] = cmd
+	l.envFiles[unit] = ef
 	l.mu.Unlock()
 	// The unit's cgroup path is deterministic for a user unit, so inventory
 	// and stop never ask the bus; a unit that already finished has no
@@ -157,11 +193,15 @@ func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.F
 func (l *Linux) Wait(h Handle) (int, error) {
 	l.mu.Lock()
 	cmd := l.cmds[h.Unit]
+	ef := l.envFiles[h.Unit]
 	l.mu.Unlock()
 	if cmd == nil {
 		return -1, errors.New("unknown handle")
 	}
 	err := cmd.Wait()
+	if ef != "" {
+		os.Remove(ef) // normally already gone: __sandbox removes it on read
+	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return ee.ExitCode(), nil
@@ -257,8 +297,8 @@ func (l *Linux) Inventory(h Handle) ([]Process, error) {
 }
 
 // uidProcesses lists escapees: processes owned by the worker uid whose cgroup
-// is under the worker's user manager but is neither the run unit, a job unit,
-// the manager's bus nor its init scope. The sudo/systemd-run waiter chain the
+// is under the worker's user manager but is neither the run unit nor the
+// manager's own infrastructure (managerInfra). The sudo/systemd-run waiter chain the
 // daemon started lives in the daemon's own slice and is not counted.
 func uidProcesses(uid int, inside map[int]bool, runCGroup string) ([]Process, error) {
 	managerPrefix := fmt.Sprintf("/user.slice/user-%d.slice/user@%d.service/", uid, uid)
@@ -295,9 +335,8 @@ func uidProcesses(uid int, inside map[int]bool, runCGroup string) ([]Process, er
 		if !strings.HasPrefix(path, managerPrefix) || path == unitRel || strings.HasPrefix(path, unitRel+"/") {
 			continue // not under the worker manager (our waiter chain), or the run unit itself
 		}
-		rel := strings.TrimPrefix(path, managerPrefix)
-		if rel == "init.scope" || strings.HasPrefix(rel, "session.slice/") || strings.HasPrefix(rel, "app.slice/dbus") || strings.HasPrefix(rel, "app.slice/fab-job-") {
-			continue // manager infrastructure (init scope, session slice with the bus) and host-owned jobs
+		if managerInfra(strings.TrimPrefix(path, managerPrefix)) {
+			continue
 		}
 		if p, ok := procIdentity(pid); ok {
 			p.Escaped = true
@@ -305,6 +344,23 @@ func uidProcesses(uid int, inside map[int]bool, runCGroup string) ([]Process, er
 		}
 	}
 	return out, nil
+}
+
+// managerInfra reports whether a cgroup path, relative to the worker's user
+// manager, is the manager's own infrastructure rather than an escapee: its
+// init scope and its session bus service, matched exactly. Anything else,
+// whatever its name, is a unit the worker started (goodqa#15174, Kimi K2;
+// host jobs are disabled, so no fab-job unit is legitimate). A worker can
+// still start such a unit through its manager's bus; this detects it, and
+// denying the bus is goodqa#15160.
+func managerInfra(rel string) bool {
+	switch rel {
+	case "init.scope",
+		"session.slice/dbus.service", "session.slice/dbus-broker.service",
+		"app.slice/dbus.service", "app.slice/dbus-broker.service":
+		return true
+	}
+	return false
 }
 
 // tokenCarriers scans /proc for own-UID processes whose environment carries

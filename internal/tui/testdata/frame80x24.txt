@@ -1,5 +1,5 @@
 fab tui  00:10:00Z                                                              
-v-test s24 | missions 2/3 active | attempts 1 live 1 stale | asks 2
+v-test s26 | missions 2/3 active | attempts 1 live 1 stale | asks 2
 effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
 [Missions 3]  Attempts 2   Effects 3   Asks 2                                   
   ID             EXEC      TERM      AGE   SPENT/CAP     TICKET                 
@@ -23,7 +23,7 @@ effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
 
 j/k move  Enter open  Tab pane  / filter  q quit
 fab tui  00:10:00Z                                                              
-v-test s24 | missions 2/3 active | attempts 1 live 1 stale | asks 2
+v-test s26 | missions 2/3 active | attempts 1 live 1 stale | asks 2
 effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
  Missions 3  [Attempts 2]  Effects 3   Asks 2                                   
   ID             MISSION        STATE     FENCE LEASE                           
@@ -47,7 +47,7 @@ effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
 
 j/k move  Enter open  Tab pane  / filter  q quit
 fab tui  00:10:00Z                                                              
-v-test s24 | missions 2/3 active | attempts 1 live 1 stale | asks 2
+v-test s26 | missions 2/3 active | attempts 1 live 1 stale | asks 2
 effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
  Missions 3   Attempts 2  [Effects 3]  Asks 2                                   
   ID             MISSION        KIND           STATE       AGE   DISP           
@@ -71,7 +71,7 @@ effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
 
 j/k move  Enter open  Tab pane  / filter  q quit
 fab tui  00:10:00Z                                                              
-v-test s24 | missions 2/3 active | attempts 1 live 1 stale | asks 2
+v-test s26 | missions 2/3 active | attempts 1 live 1 stale | asks 2
 effects 1 unk 1 quar 1 rec | dispatch 0/8 0 late | month $0.25/$100.00
  Missions 3   Attempts 2   Effects 3  [Asks 2]                                  
   ID             MISSION        KIND       AGE   QUESTION                       

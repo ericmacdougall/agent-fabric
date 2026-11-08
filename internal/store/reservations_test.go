@@ -662,3 +662,122 @@ func TestHoldLivesAsLongAsItsAttempt(t *testing.T) {
 		t.Fatalf("%d EXPIRED, want 1 (the due one; the other is RELEASED)", c)
 	}
 }
+
+// goodqa#15123 (red-team B4): a spend hold is never RELEASED when its
+// attempt ends. A not-due one stays HELD (still counted against capacity)
+// and is EXPIRED once due, so the spend ledger charges it; a not-due spend
+// hold does not fill the sweep's limit ahead of other rows; other holds of
+// an ended attempt are still released (control).
+func TestSpendHoldNotReleasedOnEnd(t *testing.T) {
+	st, ctx := openTest(t)
+	const spendA, spendB = "spend.month.aa", "spend.run.bb"
+	for _, r := range []string{spendA, spendB, "ra"} {
+		capacity(t, st, ctx, r, 10)
+	}
+	// r_s1 sorts first, so under limit 1 its not-due spend hold would be the
+	// only row the pre-fix sweep picks.
+	f1 := liveAttempt(t, st, ctx, "m_s1", "r_s1")
+	if _, err := hold(st, ctx, "s1", "r_s1", f1, time.Minute, item(spendA, 4)); err != nil {
+		t.Fatal(err)
+	}
+	f2 := liveAttempt(t, st, ctx, "m_s2", "r_s2")
+	if _, err := hold(st, ctx, "s2", "r_s2", f2, 5*time.Second, item(spendB, 3), item("ra", 2)); err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range []struct {
+		m domain.MissionID
+		a domain.AttemptID
+		f int64
+	}{{"m_s1", "r_s1", f1}, {"m_s2", "r_s2", f2}} {
+		ok(t, st, ctx, "fabd", "fin-"+string(x.a), domain.Command{Kind: domain.CmdFinishAttempt, Mission: x.m,
+			Attempt: x.a, Fence: x.f, Outcome: "abandoned"})
+	}
+	if n, err := st.ExpireEndedReservations(ctx, 1); err != nil || n != 1 {
+		t.Fatalf("limit-1 sweep closed %d (%v), want 1: the non-spend hold of r_s2", n, err)
+	}
+	if c := count(t, st, ctx, `SELECT count(*) FROM reservations WHERE resource = 'ra' AND state = 'RELEASED'`); c != 1 {
+		t.Fatalf("the non-spend hold of an ended attempt was not released (%d)", c)
+	}
+	if n, err := st.ExpireEndedReservations(ctx, 10); err != nil || n != 0 {
+		t.Fatalf("sweep closed %d not-due spend holds (%v), want 0", n, err)
+	}
+	if c := count(t, st, ctx, `SELECT count(*) FROM reservations WHERE starts_with(resource, 'spend.') AND state = 'HELD'`); c != 2 {
+		t.Fatalf("%d spend holds HELD after their attempts ended, want 2 (none RELEASED)", c)
+	}
+	if h := held(t, st, ctx, spendA); h != 4 {
+		t.Fatalf("%s held %d, want 4 (the hold still counts against capacity)", spendA, h)
+	}
+	// Wait, by DB time, until spendB is due (inspection finding 4: no fixed
+	// sleep racing a short TTL).
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		var due bool
+		if err := st.pool.QueryRow(ctx, `SELECT expires_at <= clock_timestamp() FROM reservations WHERE resource = $1`, spendB).Scan(&due); err != nil {
+			t.Fatal(err)
+		}
+		if due {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("spendB never became due")
+		}
+	}
+	if n, err := st.ExpireEndedReservations(ctx, 10); err != nil || n != 1 {
+		t.Fatalf("sweep closed %d due spend holds (%v), want 1", n, err)
+	}
+	var state string
+	if err := st.pool.QueryRow(ctx, `SELECT state FROM reservations WHERE resource = $1`, spendB).Scan(&state); err != nil || state != ResExpired {
+		t.Fatalf("due spend hold of an ended attempt is %q (%v), want EXPIRED", state, err)
+	}
+	if c := count(t, st, ctx, `SELECT count(*) FROM reservations WHERE starts_with(resource, 'spend.') AND state = 'RELEASED'`); c != 0 {
+		t.Fatalf("%d spend holds RELEASED", c)
+	}
+}
+
+// goodqa#15124: the month key is database time in UTC.
+func TestDBMonth(t *testing.T) {
+	st, ctx := openTest(t)
+	m, err := st.DBMonth(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Against Go's UTC month of the DB clock, not the same SQL expression.
+	var dbNow time.Time
+	if err := st.pool.QueryRow(ctx, `SELECT now()`).Scan(&dbNow); err != nil {
+		t.Fatal(err)
+	}
+	if want := dbNow.UTC().Format("200601"); m != want {
+		t.Fatalf("DBMonth %q, want %q", m, want)
+	}
+}
+
+// goodqa#15123 (inspection finding 2): the store itself refuses to RELEASE
+// a spend hold, whoever asks, so the rule does not rest on the sweep alone.
+// A non-spend hold releases as before (control).
+func TestSpendHoldNeverReleased(t *testing.T) {
+	st, ctx := openTest(t)
+	capacity(t, st, ctx, "spend.job.cc", 10)
+	capacity(t, st, ctx, "ra", 10)
+	f := liveAttempt(t, st, ctx, "m_sr", "r_sr")
+	res, err := hold(st, ctx, "sr-1", "r_sr", f, time.Minute, item("spend.job.cc", 4), item("ra", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range res.Reservations {
+		got, err := st.Release(ctx, r.ID)
+		if r.Resource == "ra" {
+			if err != nil || !got.Changed {
+				t.Fatalf("release of a non-spend hold: %+v %v", got, err)
+			}
+			continue
+		}
+		if !errors.Is(err, domain.ErrInvalidTransition) {
+			t.Fatalf("release of a spend hold: %+v %v, want ErrInvalidTransition", got, err)
+		}
+	}
+	if c := count(t, st, ctx, `SELECT count(*) FROM reservations WHERE resource = 'spend.job.cc' AND state = 'HELD'`); c != 1 {
+		t.Fatalf("spend hold not HELD after a refused release (%d)", c)
+	}
+	if h := held(t, st, ctx, "spend.job.cc"); h != 4 {
+		t.Fatalf("spend capacity held %d, want 4", h)
+	}
+}
