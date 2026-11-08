@@ -10,6 +10,13 @@
 -- fabric_schema forward guard is unchanged, so an older binary refuses a
 -- database that holds this migration.
 
+-- Migrate applies each file in its own transaction, so SET LOCAL holds for
+-- this migration only. If a running binary holds a lock on attempts, the
+-- migration fails after 5 seconds (SQLSTATE 55P03) instead of queueing every
+-- other attempts reader and writer behind its ACCESS EXCLUSIVE request.
+-- Retry once the holder is gone (red-team K7).
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE public.attempts ADD COLUMN IF NOT EXISTS worktree text;
 
 -- domain.ValidWorktree mirrors this check. A NULL passes. A value is allowed
