@@ -20,7 +20,7 @@ import (
 func TestReconcileLockDropReplays(t *testing.T) {
 	ctx := context.Background()
 	st := storetest.Open(t)
-	s := New(st, Config{Host: hostA}, &fakeLauncher{st: st})
+	s := New(st, Config{Host: hostA, RunnerDSN: storetest.RunnerDSN(t, st)}, &fakeLauncher{st: st})
 	s.prober = goneProber()
 	s.RequireReconcileLock()
 	defer s.Close()

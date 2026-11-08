@@ -63,7 +63,7 @@ func TestReconcileExclusive(t *testing.T) {
 	t.Run("a a started scheduler holds the lock between ticks", func(t *testing.T) {
 		st := storetest.Open(t)
 		lapsedAttempt(t, st, "m_ra", "r_ra", hostA)
-		s := New(st, Config{Host: hostA}, &fakeLauncher{st: st})
+		s := New(st, Config{Host: hostA, RunnerDSN: storetest.RunnerDSN(t, st)}, &fakeLauncher{st: st})
 		s.RequireReconcileLock()
 		defer s.Close()
 		if _, err := s.Tick(ctx); err != nil {
@@ -101,7 +101,7 @@ func TestReconcileExclusive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s := New(st, Config{Host: hostA}, &fakeLauncher{st: st})
+		s := New(st, Config{Host: hostA, RunnerDSN: storetest.RunnerDSN(t, st)}, &fakeLauncher{st: st})
 		s.prober = goneProber()
 		s.RequireReconcileLock()
 		defer s.Close()

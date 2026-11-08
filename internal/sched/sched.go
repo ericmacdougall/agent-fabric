@@ -98,6 +98,7 @@ type Scheduler struct {
 	parked map[domain.MissionID]time.Time
 	cfgErr error // gateErr at New; Tick refuses to run with it
 	// runnerChecked: the RunnerDSN role passed CheckRunnerRole (G2).
+	runnerMu      sync.Mutex
 	runnerChecked bool
 	prober        Prober
 	lockProber    LockProber // native attempts' flock readback (goodqa#15087)
@@ -145,6 +146,11 @@ func New(st *store.Store, cfg Config, ln Launcher) *Scheduler {
 // out of range, or runners that would share the scheduler's database role
 // (N3). Nothing is silently capped.
 func (c Config) gateErr() error {
+	// Every launch, gated or not, needs the separate runner role: a worker
+	// must never run with the scheduler's FABRIC_DSN, nor with none at all.
+	if strings.TrimSpace(c.RunnerDSN) == "" {
+		return fmt.Errorf("sched: every launch needs a separate runner database role (RunnerDSN)")
+	}
 	if len(c.Holds) == 0 {
 		return nil
 	}
@@ -155,8 +161,6 @@ func (c Config) gateErr() error {
 		return fmt.Errorf("sched: wall %s is over half the hold cap %s", c.Wall, store.MaxHoldTTL)
 	case c.HoldTTL < store.MinHoldTTL || c.HoldTTL > store.MaxHoldTTL:
 		return fmt.Errorf("sched: hold ttl %s outside %s..%s", c.HoldTTL, store.MinHoldTTL, store.MaxHoldTTL)
-	case c.RunnerDSN == "":
-		return fmt.Errorf("sched: the dispatch gate needs a separate runner database role (RunnerDSN)")
 	}
 	return nil
 }
@@ -175,9 +179,29 @@ func (s *Scheduler) checkRunnerRole(ctx context.Context) error {
 	return nil
 }
 
+// ensureRunnerRole refuses any launch until the configured runner login has
+// passed CheckRunnerRole, gate or no gate (goodqa#15173): an owner or
+// scheduler login handed to a worker would give it the scheduler's
+// authority. Success is cached; a failure is retried next time, never skipped.
+func (s *Scheduler) ensureRunnerRole(ctx context.Context) error {
+	if s.cfgErr != nil {
+		return s.cfgErr
+	}
+	s.runnerMu.Lock()
+	defer s.runnerMu.Unlock()
+	if s.runnerChecked {
+		return nil
+	}
+	if err := s.checkRunnerRole(ctx); err != nil {
+		return err
+	}
+	s.runnerChecked = true
+	return nil
+}
+
 // runnerDSN is what a runner connects with: only the configured runner
 // login, never the scheduler's own FABRIC_DSN (goodqa#15173, Kimi K1).
-// Empty means the worker gets no database login and its fab calls fail.
+// gateErr guarantees it is non-empty before any launch.
 func (s *Scheduler) runnerDSN() string {
 	return s.cfg.RunnerDSN
 }
@@ -189,17 +213,8 @@ func (s *Scheduler) gated() bool { return len(s.cfg.Holds) > 0 }
 
 // Tick runs one pass of every sweep and reports whether it did any work.
 func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
-	if s.cfgErr != nil {
-		return false, s.cfgErr // a configuration fault is global: stop before any write
-	}
-	// Any runner login is checked before the first launch, gate or no gate
-	// (goodqa#15173): an owner or scheduler login handed to a worker would
-	// give it the scheduler's authority.
-	if s.cfg.RunnerDSN != "" && !s.runnerChecked {
-		if err := s.checkRunnerRole(ctx); err != nil {
-			return false, err
-		}
-		s.runnerChecked = true
+	if err := s.ensureRunnerRole(ctx); err != nil {
+		return false, err // a configuration or role fault is global: stop before any write
 	}
 	worked := false
 	if n, err := s.consumeOutbox(ctx); err != nil {
@@ -472,6 +487,11 @@ func (s *Scheduler) parkedIDs() []string {
 
 // runOnce = StartAttempt -> launch -> parse stream -> FinishAttempt -> Reconcile.
 func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error {
+	// The launch boundary does not rely on Tick having checked the runner
+	// role: runOnce is also reached directly by tests and embedders.
+	if err := s.ensureRunnerRole(ctx); err != nil {
+		return err
+	}
 	if s.beforeRun != nil {
 		if err := s.beforeRun(mission); err != nil {
 			return err
