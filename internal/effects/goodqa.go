@@ -236,7 +236,7 @@ func (g *GoodQA) Reconcile(ctx context.Context, e Effect) (Observation, string, 
 			}
 		}
 	}
-	return ObsUnknown, "comment history exceeded the page budget", nil
+	return ObsExhausted, "comment history exceeded the page budget", nil
 }
 
 // checkEndpoint (goodqa#15168, Kimi K12): the bearer goes only to an https
