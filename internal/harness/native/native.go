@@ -182,6 +182,19 @@ type Observer struct {
 	em *harness.Emitter
 }
 
+// NewObserver builds an Observer that reports to em. Callers that run the loop
+// themselves (internal/native, `fab harness run`) use it instead of the
+// Adapter, and call Finish when the loop ends.
+func NewObserver(em *harness.Emitter) *Observer { return &Observer{em: em} }
+
+// Finish emits the session's Final for a loop outcome and returns it as
+// recorded. A run is only done if the loop ended done and every event was
+// recorded.
+func (o *Observer) Finish(ctx context.Context, out agent.Outcome, err error) harness.Final {
+	f, _ := o.em.FinalOutcome(ctx, finalFor(out, err, nil))
+	return f
+}
+
 // bg detaches observer emits from the loop's context: after Interrupt or Stop
 // the last events must still be recorded.
 func bg(ctx context.Context) context.Context { return context.WithoutCancel(ctx) }

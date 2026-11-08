@@ -20,6 +20,8 @@ import (
 
 	"fabric/internal/agent"
 	"fabric/internal/domain"
+	"fabric/internal/harness"
+	hnative "fabric/internal/harness/native"
 	"fabric/internal/host"
 	"fabric/internal/hostid"
 	"fabric/internal/policy"
@@ -162,6 +164,11 @@ type Options struct {
 	// ReviewDSN authenticates the separate trusted app-role review pool. It
 	// must never be the runner DSN or be inherited by a tool worker.
 	ReviewDSN string
+	// Sink, when set, receives the run as harness events (turns, messages,
+	// tool calls, usage, one final). It observes only: the loop, its tools and
+	// its guard are unchanged, and a sink that cannot record stops the run
+	// (see internal/harness/native). Used by `fab harness run`.
+	Sink harness.Sink
 }
 
 // Receipt is the run summary printed for the live-test record.
@@ -179,7 +186,7 @@ type Receipt struct {
 	Starts     int      `json:"process_starts"`
 }
 
-func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, error) {
+func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt, rerr error) {
 	// goodqa#15087 AC-5: the key goes to the Anthropic API only; checked
 	// before anything else, so a wrong base_url never runs the key command.
 	if err := checkBaseURL(g.BaseURL); err != nil {
@@ -354,8 +361,19 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 			{Resource: agent.SpendResource("run", g.Attempt), Total: g.Caps.Run},
 		}}
 	provider := &nativeProvider{base: &anthropic.Provider{C: cl}, st: st, ledger: led, attempt: domain.AttemptID(g.Attempt), fence: fence}
+	var loopProvider agent.Provider = provider
+	var loopOut agent.Outcome
+	if o.Sink != nil {
+		em, err := harness.NewEmitter(hnative.Name, g.Attempt, o.Sink, harness.ChainRedactor(keys, harness.PatternRedactor()))
+		if err != nil {
+			return nil, err
+		}
+		obs := hnative.NewObserver(em)
+		loopProvider, toolset = obs.Provider(provider), obs.Tools(toolset)
+		defer func() { obs.Finish(context.WithoutCancel(ctx), loopOut, rerr) }()
+	}
 	loop, err := agent.New(agent.Config{
-		DB: db, Ledger: led, Provider: provider, Tools: toolset, Guard: oracle,
+		DB: db, Ledger: led, Provider: loopProvider, Tools: toolset, Guard: oracle,
 		Redact:  keys,
 		Attempt: domain.AttemptID(g.Attempt), Fence: fence,
 		Model: g.Model, MaxTokens: g.MaxTokens, System: g.System, Extra: g.Extra, Prompt: g.Prompt,
@@ -395,6 +413,7 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		}
 		out, err = loop.Resume(lctx)
 	}
+	loopOut = out
 	return finishNative(ctx, st, db, led, g, fence, out)
 }
 

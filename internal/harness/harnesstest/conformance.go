@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,54 +54,7 @@ func wait(t T, s harness.Session) harness.Final {
 }
 
 // CheckStream verifies the stream invariants of one finished session.
-func CheckStream(evs []harness.Event) error {
-	if len(evs) == 0 {
-		return errors.New("no events")
-	}
-	finals := 0
-	for i, e := range evs {
-		if e.Version != harness.EventVersion {
-			return fmt.Errorf("event %d: version %d", i, e.Version)
-		}
-		if e.Seq != int64(i+1) {
-			return fmt.Errorf("event %d: seq %d, want %d (gap or reorder)", i, e.Seq, i+1)
-		}
-		if e.Harness == "" || e.Session == "" {
-			return fmt.Errorf("event %d: missing harness or session", i)
-		}
-		if e.Harness != evs[0].Harness || e.Session != evs[0].Session {
-			return fmt.Errorf("event %d: harness or session changed mid-stream", i)
-		}
-		var dst any
-		switch e.Kind {
-		case harness.KindTurn:
-			dst = &harness.Turn{}
-		case harness.KindToolCall:
-			dst = &harness.ToolCall{}
-		case harness.KindMessage:
-			dst = &harness.Message{}
-		case harness.KindUsage:
-			dst = &harness.Usage{}
-		case harness.KindFinal:
-			dst = &harness.Final{}
-			finals++
-		case harness.KindUnknown:
-			dst = &harness.Unknown{}
-		default:
-			return fmt.Errorf("event %d: unknown kind %q", i, e.Kind)
-		}
-		if err := json.Unmarshal(e.Payload, dst); err != nil {
-			return fmt.Errorf("event %d (%s): payload does not decode: %v", i, e.Kind, err)
-		}
-	}
-	if finals != 1 {
-		return fmt.Errorf("%d final events, want exactly 1", finals)
-	}
-	if evs[len(evs)-1].Kind != harness.KindFinal {
-		return errors.New("final is not the last event")
-	}
-	return nil
-}
+func CheckStream(evs []harness.Event) error { return harness.CheckStream(evs) }
 
 // sameFinal checks that what Wait reports is what the stream recorded: a sink
 // stores the stream, so a divergence would give the caller one answer and the
