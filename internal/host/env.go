@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 )
 
 // envName is the shape of a variable name fabric sets for a worker. A
@@ -81,7 +80,7 @@ func WriteEnvFile(path string, pairs []string, groupRead bool) error {
 	if groupRead {
 		mode = 0o640
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode)
+	f, err := openEnvFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return fmt.Errorf("worker environment file: %w", err)
 	}
@@ -103,9 +102,12 @@ func WriteEnvFile(path string, pairs []string, groupRead bool) error {
 // __sandbox --env-file` execs the worker with. Every entry must be
 // NAME=VALUE with an allow-listed name listed in keep, at most once, and
 // every name in keep must be present, so the file and the launcher's name
-// list agree exactly.
+// list agree exactly. The file is unlinked right after it is read, before
+// validation, and the open file must then have no links left (an inode check,
+// so a rename or hard link cannot keep the secrets on disk). A failed cleanup
+// refuses the exec (goodqa#15235 S5a).
 func ReadEnvFile(path, keep string) ([]string, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := openEnvFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, fmt.Errorf("--env-file: %w", err)
 	}
@@ -117,7 +119,15 @@ func ReadEnvFile(path, keep string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("--env-file: %w", err)
 	}
-	os.Remove(path) // best effort: the launcher removes it after the run too
+	if err := os.Remove(path); err != nil {
+		return nil, fmt.Errorf("--env-file unlink before exec: %w", err)
+	}
+	if n, err := envFileLinks(f); err != nil || n != 0 {
+		if err == nil {
+			err = fmt.Errorf("%d links remain after unlink", n)
+		}
+		return nil, fmt.Errorf("--env-file verify removal before exec: %w", err)
+	}
 	want := map[string]bool{}
 	for _, n := range strings.Split(keep, ",") {
 		if !envName.MatchString(n) {
