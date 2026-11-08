@@ -39,6 +39,12 @@ type Launcher interface {
 	// came from the confined run and was launched outside its sandbox.
 }
 
+// Stopper is the host Stop a Launcher must also provide when
+// Config.ExitCleanup is on (the Darwin and Linux profiles both do).
+type Stopper interface {
+	Stop(h host.Handle, reason string, grace time.Duration) (host.StopReceipt, error)
+}
+
 // ErrHostJobsDisabled refuses a host job before anything is written or run.
 // Typed, policy-approved job templates are future work (goodqa#15082).
 var ErrHostJobsDisabled = fmt.Errorf("%w: host jobs are disabled (goodqa#15082)", domain.ErrInvalidTransition)
@@ -77,6 +83,12 @@ type Config struct {
 	// RunnerDSN is the database a runner and its jobs connect with: a role
 	// without the scheduler's privileges (0015). Required when gated.
 	RunnerDSN string
+	// ExitCleanup (FABRIC_WORKER_EXIT_CLEANUP=1 in fab daemon; default off)
+	// stops and verifies a worker's descendants after its leader exits and
+	// before anything is settled. A failed or unverified cleanup leaves the
+	// attempt to lease expiry, never a terminal success. Off, a finished
+	// worker settles exactly as before the flag existed.
+	ExitCleanup bool
 }
 
 // Scheduler owns one host's dispatch loop.
@@ -115,6 +127,12 @@ type Scheduler struct {
 	settleBackoff time.Duration
 	// afterSettleTry is a test cutpoint after a failed settle try.
 	afterSettleTry func()
+	// afterWaitDone is a test barrier after a finished worker's settlement
+	// attempt; nil in production.
+	afterWaitDone func()
+	// stopBackoff and stopSleep drive the bounded cleanup retries in tests.
+	stopBackoff time.Duration
+	stopSleep   func(context.Context, time.Duration) error
 	// settleClock runs the settle backoff on fake time in tests.
 	settleClock settle.Clock
 	// afterFinishExec sees each finish command's result and may replace
@@ -138,7 +156,11 @@ func New(st *store.Store, cfg Config, ln Launcher) *Scheduler {
 	if len(cfg.Holds) > 0 && cfg.HoldTTL <= 0 {
 		cfg.HoldTTL = 2 * cfg.Wall
 	}
-	return &Scheduler{st: st, cfg: cfg, ln: ln, cfgErr: cfg.gateErr()}
+	cfgErr := cfg.gateErr()
+	if _, ok := ln.(Stopper); cfgErr == nil && cfg.ExitCleanup && !ok {
+		cfgErr = fmt.Errorf("sched: ExitCleanup needs a launcher that can Stop and verify a worker")
+	}
+	return &Scheduler{st: st, cfg: cfg, ln: ln, cfgErr: cfgErr}
 }
 
 // gateErr refuses a gate that cannot keep its holds for a run (red-team F5):
@@ -685,6 +707,12 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		if errf != nil {
 			errf.Close()
 		}
+		if s.cfg.ExitCleanup {
+			// Leader exit does not reap descendants. A Wait error does not end
+			// ownership either, so cleanup runs either way, detached from the
+			// scheduler context; a failure makes completion unverified.
+			werr = errors.Join(werr, s.cleanupHandle(context.Background(), h, "leader exited; verify descendant cleanup"))
+		}
 		if werr != nil {
 			close(done) // the exit is unknown: stop beating so the lease expires
 		}
@@ -692,6 +720,9 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		// settle (and its retries) persist it.
 		if err := s.afterWait(context.Background(), mission, attempt, fence, runDir, code, werr); err != nil {
 			fmt.Fprintln(os.Stderr, "fabd: settle:", err)
+		}
+		if s.afterWaitDone != nil {
+			s.afterWaitDone()
 		}
 		if werr == nil {
 			close(done)
@@ -701,9 +732,52 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	return nil
 }
 
-// afterWait settles a finished worker. A failed Wait means the exit is not
-// known (goodqa#15082 T1): nothing is settled, the heartbeat has stopped,
-// and the lease expires into UNKNOWN for the prober to reconcile.
+// cleanupHandle requires a verified Stop receipt with no survivors and no
+// escaped processes, retrying a bounded three times with a doubling pause.
+func (s *Scheduler) cleanupHandle(ctx context.Context, h host.Handle, reason string) error {
+	stopper, ok := s.ln.(Stopper)
+	if !ok {
+		return fmt.Errorf("descendant cleanup for %s: launcher cannot Stop", h.Run)
+	}
+	const tries = 3
+	wait := s.stopBackoff
+	if wait <= 0 {
+		wait = 10 * time.Millisecond
+	}
+	sleep := s.stopSleep
+	if sleep == nil {
+		sleep = sleepContext
+	}
+	var lastErr error
+	for try := 1; try <= tries; try++ {
+		rc, err := stopper.Stop(h, reason, 2*time.Second)
+		switch {
+		case err != nil:
+			lastErr = fmt.Errorf("descendant cleanup for %s failed after %d attempt(s): %w", h.Run, try, err)
+		case !rc.Verified:
+			lastErr = fmt.Errorf("descendant cleanup for %s was not verified after %d attempt(s)", h.Run, try)
+		case len(rc.Survivors) > 0:
+			lastErr = fmt.Errorf("descendant cleanup for %s left %d survivors after %d attempt(s)", h.Run, len(rc.Survivors), try)
+		case len(rc.Escaped) > 0:
+			lastErr = fmt.Errorf("descendant cleanup for %s found %d escaped processes after %d attempt(s)", h.Run, len(rc.Escaped), try)
+		default:
+			return nil
+		}
+		if try < tries {
+			fmt.Fprintf(os.Stderr, "fabd: cleanup %s try %d failed, retrying: %v\n", h.Run, try, lastErr)
+			if err := sleep(ctx, wait); err != nil {
+				return fmt.Errorf("descendant cleanup for %s retry interrupted: %w", h.Run, err)
+			}
+			wait *= 2
+		}
+	}
+	return lastErr
+}
+
+// afterWait settles a finished worker. A failed Wait (or, with ExitCleanup,
+// a failed descendant cleanup) means completion is not known (goodqa#15082
+// T1): nothing is settled, the heartbeat has stopped, and the lease expires
+// into UNKNOWN for the prober to reconcile.
 func (s *Scheduler) afterWait(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, runDir string, code int, werr error) error {
 	if werr != nil {
 		return fmt.Errorf("wait for %s failed, left to lease expiry: %w", attempt, werr)
