@@ -37,6 +37,11 @@ func SetMonthSource(f func(context.Context, *store.Store) (string, error)) func(
 	return func() { monthSource = prev }
 }
 
+// StartNativeForTest exposes the keyed start/ack (goodqa#15235 S4).
+func StartNativeForTest(ctx context.Context, st *store.Store, g Grant, admit bool, lockPath string) (int64, error) {
+	return startNative(ctx, st, g, admit, lockPath)
+}
+
 // DisablePrecheck turns off native's own provider checks and returns the
 // restore (goodqa#15087 AC-2 defense in depth).
 func DisablePrecheck() func() {

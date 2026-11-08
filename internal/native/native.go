@@ -185,6 +185,12 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 	if err := checkBaseURL(g.BaseURL); err != nil {
 		return nil, err
 	}
+	// Load validates, but an embedder can build a Grant in code; Run checks
+	// the caps and fields itself before any key, request or write
+	// (goodqa#15235 S4).
+	if err := g.Validate(); err != nil {
+		return nil, err
+	}
 	prices, err := agent.ParsePrices(g.Prices)
 	if err != nil {
 		return nil, err
@@ -407,10 +413,20 @@ func startNative(ctx context.Context, st *store.Store, g Grant, admit bool, lock
 	if err != nil {
 		return 0, fmt.Errorf("start attempt: %w", err)
 	}
+	// A replayed start means another runner already started this attempt
+	// with the same keyed command; reusing its fence would run the attempt
+	// twice (goodqa#15235 S4, from the Kimi 6ac28d9 patch).
+	if resp.Replayed || len(resp.Events) == 0 {
+		return 0, fmt.Errorf("%w: attempt %s was created concurrently", domain.ErrInvalidTransition, g.Attempt)
+	}
 	fence := resp.Events[0].Fence
-	if _, err := st.Execute(ctx, "native-runner", key("ack"), domain.Command{Kind: domain.CmdAckStart, Mission: domain.MissionID(g.Mission),
-		Attempt: domain.AttemptID(g.Attempt), Fence: fence}); err != nil {
+	ack, err := st.Execute(ctx, "native-runner", key("ack"), domain.Command{Kind: domain.CmdAckStart, Mission: domain.MissionID(g.Mission),
+		Attempt: domain.AttemptID(g.Attempt), Fence: fence})
+	if err != nil {
 		return 0, fmt.Errorf("ack start: %w", err)
+	}
+	if ack.Replayed {
+		return 0, fmt.Errorf("%w: attempt %s acknowledgement was created concurrently", domain.ErrInvalidTransition, g.Attempt)
 	}
 	return fence, nil
 }
