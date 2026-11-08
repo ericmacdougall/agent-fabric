@@ -1,0 +1,5526 @@
+{
+ "policies": {
+  "base": {
+   "failures_per_rung": 2,
+   "ladder_limits": {
+    "max_review_launches": 8,
+    "max_rung_climbs": 3,
+    "max_total_review_usd": 60
+   },
+   "lowest_rung": "R0",
+   "rungs": {
+    "R0": {
+     "needs_user_permission": false,
+     "writable": true
+    },
+    "R1": {
+     "needs_user_permission": false,
+     "writable": true
+    },
+    "R2": {
+     "needs_user_permission": false,
+     "writable": true
+    },
+    "R3": {
+     "needs_user_permission": false,
+     "writable": true
+    },
+    "R4": {
+     "needs_user_permission": false,
+     "writable": false
+    },
+    "R5": {
+     "needs_user_permission": true,
+     "writable": true
+    },
+    "R6": {
+     "needs_user_permission": true,
+     "writable": false
+    }
+   }
+  },
+  "tight": {
+   "failures_per_rung": 1,
+   "ladder_limits": {
+    "max_review_launches": 2,
+    "max_rung_climbs": 1,
+    "max_total_review_usd": 0.3
+   },
+   "lowest_rung": "R0",
+   "rungs": {
+    "R0": {
+     "needs_user_permission": false,
+     "writable": true
+    },
+    "R1": {
+     "needs_user_permission": false,
+     "writable": true
+    },
+    "R2": {
+     "needs_user_permission": true,
+     "writable": true
+    },
+    "R3": {
+     "needs_user_permission": false,
+     "writable": true
+    },
+    "R4": {
+     "needs_user_permission": false,
+     "writable": false
+    },
+    "R5": {
+     "needs_user_permission": true,
+     "writable": true
+    },
+    "R6": {
+     "needs_user_permission": true,
+     "writable": false
+    }
+   }
+  }
+ },
+ "reference_sha256": {
+  "escalation.py": "f501898821c34271675b41b409a6e2958752e0af2ba4ce3952533f27e288b7e9",
+  "model_tiers.py": "90ea8240c91a55b24925dc4ee31436852f6898ea605fb5cc3f6a1bce35bc081e"
+ },
+ "seed": 15324,
+ "vectors": [
+  {
+   "name": "base/climb_after_two",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-climb_after_two"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-climb_after_two"
+   }
+  },
+  {
+   "name": "base/climb_to_top_and_stay",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h0"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h4"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h5"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h6"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h7"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h8"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h9"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h10"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h11"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h12"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h13"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-climb_to_top_and_stay"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "fa",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-climb_to_top_and_stay"
+   }
+  },
+  {
+   "name": "base/empty",
+   "policy": "base",
+   "state": {
+    "events": [],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 60.0,
+    "task": "synthetic-empty"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-empty"
+   }
+  },
+  {
+   "name": "base/empty_head_never_skipped",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-empty_head_never_skipped"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-empty_head_never_skipped"
+   }
+  },
+  {
+   "name": "base/ignored_classes",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": null
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-ignored_classes"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-ignored_classes"
+   }
+  },
+  {
+   "name": "base/new_fingerprint_resets",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-new_fingerprint_resets"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-new_fingerprint_resets"
+   }
+  },
+  {
+   "name": "base/null_fingerprint_is_a_fingerprint",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h2"
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-null_fingerprint_is_a_fingerprint"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-null_fingerprint_is_a_fingerprint"
+   }
+  },
+  {
+   "name": "base/null_head_never_skipped",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-null_head_never_skipped"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-null_head_never_skipped"
+   }
+  },
+  {
+   "name": "base/random_00",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h2"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 60,
+    "task": "synthetic-random_00"
+   },
+   "want": {
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_00"
+   }
+  },
+  {
+   "name": "base/random_01",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h2"
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 75.5,
+    "task": "synthetic-random_01"
+   },
+   "want": {
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_01"
+   }
+  },
+  {
+   "name": "base/random_02",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_02"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_02"
+   }
+  },
+  {
+   "name": "base/random_03",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-random_03"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "fb",
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_03"
+   }
+  },
+  {
+   "name": "base/random_04",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h3"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-random_04"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_04"
+   }
+  },
+  {
+   "name": "base/random_05",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_05"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_05"
+   }
+  },
+  {
+   "name": "base/random_06",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h1"
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_06"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_06"
+   }
+  },
+  {
+   "name": "base/random_07",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_07"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_07"
+   }
+  },
+  {
+   "name": "base/random_08",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": "h3"
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_08"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fb",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_08"
+   }
+  },
+  {
+   "name": "base/random_09",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-random_09"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_09"
+   }
+  },
+  {
+   "name": "base/random_10",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": "h1"
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 60.0,
+    "task": "synthetic-random_10"
+   },
+   "want": {
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "task": "synthetic-random_10"
+   }
+  },
+  {
+   "name": "base/random_11",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 60,
+    "task": "synthetic-random_11"
+   },
+   "want": {
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_11"
+   }
+  },
+  {
+   "name": "base/random_12",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 75.5,
+    "task": "synthetic-random_12"
+   },
+   "want": {
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_12"
+   }
+  },
+  {
+   "name": "base/random_13",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_13"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_13"
+   }
+  },
+  {
+   "name": "base/random_14",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": "h2"
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_14"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_14"
+   }
+  },
+  {
+   "name": "base/random_15",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": ""
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_15"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_15"
+   }
+  },
+  {
+   "name": "base/random_16",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_16"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_16"
+   }
+  },
+  {
+   "name": "base/random_17",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": null
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_17"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "fb",
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_17"
+   }
+  },
+  {
+   "name": "base/random_18",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": "h3"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-random_18"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_18"
+   }
+  },
+  {
+   "name": "base/random_19",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": ""
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_19"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_19"
+   }
+  },
+  {
+   "name": "base/random_20",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_20"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_20"
+   }
+  },
+  {
+   "name": "base/random_21",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-random_21"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_21"
+   }
+  },
+  {
+   "name": "base/random_22",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_22"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_22"
+   }
+  },
+  {
+   "name": "base/random_23",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-random_23"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_23"
+   }
+  },
+  {
+   "name": "base/random_24",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": ""
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 60,
+    "task": "synthetic-random_24"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fb",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_24"
+   }
+  },
+  {
+   "name": "base/random_25",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 75.5,
+    "task": "synthetic-random_25"
+   },
+   "want": {
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_25"
+   }
+  },
+  {
+   "name": "base/random_26",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": null
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_26"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_26"
+   }
+  },
+  {
+   "name": "base/random_27",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-random_27"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_27"
+   }
+  },
+  {
+   "name": "base/random_28",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-random_28"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_28"
+   }
+  },
+  {
+   "name": "base/random_29",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": null
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-random_29"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_29"
+   }
+  },
+  {
+   "name": "base/random_30",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_30"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": "fb",
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_30"
+   }
+  },
+  {
+   "name": "base/random_31",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": null
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_31"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_31"
+   }
+  },
+  {
+   "name": "base/random_32",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h1"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_32"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R2",
+    "task": "synthetic-random_32"
+   }
+  },
+  {
+   "name": "base/random_33",
+   "policy": "base",
+   "state": {
+    "events": [],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_33"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_33"
+   }
+  },
+  {
+   "name": "base/random_34",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_34"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_34"
+   }
+  },
+  {
+   "name": "base/random_35",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_35"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_35"
+   }
+  },
+  {
+   "name": "base/random_36",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-random_36"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 1,
+    "failures_at_rung": 1,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_36"
+   }
+  },
+  {
+   "name": "base/random_37",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 60.0,
+    "task": "synthetic-random_37"
+   },
+   "want": {
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fb",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_37"
+   }
+  },
+  {
+   "name": "base/random_38",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-random_38"
+   },
+   "want": {
+    "blocked_by": [],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_38"
+   }
+  },
+  {
+   "name": "base/random_39",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_39"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_39"
+   }
+  },
+  {
+   "name": "base/same_head_after_claim_counts",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-same_head_after_claim_counts"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-same_head_after_claim_counts"
+   }
+  },
+  {
+   "name": "base/same_head_no_claim_skipped",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-same_head_no_claim_skipped"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-same_head_no_claim_skipped"
+   }
+  },
+  {
+   "name": "base/top_stays",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "f0",
+      "head": "h0"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f1",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f2",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f3",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f4",
+      "head": "h4"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f5",
+      "head": "h5"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f6",
+      "head": "h6"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f7",
+      "head": "h7"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f8",
+      "head": "h8"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f9",
+      "head": "h9"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f10",
+      "head": "h10"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f11",
+      "head": "h11"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 75.5,
+    "task": "synthetic-top_stays"
+   },
+   "want": {
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 1,
+    "fingerprint": "f11",
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-top_stays"
+   }
+  },
+  {
+   "name": "tight/climb_after_two",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 75.5,
+    "task": "synthetic-climb_after_two"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-climb_after_two"
+   }
+  },
+  {
+   "name": "tight/climb_to_top_and_stay",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h0"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h4"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h5"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h6"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h7"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h8"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h9"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h10"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h11"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h12"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h13"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 60,
+    "task": "synthetic-climb_to_top_and_stay"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-climb_to_top_and_stay"
+   }
+  },
+  {
+   "name": "tight/empty",
+   "policy": "tight",
+   "state": {
+    "events": [],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-empty"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-empty"
+   }
+  },
+  {
+   "name": "tight/empty_head_never_skipped",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-empty_head_never_skipped"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-empty_head_never_skipped"
+   }
+  },
+  {
+   "name": "tight/ignored_classes",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": null
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-ignored_classes"
+   },
+   "want": {
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-ignored_classes"
+   }
+  },
+  {
+   "name": "tight/new_fingerprint_resets",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 75.5,
+    "task": "synthetic-new_fingerprint_resets"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "task": "synthetic-new_fingerprint_resets"
+   }
+  },
+  {
+   "name": "tight/null_fingerprint_is_a_fingerprint",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h2"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 60,
+    "task": "synthetic-null_fingerprint_is_a_fingerprint"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-null_fingerprint_is_a_fingerprint"
+   }
+  },
+  {
+   "name": "tight/null_head_never_skipped",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-null_head_never_skipped"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-null_head_never_skipped"
+   }
+  },
+  {
+   "name": "tight/random_00",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h2"
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 60.0,
+    "task": "synthetic-random_00"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_00"
+   }
+  },
+  {
+   "name": "tight/random_01",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h2"
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 60,
+    "task": "synthetic-random_01"
+   },
+   "want": {
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_01"
+   }
+  },
+  {
+   "name": "tight/random_02",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_02"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_02"
+   }
+  },
+  {
+   "name": "tight/random_03",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_03"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_03"
+   }
+  },
+  {
+   "name": "tight/random_04",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h3"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 60.0,
+    "task": "synthetic-random_04"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "task": "synthetic-random_04"
+   }
+  },
+  {
+   "name": "tight/random_05",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_05"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_05"
+   }
+  },
+  {
+   "name": "tight/random_06",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h1"
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-random_06"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_06"
+   }
+  },
+  {
+   "name": "tight/random_07",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 60,
+    "task": "synthetic-random_07"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-random_07"
+   }
+  },
+  {
+   "name": "tight/random_08",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": "h3"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_08"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_08"
+   }
+  },
+  {
+   "name": "tight/random_09",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_09"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_09"
+   }
+  },
+  {
+   "name": "tight/random_10",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": "h1"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 60.0,
+    "task": "synthetic-random_10"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_10"
+   }
+  },
+  {
+   "name": "tight/random_11",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_11"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_11"
+   }
+  },
+  {
+   "name": "tight/random_12",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-random_12"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-random_12"
+   }
+  },
+  {
+   "name": "tight/random_13",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-random_13"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_13"
+   }
+  },
+  {
+   "name": "tight/random_14",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": "h2"
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-random_14"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_14"
+   }
+  },
+  {
+   "name": "tight/random_15",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": ""
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_15"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_15"
+   }
+  },
+  {
+   "name": "tight/random_16",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     }
+    ],
+    "launches": 7,
+    "permission": null,
+    "spend_usd": 60,
+    "task": "synthetic-random_16"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-random_16"
+   }
+  },
+  {
+   "name": "tight/random_17",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": null
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 60.0,
+    "task": "synthetic-random_17"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_17"
+   }
+  },
+  {
+   "name": "tight/random_18",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": "h3"
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 60.0,
+    "task": "synthetic-random_18"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_18"
+   }
+  },
+  {
+   "name": "tight/random_19",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": ""
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-random_19"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-random_19"
+   }
+  },
+  {
+   "name": "tight/random_20",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 75.5,
+    "task": "synthetic-random_20"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_20"
+   }
+  },
+  {
+   "name": "tight/random_21",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_21"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_21"
+   }
+  },
+  {
+   "name": "tight/random_22",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_22"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_22"
+   }
+  },
+  {
+   "name": "tight/random_23",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-random_23"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-random_23"
+   }
+  },
+  {
+   "name": "tight/random_24",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": ""
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_24"
+   },
+   "want": {
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_24"
+   }
+  },
+  {
+   "name": "tight/random_25",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h2"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 59.99,
+    "task": "synthetic-random_25"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_25"
+   }
+  },
+  {
+   "name": "tight/random_26",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": null
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_26"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_26"
+   }
+  },
+  {
+   "name": "tight/random_27",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 60,
+    "task": "synthetic-random_27"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "task": "synthetic-random_27"
+   }
+  },
+  {
+   "name": "tight/random_28",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-random_28"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches"
+    ],
+    "climbs": 1,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R1",
+    "task": "synthetic-random_28"
+   }
+  },
+  {
+   "name": "tight/random_29",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": null
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 0.1,
+    "task": "synthetic-random_29"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_29"
+   }
+  },
+  {
+   "name": "tight/random_30",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     }
+    ],
+    "launches": 9,
+    "permission": null,
+    "spend_usd": 60.0,
+    "task": "synthetic-random_30"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_30"
+   }
+  },
+  {
+   "name": "tight/random_31",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": null
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 60.0,
+    "task": "synthetic-random_31"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_31"
+   }
+  },
+  {
+   "name": "tight/random_32",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h1"
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_32"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_32"
+   }
+  },
+  {
+   "name": "tight/random_33",
+   "policy": "tight",
+   "state": {
+    "events": [],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_33"
+   },
+   "want": {
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 0,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R0",
+    "task": "synthetic-random_33"
+   }
+  },
+  {
+   "name": "tight/random_34",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fb",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_34"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_34"
+   }
+  },
+  {
+   "name": "tight/random_35",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": ""
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": null,
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_35"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_35"
+   }
+  },
+  {
+   "name": "tight/random_36",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h2"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": null
+     },
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h2"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_36"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fc",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_36"
+   }
+  },
+  {
+   "name": "tight/random_37",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": "h3"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fb",
+      "head": "h1"
+     }
+    ],
+    "launches": 8,
+    "permission": null,
+    "spend_usd": 0,
+    "task": "synthetic-random_37"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches"
+    ],
+    "climbs": 3,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": false,
+    "rung": "R3",
+    "task": "synthetic-random_37"
+   }
+  },
+  {
+   "name": "tight/random_38",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "NOT_COUNTED",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": null,
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fc",
+      "head": "h1"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 75.5,
+    "task": "synthetic-random_38"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-random_38"
+   }
+  },
+  {
+   "name": "tight/random_39",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": null
+     },
+     {
+      "class": "PASS",
+      "fingerprint": "fc",
+      "head": ""
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": ""
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-random_39"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-random_39"
+   }
+  },
+  {
+   "name": "tight/same_head_after_claim_counts",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "CLAIM",
+      "fingerprint": null,
+      "head": null
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 75.5,
+    "task": "synthetic-same_head_after_claim_counts"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-same_head_after_claim_counts"
+   }
+  },
+  {
+   "name": "tight/same_head_no_claim_skipped",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     }
+    ],
+    "launches": 1,
+    "permission": null,
+    "spend_usd": 0.30000000000000004,
+    "task": "synthetic-same_head_no_claim_skipped"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_total_review_usd"
+    ],
+    "climbs": 2,
+    "failures_at_rung": 0,
+    "fingerprint": null,
+    "needs_user_permission": true,
+    "rung": "R2",
+    "task": "synthetic-same_head_no_claim_skipped"
+   }
+  },
+  {
+   "name": "tight/top_stays",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "f0",
+      "head": "h0"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f1",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f2",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f3",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f4",
+      "head": "h4"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f5",
+      "head": "h5"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f6",
+      "head": "h6"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f7",
+      "head": "h7"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f8",
+      "head": "h8"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f9",
+      "head": "h9"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f10",
+      "head": "h10"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "f11",
+      "head": "h11"
+     }
+    ],
+    "launches": 0,
+    "permission": null,
+    "spend_usd": 75.5,
+    "task": "synthetic-top_stays"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "f4",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-top_stays"
+   }
+  }
+ ]
+}
