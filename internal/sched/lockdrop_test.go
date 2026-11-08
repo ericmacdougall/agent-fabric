@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"fabric/internal/domain"
 	"fabric/internal/store"
@@ -40,6 +41,26 @@ func TestReconcileLockDropReplays(t *testing.T) {
 		WHERE locktype = 'advisory' AND classid::bigint = $1 AND objid::bigint = $2 AND objsubid = 2 AND granted`,
 		int64(uint32(k1)), int64(uint32(k2))).Scan(&killed); err != nil || !killed {
 		t.Fatalf("terminate the lock session: %v (killed %v)", err, killed)
+	}
+	// pg_terminate_backend only queues the termination: the backend releases
+	// its advisory lock as it dies, asynchronously. Reconciling before the
+	// lock row disappears would report "another reconciler holds", so wait
+	// for the release (bounded) and fail if it never comes.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var held bool
+		if err := st.Pool().QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks
+			WHERE locktype = 'advisory' AND classid::bigint = $1 AND objid::bigint = $2 AND objsubid = 2 AND granted)`,
+			int64(uint32(k1)), int64(uint32(k2))).Scan(&held); err != nil {
+			t.Fatalf("watching the lock release: %v", err)
+		}
+		if !held {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the terminated backend still holds the reconcile lock after 5s")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	r, err := ReconcileHost(ctx, st, hostA, hostA, goneProber(), nil)
 	if err != nil || len(r.Expired) != 1 || r.Quarantined != 1 {

@@ -541,7 +541,16 @@ func TestOutboxPagesAndCursor(t *testing.T) {
 	if len(page) != 4 || page[0].ID != 5 {
 		t.Fatalf("page 2 starts at %d (len %d), want 5", page[0].ID, len(page))
 	}
-	other, _ := st.OutboxPage(ctx, "other-consumer", 100)
+	var other []OutboxRow
+	// Same xid8 guard as page 1: a cluster-wide in-progress transaction can
+	// hold a row back briefly, so the exact-count assertion polls (bounded)
+	// instead of sampling once.
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		other, _ = st.OutboxPage(ctx, "other-consumer", 100)
+		if len(other) == 10 || time.Now().After(deadline) {
+			break
+		}
+	}
 	if len(other) != 10 {
 		t.Fatalf("independent consumer sees %d rows, want 10", len(other))
 	}
