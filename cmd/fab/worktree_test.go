@@ -22,6 +22,10 @@ func TestAttemptStartWorktree(t *testing.T) {
 	if err := os.Symlink(wt, link); err != nil {
 		t.Fatal(err)
 	}
+	file := filepath.Join(dir, "a-file")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	base := []string{"start", "--mission", "m_x", "--id", "r_x", "--key", "k"}
 	native := append(append([]string{}, base...), "--path", "anthropic-api", "--lock-path", "/s/native-locks/r_x.lock")
 	for _, c := range []struct {
@@ -34,6 +38,7 @@ func TestAttemptStartWorktree(t *testing.T) {
 		{"--worktree of /", append(append([]string{}, native...), "--worktree", "/")},
 		{"non-canonical --worktree (a symlink)", append(append([]string{}, native...), "--worktree", link)},
 		{"missing --worktree directory", append(append([]string{}, native...), "--worktree", filepath.Join(dir, "missing"))},
+		{"canonical regular file as --worktree (K5)", append(append([]string{}, native...), "--worktree", file)},
 		{"claude-code with a worktree", append(append([]string{}, base...), "--path", "claude-code", "--worktree", wt)},
 	} {
 		if code := exitCode(attemptMain(c.args)); code != 3 {

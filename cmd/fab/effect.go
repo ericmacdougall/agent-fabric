@@ -53,6 +53,10 @@ func attemptMain(args []string) error {
 		if real, err := filepath.EvalSymlinks(*worktree); err != nil || real != *worktree {
 			return usageError{fmt.Errorf("attempt start: --worktree %q is not canonical (resolves to %q, %v); pass the resolved path", *worktree, real, err)}
 		}
+		// A canonical regular file is not a worktree (red-team K5).
+		if fi, err := os.Stat(*worktree); err != nil || !fi.IsDir() {
+			return usageError{fmt.Errorf("attempt start: --worktree %q is not a directory", *worktree)}
+		}
 	} else if *lockPath != "" || *worktree != "" {
 		return usageError{errors.New("attempt start: --lock-path and --worktree are for --path anthropic-api only")}
 	}
