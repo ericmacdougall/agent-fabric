@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -12,11 +14,53 @@ import (
 	"fabric/internal/domain"
 	"fabric/internal/hostid"
 	"fabric/internal/store"
+	"fabric/internal/tools"
 )
 
 // ErrStartRefused: the native start rule refused the grant (goodqa#15087).
 // Nothing was written and no key command ran.
 var ErrStartRefused = errors.New("native start refused")
+
+// The worktree binding (goodqa#15283). Each refusal also wraps
+// ErrStartRefused and, like it, comes before SelfTest, oracle hooks, the key
+// command, the flock and any write.
+var (
+	// ErrWorktreeMismatch: the attempt is bound to another canonical
+	// worktree than the grant's. The message names both.
+	ErrWorktreeMismatch = errors.New("attempt worktree mismatch")
+	// ErrWorktreeUnbound: the attempt has no recorded worktree (it started
+	// before migration 0038). It is never adopted.
+	ErrWorktreeUnbound = errors.New("attempt has no recorded worktree")
+	// ErrWorktreeMoved: during a run, the recorded worktree no longer
+	// resolves to the directory it named at start; the next tool is refused.
+	ErrWorktreeMoved = tools.ErrWorktreeMoved
+)
+
+// canonicalWorktree resolves the grant's worktree (symlinks evaluated, then
+// cleaned), requires a directory that passes domain.ValidWorktree, and pins
+// its (dev, ino) for this run. It only reads the filesystem.
+func canonicalWorktree(p string) (*tools.WorktreePin, error) {
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return nil, refuse("worktree %q does not resolve: %v", p, err)
+	}
+	real = filepath.Clean(real)
+	if err := domain.ValidWorktree(real); err != nil {
+		return nil, refuse("worktree %q: %v", p, err)
+	}
+	if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
+		return nil, refuse("worktree %q (resolved %q) is not a directory", p, real)
+	}
+	pin, err := tools.PinWorktree(real)
+	if err != nil {
+		return nil, refuse("worktree %q: %v", p, err)
+	}
+	return pin, nil
+}
+
+// sameWorktree is the binding's comparison: canonical paths, byte for byte,
+// with no case folding (NEG-6).
+func sameWorktree(stored, canonical string) bool { return stored == canonical }
 
 // startCase is what the native start rule decided for a grant.
 type startCase int
@@ -50,22 +94,22 @@ func refuse(format string, a ...any) error {
 
 // planStart is the native start rule (goodqa#15087 Scope, H1, H3, V1). It
 // only reads, so a refusal comes before SelfTest, the key command and any
-// write.
-func planStart(ctx context.Context, st *store.Store, g Grant) (startPlan, error) {
+// write. worktree is the grant's canonical worktree (canonicalWorktree).
+func planStart(ctx context.Context, st *store.Store, g Grant, worktree string) (startPlan, error) {
 	var (
 		mission, state, path, lockPath, host string
 		fence                                int64
 		live                                 bool
 		runFence                             *int64
-		outcome, note                        *string
+		outcome, note, stored                *string
 	)
 	err := st.Pool().QueryRow(ctx, `SELECT a.mission_id, a.state, a.fence, a.path, coalesce(a.lock_path, ''), coalesce(a.host, ''),
-		(a.lease_until IS NOT NULL AND a.lease_until >= now()), r.fence, r.outcome, r.outcome_note
+		(a.lease_until IS NOT NULL AND a.lease_until >= now()), r.fence, r.outcome, r.outcome_note, a.worktree
 		FROM attempts a LEFT JOIN agent_runs r ON r.attempt_id = a.id WHERE a.id = $1`, g.Attempt).
-		Scan(&mission, &state, &fence, &path, &lockPath, &host, &live, &runFence, &outcome, &note)
+		Scan(&mission, &state, &fence, &path, &lockPath, &host, &live, &runFence, &outcome, &note, &stored)
 	switch {
 	case err == nil:
-		return planExisting(g, mission, state, path, lockPath, host, fence, live, runFence, outcome, note)
+		return planExisting(g, worktree, stored, mission, state, path, lockPath, host, fence, live, runFence, outcome, note)
 	case !errors.Is(err, pgx.ErrNoRows):
 		return startPlan{}, err
 	}
@@ -94,12 +138,17 @@ func planStart(ctx context.Context, st *store.Store, g Grant) (startPlan, error)
 	return startPlan{}, refuse("mission %s is %s; a new native attempt needs it IDLE, or ADMITTED with no live attempt", g.Mission, execution)
 }
 
-func planExisting(g Grant, mission, state, path, lockPath, host string, fence int64, live bool, runFence *int64, outcome, note *string) (startPlan, error) {
+func planExisting(g Grant, worktree string, stored *string, mission, state, path, lockPath, host string, fence int64, live bool, runFence *int64, outcome, note *string) (startPlan, error) {
 	switch {
 	case mission != g.Mission:
 		return startPlan{}, refuse("attempt %s belongs to mission %s", g.Attempt, mission)
 	case domain.Provider(path) != domain.ProviderAnthropicAPI:
 		return startPlan{}, refuse("attempt %s was started on path %s", g.Attempt, path)
+	}
+	// goodqa#15283: the worktree binding, before any state rule, so a resume
+	// and a replay are both covered.
+	if err := checkBinding(g, worktree, stored); err != nil {
+		return startPlan{}, err
 	}
 	// H3: the state first. An attempt that reconcile owns is refused even
 	// with a recorded outcome; a replay would only meet a reducer refusal.
@@ -133,6 +182,42 @@ func planExisting(g Grant, mission, state, path, lockPath, host string, fence in
 	}
 	return startPlan{c: caseResume, fence: fence, lockPath: lockPath}, nil
 }
+
+// checkBinding is the worktree binding (goodqa#15283): a stored NULL is
+// ErrWorktreeUnbound; a stored path other than the grant's canonical
+// worktree is ErrWorktreeMismatch, naming both.
+func checkBinding(g Grant, worktree string, stored *string) error {
+	switch {
+	case stored == nil:
+		return fmt.Errorf("%w: %w: attempt %s has no recorded worktree (it started before migration 0038), so it cannot be resumed or replayed from %q; reconcile attempt %s and start a new attempt",
+			ErrStartRefused, ErrWorktreeUnbound, g.Attempt, worktree, g.Attempt)
+	case !sameWorktree(*stored, worktree):
+		return fmt.Errorf("%w: %w: attempt %s is bound to worktree %q, but this grant's worktree %q resolves to %q; run the grant from %q, or reconcile attempt %s and start a new attempt for %q",
+			ErrStartRefused, ErrWorktreeMismatch, g.Attempt, *stored, g.Worktree, worktree, *stored, g.Attempt, worktree)
+	}
+	return nil
+}
+
+// recheckWorktree repeats the binding check with the flock held (red-team
+// K3). planStart runs before the flock, so two new runs of one attempt id
+// from different worktrees can both see no row; the one that loses the race
+// finds the winner's row here and is refused before the key command and any
+// write. No row yet means this run is still the one that starts it.
+func recheckWorktree(ctx context.Context, st *store.Store, g Grant, worktree string) error {
+	var stored *string
+	err := st.Pool().QueryRow(ctx, `SELECT worktree FROM attempts WHERE id = $1`, g.Attempt).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return checkBinding(g, worktree, stored)
+}
+
+// beforeLocks, when set by a test, runs after the start rule and SelfTest and
+// before the flock is taken (red-team K3). Always nil in production.
+var beforeLocks func()
 
 // heartbeatFault, when set by a test, replaces one heartbeat's result.
 var heartbeatFault func() error

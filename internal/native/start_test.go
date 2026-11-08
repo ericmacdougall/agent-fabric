@@ -66,6 +66,16 @@ func count(t *testing.T, st *store.Store, q string, args ...any) int {
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
+// canon is the canonical worktree a native start records (goodqa#15283).
+func canon(t *testing.T, p string) string {
+	t.Helper()
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Clean(real)
+}
+
 // seedRunning starts a native attempt through the ordinary commands, as a
 // native run of this host would, and records its agent_runs row (outcome
 // "" for none).
@@ -84,7 +94,7 @@ func seedRunning(t *testing.T, st *store.Store, e *env, outcome string, runFence
 		t.Fatal(err)
 	}
 	resp, err := st.Execute(ctx, "native-runner", "seed-start", domain.Command{Kind: domain.CmdStartAttempt, Mission: m, Attempt: a,
-		Host: hostid.Default(), Role: "writer", Path: domain.ProviderAnthropicAPI, LockPath: lock})
+		Host: hostid.Default(), Role: "writer", Path: domain.ProviderAnthropicAPI, LockPath: lock, Worktree: canon(t, e.g.Worktree)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +385,7 @@ func TestNativeRunsAdmittedMission(t *testing.T) {
 						t.Fatal(err)
 					}
 					if _, err := st.Execute(ctx, "native-runner", "seed-start", domain.Command{Kind: domain.CmdStartAttempt, Mission: m, Attempt: a,
-						Host: hostid.Default(), Role: "writer", Path: domain.ProviderAnthropicAPI, LockPath: lock}); err != nil {
+						Host: hostid.Default(), Role: "writer", Path: domain.ProviderAnthropicAPI, LockPath: lock, Worktree: canon(t, e.g.Worktree)}); err != nil {
 						t.Fatal(err)
 					}
 					if s := attemptState(t, st, e.g.Attempt); s != string(domain.AttemptLeased) {

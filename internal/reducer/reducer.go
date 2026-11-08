@@ -180,9 +180,18 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 			if err := domain.ValidLockPath(cmd.Attempt, cmd.LockPath); err != nil {
 				return nil, fmt.Errorf("%w: %v", domain.ErrInvalidTransition, err)
 			}
+			// goodqa#15283: a newly decided native start is bound to its
+			// canonical worktree. (Replay folds stored events through Apply,
+			// so a pre-0038 event with none is unaffected.)
+			if err := domain.ValidWorktree(cmd.Worktree); err != nil {
+				return nil, fmt.Errorf("%w: start attempt: %v", domain.ErrInvalidTransition, err)
+			}
 		default:
 			if cmd.LockPath != "" {
 				return nil, fmt.Errorf("%w: a claude-code attempt has no lock path", domain.ErrInvalidTransition)
+			}
+			if cmd.Worktree != "" {
+				return nil, fmt.Errorf("%w: a claude-code attempt has no recorded worktree", domain.ErrInvalidTransition)
 			}
 		}
 		if m.Execution != domain.ExecAdmitted && m.Execution != domain.ExecRunning {
@@ -218,6 +227,7 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 		e.Role = cmd.Role
 		e.Path = cmd.Path
 		e.LockPath = cmd.LockPath
+		e.Worktree = cmd.Worktree
 		e.AttemptTo = domain.AttemptLeased
 		return []domain.Event{e}, nil
 
