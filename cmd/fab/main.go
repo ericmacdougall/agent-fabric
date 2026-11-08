@@ -59,6 +59,8 @@ func main() {
 		err = attemptMain(os.Args[2:])
 	case "effect":
 		err = effectMain(os.Args[2:])
+	case "review":
+		err = reviewMain(os.Args[2:])
 	case "job":
 		err = jobMain(os.Args[2:])
 	case "daemon":
@@ -129,6 +131,12 @@ func usage() {
   ask withdraw I --reason R | show I | repair
   mission show M                       snapshot and event log (JSON)
   mission run --provider anthropic --grant F   run a native-loop mission (API key from the grant's key_command)
+                                       FABRIC_REVIEW_GATE=1 gates every tool (needs FABRIC_REVIEW_DSN); default off.
+                                       grant review_gate.mode: shadow (default, no execution), evaluate (no execution), enforce
+  review list [--state S] | show HASH  inspect request metadata (never args or prompts)
+  review approve --hash H --reason R --expires-in D | review reject --hash H --reason R
+                                       separate human operator; requires FABRIC_ACTOR=op:name
+                                       approval wakes the lease-protected native runner; rejection also resumes it with denial
   provider capture --grant F --out DIR [--scenarios text,tool,thinking,badauth,badrequest]   record real API streams
   import --slots F --queue F           one-off #14882 import (shadow)
   expire-leases [--limit N]            bounded lease sweep

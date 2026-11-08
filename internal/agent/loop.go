@@ -50,11 +50,13 @@ type Config struct {
 	Crash func(point string)
 }
 
-// Outcome is how a run ended.
+// Outcome is how a run ended. Review is typed control metadata; Note remains
+// the human/tool-facing rendering and is never authoritative for resumption.
 type Outcome struct {
-	Kind  string
-	Note  string
-	Turns int
+	Kind   string
+	Note   string
+	Turns  int
+	Review *ReviewPause
 }
 
 type Loop struct {
@@ -153,15 +155,31 @@ func contentBlocks(b []byte) ([]json.RawMessage, error) {
 }
 
 // Run drives the attempt until it ends, parks or is stopped. It is safe to
-// call again after a crash: it resumes from the checkpointed history.
+// call again after a crash: it resumes from the checkpointed history and counts
+// that new process life against the restart cap.
 func (l *Loop) Run(ctx context.Context) (Outcome, error) {
+	return l.run(ctx, true)
+}
+
+// Resume continues the same live process after a durable-review wait. It
+// validates the existing run without consuming another crash restart.
+func (l *Loop) Resume(ctx context.Context) (Outcome, error) {
+	return l.run(ctx, false)
+}
+
+func (l *Loop) run(ctx context.Context, start bool) (Outcome, error) {
 	c := l.c
 	unlock, err := c.DB.Lock(ctx, c.Attempt)
 	if err != nil {
 		return Outcome{}, err
 	}
 	defer unlock()
-	starts, err := c.DB.StartRun(ctx, c.Attempt, c.Fence, c.BillingMode, l.configSHA(), c.RestartCap)
+	var starts int
+	if start {
+		starts, err = c.DB.StartRun(ctx, c.Attempt, c.Fence, c.BillingMode, l.configSHA(), c.RestartCap)
+	} else {
+		starts, err = c.DB.ResumeRun(ctx, c.Attempt, c.Fence, l.configSHA())
+	}
 	if errors.Is(err, ErrRestartCap) {
 		return l.finish(ctx, OutcomeParked, "restart cap: "+err.Error(), 0)
 	}
@@ -219,6 +237,13 @@ func (l *Loop) Run(ctx context.Context) (Outcome, error) {
 			}
 			if len(mine) > 0 {
 				if err := l.resolveTools(ctx, last, mine); err != nil {
+					var paused *reviewPauseError
+					if errors.As(err, &paused) {
+						// No terminal agent_runs outcome: the same PENDING tool call
+						// resumes after its durable approval arrives.
+						pause := paused.pause
+						return Outcome{Kind: OutcomeApprovalRequired, Note: paused.result, Turns: turns, Review: &pause}, nil
+					}
 					return Outcome{}, err
 				}
 				continue
@@ -414,10 +439,17 @@ func costLabel(mode string) string {
 
 const interruptedText = "interrupted: the runner stopped while this tool was running, so whether it took effect is unknown. Check the current state before doing it again."
 
+type reviewPauseError struct {
+	result string
+	pause  ReviewPause
+}
+
+func (e *reviewPauseError) Error() string { return "agent: durable review is unresolved" }
+
 // resolveTools brings every tool call of the assistant message to a terminal
 // state, then commits the tool_result message. Nothing runs before the
-// assistant message is committed, and a side-effecting call that was left
-// EXECUTING by a dead process is never run again.
+// assistant message is committed. Ordinary side-effecting calls left EXECUTING
+// are interrupted; reviewed calls stay PENDING and use their durable outcome.
 func (l *Loop) resolveTools(ctx context.Context, last Message, calls []ToolCall) error {
 	c := l.c
 	results := map[string]ToolCall{}
@@ -436,11 +468,35 @@ func (l *Loop) resolveTools(ctx context.Context, last Message, calls []ToolCall)
 			}
 			fallthrough
 		default: // PENDING, or a read-only EXECUTING call that is safe to repeat
-			if tc.State == "PENDING" {
+			tool := l.tools[tc.Name]
+			reviewed, isReviewed := tool.(DurableReviewTool)
+			if tc.State == "PENDING" && !isReviewed {
 				if err := c.DB.MarkExecuting(ctx, c.Attempt, c.Fence, tc.ID); err != nil {
 					return err
 				}
 				l.crash("after_mark_executing")
+			}
+			if isReviewed {
+				result, err := l.executeReviewed(ctx, reviewed, tc)
+				if err != nil {
+					return err
+				}
+				if result.Pause != nil {
+					return &reviewPauseError{result: result.Output, pause: *result.Pause}
+				}
+				l.crash("before_finish_tool")
+				if result.GuardDenied {
+					if err := c.DB.MarkExecuting(ctx, c.Attempt, c.Fence, tc.ID); err != nil {
+						return err
+					}
+					if err := c.DB.FinishTool(ctx, c.Attempt, c.Fence, tc.ID, "DONE", []byte(result.Output), result.IsError); err != nil {
+						return err
+					}
+				} else if err := c.DB.FinishReviewedTool(ctx, c.Attempt, c.Fence, tc.ID, []byte(result.Output), result.IsError); err != nil {
+					return err
+				}
+				cur.State, cur.Result, cur.IsError = "DONE", []byte(result.Output), result.IsError
+				break
 			}
 			out, isErr := l.execute(ctx, tc)
 			l.crash("before_finish_tool")
@@ -494,10 +550,26 @@ func (l *Loop) execute(ctx context.Context, tc ToolCall) (string, bool) {
 			return c.Redact.Redact("refused by policy: " + d.Reason), true
 		}
 	}
-	out, isErr := tool.Run(ctx, tc.Input)
+	toolCtx := WithToolCallContext(ctx, ToolCallContext{ID: tc.ID, MessageIndex: tc.MsgIdx})
+	out, isErr := tool.Run(toolCtx, tc.Input)
 	out = c.Redact.Redact(out)
 	if len(out) > c.MaxResultBytes {
 		out = out[:c.MaxResultBytes] + "\n[output truncated]"
 	}
 	return out, isErr
+}
+
+// executeReviewed passes trusted guard identity out-of-band and preserves the
+// reviewed tool's typed control outcome. Stdout can never manufacture a pause.
+func (l *Loop) executeReviewed(ctx context.Context, tool DurableReviewTool, tc ToolCall) (ReviewRunResult, error) {
+	toolCtx := WithToolCallContext(ctx, ToolCallContext{ID: tc.ID, MessageIndex: tc.MsgIdx, Guard: l.c.Guard})
+	result, err := tool.RunReviewed(toolCtx, tc.Input)
+	if err != nil {
+		return ReviewRunResult{}, err
+	}
+	result.Output = l.c.Redact.Redact(result.Output)
+	if len(result.Output) > l.c.MaxResultBytes {
+		result.Output = result.Output[:l.c.MaxResultBytes] + "\n[output truncated]"
+	}
+	return result, nil
 }

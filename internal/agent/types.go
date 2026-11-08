@@ -123,6 +123,32 @@ type Tool interface {
 	Run(ctx context.Context, input json.RawMessage) (out string, isError bool)
 }
 
+// ReviewPause is trusted control metadata returned by a DurableReviewTool.
+// Ordinary tool output is always data, even when it contains the same JSON.
+type ReviewPause struct {
+	RequestHash string `json:"request_hash"`
+	Status      string `json:"status"`
+}
+
+// ReviewRunResult separates durable control outcomes from ordinary stdout.
+// GuardDenied uses the ordinary PENDING -> EXECUTING -> DONE checkpoint path
+// because no review request owns execution. Other completed outcomes require
+// their matching durable review outcome.
+type ReviewRunResult struct {
+	Output      string
+	IsError     bool
+	Pause       *ReviewPause
+	GuardDenied bool
+}
+
+// DurableReviewTool keeps its own execution authority. The loop leaves its
+// checkpointed call PENDING while review or dispatch is unresolved; a crash
+// during dispatch is resolved by that authority, never by running bytes again.
+type DurableReviewTool interface {
+	Tool
+	RunReviewed(ctx context.Context, input json.RawMessage) (ReviewRunResult, error)
+}
+
 // Decision is a guard verdict.
 type Decision struct {
 	Allow  bool
@@ -148,9 +174,10 @@ const (
 
 // Outcomes of a run.
 const (
-	OutcomeDone            = "done"
-	OutcomeParked          = "parked"
-	OutcomeBudgetExhausted = "budget_exhausted"
-	OutcomeMaxTurns        = "max_turns"
-	OutcomeWallExhausted   = "wall_exhausted"
+	OutcomeDone             = "done"
+	OutcomeParked           = "parked"
+	OutcomeApprovalRequired = "approval_required" // resumable: no terminal DB outcome
+	OutcomeBudgetExhausted  = "budget_exhausted"
+	OutcomeMaxTurns         = "max_turns"
+	OutcomeWallExhausted    = "wall_exhausted"
 )

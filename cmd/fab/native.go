@@ -31,7 +31,13 @@ func nativeRunMain(args []string) error {
 	if *prov != g.Provider {
 		return fmt.Errorf("--provider %q does not match the grant (%q)", *prov, g.Provider)
 	}
-	var opts native.Options
+	// The review DSN is always taken out of the environment before any worker
+	// can be constructed, flag on or off. Only FABRIC_REVIEW_GATE=1 uses it.
+	reviewDSN, err := takeReviewDSN()
+	if err != nil {
+		return err
+	}
+	opts := native.Options{ReviewGate: reviewGateEnabled(), ReviewDSN: reviewDSN}
 	if *fake {
 		if os.Getenv("FABRIC_ALLOW_FAKE_HOST") != "1" {
 			return errors.New("--unconfined-fake-host is refused: it runs tools with no containment")
@@ -74,6 +80,23 @@ func nativeRunMain(args []string) error {
 		}
 		return err
 	})
+}
+
+// reviewGateFlag turns on the durable tool review gate for native runs.
+// Anything but "1" leaves native runs exactly as they were without the gate.
+const reviewGateFlag = "FABRIC_REVIEW_GATE"
+
+// reviewGateEnabled is true only for the exact value "1".
+func reviewGateEnabled() bool { return os.Getenv(reviewGateFlag) == "1" }
+
+// takeReviewDSN removes the app-role credential from the process environment
+// before any tool worker can be constructed. Native retains it only in Options.
+func takeReviewDSN() (string, error) {
+	dsn := os.Getenv("FABRIC_REVIEW_DSN")
+	if err := os.Unsetenv("FABRIC_REVIEW_DSN"); err != nil {
+		return "", fmt.Errorf("scrub FABRIC_REVIEW_DSN: %w", err)
+	}
+	return dsn, nil
 }
 
 // waitStarter adapts a Profile plus its Wait to tools.Starter.
