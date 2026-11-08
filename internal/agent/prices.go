@@ -103,10 +103,12 @@ func (p Prices) Cost(u Usage) int64 {
 // WorstCase is the hold for one request: every input byte counted as a token
 // at the dearer of the input and cache-write prices (a token is never less
 // than one byte), plus max_tokens output (thinking included) at the output
-// price, with the long-context uplift when the estimate crosses the tier.
-func (p Prices) WorstCase(bodyBytes, maxTokens int) int64 {
+// price and the configured maximum of server-tool uses at their price, with
+// the long-context uplift when the estimate crosses the tier.
+func (p Prices) WorstCase(bodyBytes, maxTokens int, maxServerToolUses int64) int64 {
 	inRate := max(*p.Input, *p.CacheWrite, *p.CacheRead)
 	c := addCost(ceilMul(int64(bodyBytes), inRate), ceilMul(int64(maxTokens), *p.Output))
+	c = addCost(c, scaleCeil(maxServerToolUses, *p.ServerToolUse, 1))
 	if *p.LongContextThreshold > 0 && int64(bodyBytes) > *p.LongContextThreshold {
 		c = scaleCeil(c, *p.LongContextPercent, 100)
 	}

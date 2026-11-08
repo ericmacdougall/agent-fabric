@@ -62,7 +62,7 @@ func TestBudgetCumulative(t *testing.T) {
 	if _, err, _ := probe.life(); err != nil {
 		t.Fatal(err)
 	}
-	hold2 := testPrices().WorstCase(len(probe.srv.Requests()[1].Body), 1000)
+	hold2 := testPrices().WorstCase(len(probe.srv.Requests()[1].Body), 1000, 0)
 	actual1 := testPrices().Cost(agent.Usage{Input: 100, Output: 50})
 
 	r := newRig(t, script()...)
@@ -83,13 +83,14 @@ func TestBudgetCumulative(t *testing.T) {
 
 // Every price field is exercised: input, output (thinking is output), cache write and read.
 func TestBudgetUsageCosts(t *testing.T) {
-	r := newRig(t, fakeapi.Step{Events: fakeapi.WithCache("answer", 1000, 500, 2000, 4000)})
+	r := newRig(t, fakeapi.Step{Events: fakeapi.WithCache("answer", 1000, 500, 20, 40)})
 	out, err, _ := r.life()
 	if err != nil || out.Kind != agent.OutcomeDone {
 		t.Fatalf("out=%+v err=%v", out, err)
 	}
-	// 1000*3 + 500*15 + 2000*3.75 + 4000*0.3 per million, in micro-USD.
-	const want = 3000 + 7500 + 7500 + 1200
+	// 1000*3 + 500*15 + 20*3.75 + 40*0.3 per million, in micro-USD. Cache counters
+	// stay below the request body bytes, so the actual never exceeds the hold.
+	const want = 3000 + 7500 + 75 + 12
 	for _, c := range r.caps {
 		if got := r.spent(c.Resource); got != want {
 			t.Fatalf("%s spent %d, want %d", c.Resource, got, want)
@@ -142,7 +143,7 @@ func TestHoldSurvivesCrash(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("requests %d", len(reqs))
 	}
-	held := testPrices().WorstCase(len(reqs[0].Body), 1000)
+	held := testPrices().WorstCase(len(reqs[0].Body), 1000, 0)
 	actual := testPrices().Cost(agent.Usage{Input: 150, Output: 20})
 	if got, want := r.spent(r.caps[2].Resource), held+actual; got != want {
 		t.Fatalf("spent %d, want held %d + actual %d = %d", got, held, actual, want)

@@ -195,7 +195,7 @@ func TestTransportAfterWriteCharged(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("requests %d", len(reqs))
 	}
-	want := testPrices().WorstCase(len(reqs[0].Body), 1000) + testPrices().Cost(agent.Usage{Input: 150, Output: 20})
+	want := testPrices().WorstCase(len(reqs[0].Body), 1000, 0) + testPrices().Cost(agent.Usage{Input: 150, Output: 20})
 	if got := r.spent(r.caps[2].Resource); got != want {
 		t.Fatalf("spent %d, want held %d for the lost request plus actual", got, want)
 	}

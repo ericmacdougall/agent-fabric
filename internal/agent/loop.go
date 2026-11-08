@@ -35,10 +35,14 @@ type Config struct {
 	Prompt    string
 
 	MaxTurns       int
-	MaxTotalTokens int64         // input+output across the attempt; 0 = unlimited
-	Wall           time.Duration // attempt wall clock from first start
-	RestartCap     int
-	MaxResultBytes int
+	MaxTotalTokens int64 // input+output across the attempt; 0 = unlimited
+	// MaxServerToolUses bounds server-tool uses per response and is held at
+	// its price before each request. 0 means none are allowed: a response
+	// that reports any is settled in full, then ends the run.
+	MaxServerToolUses int64
+	Wall              time.Duration // attempt wall clock from first start
+	RestartCap        int
+	MaxResultBytes    int
 
 	Prices      Prices
 	BillingMode string
@@ -77,6 +81,9 @@ func New(c Config) (*Loop, error) {
 	if c.Model == "" || c.MaxTokens <= 0 || c.MaxTurns <= 0 || c.Wall <= 0 {
 		return nil, errors.New("agent: model, max_tokens, max_turns and wall come from the grant and are required")
 	}
+	if c.MaxServerToolUses < 0 {
+		return nil, errors.New("agent: max server-tool uses cannot be negative")
+	}
 	if err := c.Prices.Validate(); err != nil {
 		return nil, err
 	}
@@ -112,6 +119,11 @@ func (l *Loop) configSHA() string {
 	w := func(s string) { fmt.Fprintf(h, "%d:%s|", len(s), s) }
 	w(c.Model)
 	w(strconv.Itoa(c.MaxTokens))
+	if c.MaxServerToolUses != 0 {
+		// Only a non-zero maximum enters the hash, so runs started before
+		// this field existed keep their config_sha and can still resume.
+		w("max_server_tool_uses=" + strconv.FormatInt(c.MaxServerToolUses, 10))
+	}
 	w(c.System)
 	w(c.Prompt)
 	keys := make([]string, 0, len(c.Extra))
@@ -360,11 +372,12 @@ func (l *Loop) turn(ctx context.Context, msgs []Message, turns int) (Outcome, bo
 
 	held := map[int]int64{}
 	var spent int64
+	var budgetViolation string
 	reserved := map[int][]store.Reservation{}
 	l.settleE = nil
 	hooks := Hooks{
 		BeforeAttempt: func(n, bodyBytes int) error {
-			amt := c.Prices.WorstCase(bodyBytes, c.MaxTokens)
+			amt := c.Prices.WorstCase(bodyBytes, c.MaxTokens, c.MaxServerToolUses)
 			rs, err := c.Ledger.Hold(ctx, l.holdKey(idx, n), amt)
 			if err != nil {
 				return err
@@ -377,6 +390,19 @@ func (l *Loop) turn(ctx context.Context, msgs []Message, turns int) (Outcome, bo
 		AfterAttempt: func(r AttemptRecord) {
 			actual := l.charge(r, held[r.N])
 			spent += actual
+			if r.Outcome == "ok" {
+				// The hold is the worst case; a larger actual means the bound did
+				// not hold. Settle the full actual below, then refuse the turn.
+				if actual > held[r.N] {
+					budgetViolation = fmt.Sprintf("actual cost %d exceeded held reservation %d", actual, held[r.N])
+				}
+				if r.Usage != nil && r.Usage.ServerToolUses > c.MaxServerToolUses {
+					if budgetViolation != "" {
+						budgetViolation += "; "
+					}
+					budgetViolation += fmt.Sprintf("server-tool uses %d exceeded configured maximum %d", r.Usage.ServerToolUses, c.MaxServerToolUses)
+				}
+			}
 			if err := c.Ledger.Settle(ctx, reserved[r.N], actual); err != nil && l.settleE == nil {
 				l.settleE = err
 			}
@@ -399,6 +425,10 @@ func (l *Loop) turn(ctx context.Context, msgs []Message, turns int) (Outcome, bo
 			return o, true, ferr
 		}
 		return Outcome{}, false, err
+	}
+	if budgetViolation != "" {
+		o, ferr := l.finish(ctx, OutcomeBudgetExhausted, budgetViolation, turns)
+		return o, true, ferr
 	}
 	blk, _ := json.Marshal(res.Content)
 	usage, _ := json.Marshal(res.Usage)

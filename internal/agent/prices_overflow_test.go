@@ -48,7 +48,7 @@ func TestPriceArithmeticSaturates(t *testing.T) {
 		ServerToolUse: i64(math.MaxInt64), LongContextThreshold: i64(1),
 		LongContextPercent: i64(math.MaxInt64),
 	}
-	if got := huge.WorstCase(math.MaxInt, math.MaxInt); got != math.MaxInt64 {
+	if got := huge.WorstCase(math.MaxInt, math.MaxInt, math.MaxInt64); got != math.MaxInt64 {
 		t.Errorf("overflowing WorstCase = %d, want MaxInt64", got)
 	}
 
