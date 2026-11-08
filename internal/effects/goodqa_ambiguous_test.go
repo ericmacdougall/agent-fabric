@@ -34,7 +34,8 @@ func TestGoodQADispatchWithoutCommentIDIsUnknown(t *testing.T) {
 	var payload string
 	g := ambiguousServer(t, &payload)
 	req := json.RawMessage(`{"issue_id":"i1","body":"b"}`)
-	for _, p := range []string{`{}`, `{"comment":{}}`, `{"comment":{"id":""}}`, `{"comment":{"id":7}}`, `{"ok":true}`} {
+	for _, p := range []string{`{}`, `{"comment":{}}`, `{"comment":{"id":""}}`, `{"comment":{"id":7}}`, `{"ok":true}`,
+		`{"comment":{"id":"   "}}`, `{"data":{"id":"\t"}}`, `{"id":" "}`} {
 		payload = p
 		rec, err := g.Dispatch(context.Background(), Submission{Effect: Effect{Request: req}, RemoteKey: "k1"})
 		if err != nil {

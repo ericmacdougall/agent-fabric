@@ -147,13 +147,16 @@ func firstN(s string, n int) string {
 func commentID(data map[string]any) string {
 	for _, k := range []string{"comment", "data"} {
 		if inner, ok := data[k].(map[string]any); ok {
-			if id, _ := inner["id"].(string); id != "" {
+			if id, _ := inner["id"].(string); strings.TrimSpace(id) != "" {
 				return id
 			}
 		}
 	}
-	id, _ := data["id"].(string)
-	return id
+	// A blank id proves nothing either (goodqa#15235 S4).
+	if id, _ := data["id"].(string); strings.TrimSpace(id) != "" {
+		return id
+	}
+	return ""
 }
 
 // Reconcile reads the issue's comments and looks for the trailer with this
