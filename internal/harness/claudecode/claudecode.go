@@ -6,10 +6,18 @@
 // current turn without ending the session, and Stop closes stdin and lets the
 // process drain.
 //
-// The adapter reads only the process's stdout. It never gives the process
-// anything but the environment in StartSpec.Env, and it does not sandbox:
-// production wiring supplies a Launcher that starts the process under a host
-// profile (internal/host).
+// Concurrency design (goodqa#15373 red-team): stdout is drained by one reader
+// goroutine that never takes a lock a writer can hold; stdin is written by one
+// writer goroutine fed by a bounded queue, so Input and Interrupt return when
+// their context ends even if the child has stopped reading. A leader that has
+// exited has its whole process group killed; a descendant that left the group
+// and still holds stdout is cut off after a short drain deadline.
+//
+// The adapter reads only the process's stdout and gives it nothing but the
+// environment in StartSpec.Env. It does not sandbox: production wiring
+// supplies a Launcher that starts the process under a host profile
+// (internal/host). A "done" outcome means the process reported success and
+// exited 0; it is not verification of the work.
 package claudecode
 
 import (
@@ -40,6 +48,9 @@ type Adapter struct {
 	// StopGrace is how long Stop waits for the process to drain before it is
 	// killed. Zero means 10 seconds.
 	StopGrace time.Duration
+	// DrainGrace is how long, after the leader has exited, the reader keeps
+	// waiting for stdout to reach EOF before closing it. Zero means 2 seconds.
+	DrainGrace time.Duration
 }
 
 func (a *Adapter) Name() string { return Name }
@@ -47,25 +58,33 @@ func (a *Adapter) Name() string { return Name }
 // Caps: interactive; resume is not wired yet.
 func (a *Adapter) Caps() harness.Caps { return harness.Caps{Interactive: true} }
 
+const queueSize = 64
+
 type session struct {
 	a    *Adapter
 	id   string
 	em   *harness.Emitter
 	proc Proc
 
-	wmu      sync.Mutex // serialises stdin writes and counters below
+	// sendMu orders concurrent Inputs (emit then enqueue). Never taken by the reader.
+	sendMu sync.Mutex
+	// mu guards the counters and flags below. Held only for short, non-blocking
+	// sections; never across a write, a queue operation or an emit.
+	mu       sync.Mutex
 	turn     int
 	sent     int
+	results  int
+	lastOK   bool
+	lastSub  string
 	ctlSeq   int
 	inClosed bool
-	stopping atomic.Bool
 
+	stopping atomic.Bool
 	stopOnce sync.Once
+	wq       chan []byte
+	closeIn  chan struct{}
 
 	// owned by the reader goroutine until done is closed
-	results   int
-	lastOK    bool
-	lastSub   string
 	tools     map[string]toolInfo
 	endedSelf bool
 
@@ -95,7 +114,9 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 	if err != nil {
 		return nil, err
 	}
-	s := &session{a: a, id: spec.SessionID, em: em, proc: proc, tools: map[string]toolInfo{}, done: make(chan struct{})}
+	s := &session{a: a, id: spec.SessionID, em: em, proc: proc, tools: map[string]toolInfo{}, done: make(chan struct{}),
+		wq: make(chan []byte, queueSize), closeIn: make(chan struct{})}
+	go s.write()
 	go s.read()
 	if spec.Prompt != "" {
 		if err := s.send(context.WithoutCancel(ctx), spec.Prompt); err != nil {
@@ -109,75 +130,109 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 
 func (s *session) ID() string { return s.id }
 
-func (s *session) writeLine(v any) error {
+// write is the only goroutine that writes stdin. On close it flushes what is
+// queued, then closes stdin. A write error ends writing; the child exiting
+// settles the session.
+func (s *session) write() {
+	in := s.proc.Stdin()
+	defer in.Close()
+	for {
+		select {
+		case b := <-s.wq:
+			if _, err := in.Write(b); err != nil {
+				return
+			}
+		case <-s.closeIn:
+			for {
+				select {
+				case b := <-s.wq:
+					if _, err := in.Write(b); err != nil {
+						return
+					}
+				default:
+					return
+				}
+			}
+		case <-s.done:
+			return
+		}
+	}
+}
+
+func (s *session) enqueue(ctx context.Context, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	_, err = s.proc.Stdin().Write(append(b, '\n'))
-	return err
-}
-
-// send records and writes one user turn. The Turn event precedes the write so
-// every reply the process produces follows it in the stream.
-func (s *session) send(ctx context.Context, text string) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	if s.stopping.Load() || s.inClosed {
-		return harness.ErrSessionEnded
-	}
 	select {
+	case s.wq <- append(b, '\n'):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-s.done:
 		return harness.ErrSessionEnded
+	}
+}
+
+func (s *session) ended() bool {
+	select {
+	case <-s.done:
+		return true
 	default:
+		return false
+	}
+}
+
+// send records and queues one user turn. The Turn event precedes the queueing
+// so every reply the process produces follows it in the stream.
+func (s *session) send(ctx context.Context, text string) error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	s.mu.Lock()
+	if s.stopping.Load() || s.inClosed || s.ended() {
+		s.mu.Unlock()
+		return harness.ErrSessionEnded
 	}
 	s.turn++
-	_ = s.em.Turn(ctx, s.turn)
-	_ = s.em.Message(ctx, "user", text)
-	msg := map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}}
-	if err := s.writeLine(msg); err != nil {
-		return fmt.Errorf("%w: %v", harness.ErrSessionEnded, err)
-	}
 	s.sent++
-	return nil
+	n := s.turn
+	s.mu.Unlock()
+	_ = s.em.Turn(ctx, n)
+	_ = s.em.Message(ctx, "user", text)
+	return s.enqueue(ctx, map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}})
 }
 
 func (s *session) Input(ctx context.Context, msg string) error { return s.send(ctx, msg) }
 
 func (s *session) Interrupt(ctx context.Context) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	select {
-	case <-s.done:
-		return nil
-	default:
-	}
-	if s.inClosed {
+	s.mu.Lock()
+	if s.inClosed || s.ended() {
+		s.mu.Unlock()
 		return nil
 	}
 	s.ctlSeq++
-	req := map[string]any{"type": "control_request", "request_id": fmt.Sprintf("fab-%d", s.ctlSeq),
-		"request": map[string]any{"subtype": "interrupt"}}
-	if err := s.writeLine(req); err != nil {
-		return nil // the process is already gone; Interrupt on an ended session is a no-op
+	id := fmt.Sprintf("fab-%d", s.ctlSeq)
+	s.mu.Unlock()
+	err := s.enqueue(ctx, map[string]any{"type": "control_request", "request_id": id,
+		"request": map[string]any{"subtype": "interrupt"}})
+	if errors.Is(err, harness.ErrSessionEnded) {
+		return nil // Interrupt on an ended session is a no-op
 	}
-	return nil
+	return err
 }
 
 func (s *session) closeInput() {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	if !s.inClosed {
-		s.inClosed = true
-		_ = s.proc.Stdin().Close()
+	s.mu.Lock()
+	first := !s.inClosed
+	s.inClosed = true
+	s.mu.Unlock()
+	if first {
+		close(s.closeIn)
 	}
 }
 
 func (s *session) Stop(ctx context.Context) error {
 	s.stopOnce.Do(func() {
-		// Set the flag and arm the timeout before touching stdin: a write
-		// stuck on a process that stopped reading holds wmu, and only ending
-		// the process frees it.
 		s.stopping.Store(true)
 		grace := s.a.StopGrace
 		if grace <= 0 {
@@ -205,13 +260,20 @@ func (s *session) Wait(ctx context.Context) (harness.Final, error) {
 	}
 }
 
-// read consumes stdout until EOF, then settles the session.
+// read consumes stdout until EOF (or the drain deadline), then settles.
 func (s *session) read() {
 	defer close(s.done)
-	var panicked any
-	func() {
-		defer func() { panicked = recover() }()
-		readLines(s.proc.Stdout(), claude.MaxLineBytes, func(line []byte, oversize bool) {
+	var panicked atomic.Value
+	readDone := make(chan struct{})
+	out := s.proc.Stdout()
+	go func() {
+		defer close(readDone)
+		defer func() {
+			if r := recover(); r != nil {
+				panicked.Store(fmt.Sprint(r))
+			}
+		}()
+		readLines(out, claude.MaxLineBytes, func(line []byte, oversize bool) {
 			if oversize {
 				_ = s.em.Unknown(context.Background(), "event exceeds the maximum line size", string(line))
 			} else if len(line) > 0 {
@@ -222,19 +284,36 @@ func (s *session) read() {
 			}
 		})
 	}()
-	if panicked != nil {
+	select {
+	case <-readDone:
+	case <-s.proc.Exited():
+		// The leader is gone and its group is dead. A descendant that left the
+		// group may still hold stdout open: give the pipe a moment to drain,
+		// then cut it.
+		grace := s.a.DrainGrace
+		if grace <= 0 {
+			grace = 2 * time.Second
+		}
+		select {
+		case <-readDone:
+		case <-time.After(grace):
+			_ = out.Close()
+			<-readDone
+		}
+	}
+	if panicked.Load() != nil {
 		_ = s.proc.Kill()
 	}
 	code, werr := s.proc.Wait()
-	s.wmu.Lock()
+	s.mu.Lock()
 	pending := s.sent - s.results
-	s.wmu.Unlock()
-	stopping := s.stopping.Load()
-	f := s.settle(code, werr, stopping, pending, panicked)
+	results, lastOK, lastSub := s.results, s.lastOK, s.lastSub
+	s.mu.Unlock()
+	f := s.settle(code, werr, s.stopping.Load(), pending, results, lastOK, lastSub, panicked.Load())
 	s.final, _ = s.em.FinalOutcome(context.Background(), f)
 }
 
-func (s *session) settle(code int, werr error, stopping bool, pending int, panicked any) harness.Final {
+func (s *session) settle(code int, werr error, stopping bool, pending, results int, lastOK bool, lastSub string, panicked any) harness.Final {
 	switch {
 	case panicked != nil:
 		return harness.Final{Outcome: harness.OutcomeFailed, Reason: fmt.Sprintf("adapter panic: %v", panicked), ExitCode: code}
@@ -244,15 +323,17 @@ func (s *session) settle(code int, werr error, stopping bool, pending int, panic
 			f.Reason = fmt.Sprintf("undelivered_inputs=%d", pending)
 		}
 		return f
-	case code == 0 && werr == nil && s.results > 0 && s.lastOK:
+	case code == 0 && werr == nil && results > 0 && lastOK && pending <= 0:
 		return harness.Final{Outcome: harness.OutcomeDone, ExitCode: 0}
 	}
 	reason := fmt.Sprintf("exited with status %d", code)
 	switch {
-	case s.results == 0:
+	case results == 0:
 		reason = fmt.Sprintf("exited without a result (status %d)", code)
-	case !s.lastOK:
-		reason = fmt.Sprintf("last turn did not succeed (%s), status %d", s.lastSub, code)
+	case !lastOK:
+		reason = fmt.Sprintf("last turn did not succeed (%s), status %d", lastSub, code)
+	case pending > 0:
+		reason = fmt.Sprintf("exited with %d unanswered input(s), status %d", pending, code)
 	}
 	if werr != nil {
 		reason += ": " + werr.Error()
@@ -328,6 +409,7 @@ func (s *session) handle(line []byte) {
 		}
 		for _, b := range s.blocks(w.Message.Content, line) {
 			if b.Type != "tool_result" {
+				_ = s.em.Unknown(ctx, "user block type "+b.Type, string(line))
 				continue
 			}
 			ti := s.tools[b.ToolUseID]
@@ -338,12 +420,13 @@ func (s *session) handle(line []byte) {
 			_ = s.em.ToolCall(ctx, b.ToolUseID, ti.name, ti.input, status)
 		}
 	case "result":
-		s.wmu.Lock()
+		ok := w.Subtype == "success" && !w.IsError
+		s.mu.Lock()
 		s.results++
-		s.lastOK = w.Subtype == "success" && !w.IsError
+		s.lastOK = ok
 		s.lastSub = w.Subtype
-		s.wmu.Unlock()
-		if !s.lastOK {
+		s.mu.Unlock()
+		if !ok {
 			_ = s.em.Message(ctx, "system", "turn ended: "+w.Subtype)
 		}
 		if s.a.SingleTurn {

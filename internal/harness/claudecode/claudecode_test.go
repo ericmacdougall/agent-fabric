@@ -66,7 +66,7 @@ func fakeClaude(mode string) {
 			continue
 		}
 		if in.Type == "control_request" {
-			emit(map[string]any{"type": "control_response", "response": map[string]any{"subtype": in.Request.Subtype}})
+			emit(assistant(text("got-control:" + in.Request.Subtype)))
 			continue
 		}
 		n++
@@ -96,6 +96,8 @@ func fakeClaude(mode string) {
 		case "env":
 			emit(assistant(text(fmt.Sprintf("env_count=%d", len(os.Environ())))))
 			emit(result("success", false))
+		case "silent", "toolerr", "argv", "pwd", "stderrsecret", "grandchild", "setsid":
+			extraModes(mode)
 		case "hang":
 			time.Sleep(time.Hour) // ignores stdin close and never exits
 		case "chatty":

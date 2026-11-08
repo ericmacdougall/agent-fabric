@@ -138,6 +138,11 @@ func (e *Emitter) emit(ctx context.Context, k Kind, payload any) error {
 }
 
 func (e *Emitter) clean(s string, max int) string {
+	// Bound the work before the regex runs, with a margin so a secret that
+	// straddles the final cut is still whole when redacted.
+	if pre := max + 4096; len(s) > pre {
+		s = s[:pre]
+	}
 	s = e.red.Redact(zeroWidth.Replace(s))
 	if !utf8.ValidString(s) {
 		s = strings.ToValidUTF8(s, "�")
