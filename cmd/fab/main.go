@@ -71,6 +71,8 @@ func main() {
 		err = metricsMain(os.Args[2:])
 	case "serve-metrics":
 		err = serveMetricsMain(os.Args[2:])
+	case "ladder":
+		err = ladderMain(os.Args[2:])
 	case "tui":
 		err = tuiMain(os.Args[2:])
 	case "version":
@@ -125,6 +127,7 @@ func usage() {
   serve-metrics [--listen 127.0.0.1:9464] [--allow-remote] [--timeout D]   GET /metrics; loopback only by default
   tui [--interval 2s] [--timeout 1s] [--no-color] [--keys on|off]   read-only terminal view (fab tui -h: keys)
   version                              build revision
+  ladder status --state F --policy F [--json]   model ladder from an escalation.py state file (read-only)
   asks [--state open]                  the inbox
   ask new --id I --question Q --source S [--mission M --kind K --option O ...]
   ask answer I --answer A --source S   answer; wakes the mission waiting on ask:I

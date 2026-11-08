@@ -1,8 +1,8 @@
 package ladder
 
 // Replay and Status are an exact port of the harness ladder,
-// escalation.py rung_of and ladder_status (goodqa#15324). Resolve, above,
-// predates that ledger and counts differently: it does not reset on a new
+// escalation.py rung_of and ladder_status (goodqa#15324). Resolve
+// (ladder.go) predates that ledger and counts differently: it does not reset on a new
 // finding fingerprint and never re-arms a head after a claimed fix. Replay
 // is the one to use when the answer must agree with escalation.py.
 
@@ -22,8 +22,8 @@ type PolicyRung struct {
 	NeedsUserPermission bool `json:"needs_user_permission"`
 }
 
-// Limits are model_tiers.json ladder_limits. MaxTotalReviewUSD is kept as
-// the exact decimal text from the file, so the cap comparison is exact.
+// Limits are model_tiers.json ladder_limits. MaxTotalReviewUSD keeps the
+// number's text; Status parses it to float64 the way Python does.
 type Limits struct {
 	MaxReviewLaunches int         `json:"max_review_launches"`
 	MaxRungClimbs     int         `json:"max_rung_climbs"`
@@ -56,7 +56,7 @@ type Computed struct {
 }
 
 // LedgerState is the part of an escalation.py state file Status reads.
-// SpendUSD is the exact decimal text of spend_usd.
+// SpendUSD keeps the text of spend_usd (see decimal).
 type LedgerState struct {
 	Task     string        `json:"task"`
 	Events   []LedgerEvent `json:"events"`
