@@ -1,5 +1,7 @@
 # Architecture
 
+This page describes the current core. The target (tenant-aware kernel, node agent, adapters, capability broker, message bus, gateway) is in [adr/0001-kernel-scope.md](adr/0001-kernel-scope.md) and [status-and-roadmap.md](status-and-roadmap.md).
+
 Agent Fabric is one Go binary (`fab`) over one PostgreSQL database. `fab daemon` (fabd) is the only writer of mission state. Workers are separate processes that fabd launches under a host profile.
 
 ## Components

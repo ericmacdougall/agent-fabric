@@ -1,18 +1,21 @@
 # agent-fabric
 
-A small control plane for running bounded, disposable coding-agent workers:
-missions, attempts with fences, an effect broker with idempotent readback,
-host-owned jobs, and event-driven relaunch instead of polling. One daemon
-over Postgres is the only writer; workers are `claude -p` (or a recorded
-fake) processes launched by a host profile that confines them.
+A multi-tenant execution and trace kernel for agent work. Fabric runs bounded
+agents on one or many machines, under policy, with every action recorded:
+typed streams of events in Postgres, attempts with fences and database-time
+leases, and an effect broker that records intent, dispatches once and settles
+unknown outcomes by reading the target back. An organisation control plane
+(GoodQA) supplies users, orgs, tickets and UI; a personal edition uses a
+local identity issuer. The decision is in
+[docs/adr/0001-kernel-scope.md](docs/adr/0001-kernel-scope.md).
 
 ## What it is
 
-Agent Fabric is a control plane for running coding-agent work that has to be bounded, auditable and recoverable. It is for engineers who run long unattended agent jobs and cannot accept a worker that double-posts a comment, outlives its lease, spends past a cap or marks work done on its own say-so.
+Agent Fabric is for people and teams who run long unattended agent jobs and cannot accept a worker that double-posts a comment, outlives its lease, spends past a cap or marks work done on its own say-so. The problem: agent runs fail halfway, retry, and touch outside systems. Without a durable record, nobody can tell whether an action happened.
 
-The problem: agent runs fail halfway, retry, and touch outside systems. Without a durable record, nobody can tell whether an action happened.
+The target has 12 dimensions: multi-harness (including a built-in harness), multi-machine, multi-agent, configurable policy, traceability, long-term work tracking, full computer use, full browser use, inter-agent and inter-harness messaging, gateway trace and control, multi-tenant, and multi-user and org-controlled plus a personal deployment. The roadmap slices F0 to F13 in [docs/status-and-roadmap.md](docs/status-and-roadmap.md) close them, and [docs/slices.md](docs/slices.md) outlines each slice's acceptance checks and negative cases.
 
-What it does:
+**What exists today is the core, not the whole target.** It is a single-host, single-operator coding-agent slice with these parts:
 
 - Keeps every mission in PostgreSQL as an event log, driven by a pure state machine with property tests and a separate invariant oracle.
 - Gives each attempt a fence and a database-time lease, so a stale worker cannot write.
@@ -21,13 +24,16 @@ What it does:
 - Caps native-API spend before each send, and can require durable human review of every native tool call.
 - Refuses to mark a mission done without a live-test receipt for the deployed commit.
 
-What is different: models propose and deterministic code decides, and [docs/review-gates.md](docs/review-gates.md) lists each refusal with the test that fails if it breaks. It is early and shadow-only; see [docs/status-and-roadmap.md](docs/status-and-roadmap.md) for what is verified, what is open (17-dimension capability matrix: 2 has, 10 partial, 5 missing), and what comes next. Design and data flow: [docs/architecture.md](docs/architecture.md).
+What it does not have yet, honestly: tenants and row-level security, an event envelope with versions and trace ids, typed streams other than missions, signed principals, a node agent and machine registry, harness adapters beyond two providers, browser and desktop capabilities, messaging, a gateway and a read API. Each is a named slice in the roadmap; the shipped state and the state of each of the 12 dimensions are in [docs/status-and-roadmap.md](docs/status-and-roadmap.md). Design and data flow of the current core: [docs/architecture.md](docs/architecture.md).
+
+What is different: models propose and deterministic code decides, and [docs/review-gates.md](docs/review-gates.md) lists each refusal with the test that fails if it breaks.
 
 **Status: early, shadow-only, under review.** Nothing here drives a live
 system yet. The code is being built against a design document and an
 independent code inspection; findings are fixed in commits that cite the
 inspection. Treat every claim below as "tested in the ways stated", not as
-production readiness.
+production readiness. Fabric is planned to leave shadow-only mode after the
+foundation slices (envelope, streams, tenancy, principals) land.
 
 ## What exists
 
