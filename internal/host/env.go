@@ -66,6 +66,26 @@ func WorkerEnv(pairs []string) (env, names []string, err error) {
 	return env, names, nil
 }
 
+// managerProxyEnvNames are set only by the Linux worker manager, from its
+// per-run egress mediator (goodqa#15235 S5b). WorkerEnv still refuses them
+// from callers; an environment file may carry them.
+var managerProxyEnvNames = []string{
+	"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+	"http_proxy", "https_proxy", "all_proxy", "no_proxy",
+}
+
+func envFileName(name string) bool {
+	if allowedName(name) {
+		return true
+	}
+	for _, n := range managerProxyEnvNames {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 // maxEnvFile bounds a worker environment file.
 const maxEnvFile = 1 << 20
 
@@ -140,7 +160,7 @@ func ReadEnvFile(path, keep string) ([]string, error) {
 	if len(b) > 0 {
 		for _, e := range strings.Split(string(b), "\x00") {
 			name, _, ok := strings.Cut(e, "=")
-			if !ok || !envName.MatchString(name) || !allowedName(name) || !want[name] || seen[name] {
+			if !ok || !envName.MatchString(name) || !envFileName(name) || !want[name] || seen[name] {
 				return nil, fmt.Errorf("--env-file: entry %q is not an expected NAME=VALUE", name)
 			}
 			seen[name] = true
