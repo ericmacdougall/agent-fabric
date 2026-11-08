@@ -413,7 +413,7 @@ local = IOVec(ctypes.cast(local_buffer, ctypes.c_void_p), 1)
 remote = IOVec(ctypes.c_void_p(1), 1)
 ctypes.set_errno(0)
 check("process_vm_writev", libc.syscall(process_vm_nr, pid, ctypes.byref(local), 1, ctypes.byref(remote), 1, 0))
-' %q`, target.Process.Pid)
+' %d`, target.Process.Pid)
 	h, err := profile.Start(g, []string{"sh", "-c", script}, nil, output, output)
 	_ = output.Close()
 	if err != nil {
