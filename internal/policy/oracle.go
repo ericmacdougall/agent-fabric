@@ -23,6 +23,11 @@ type Oracle struct {
 	Timeout time.Duration
 	// Env is passed to hooks in addition to a fixed PATH.
 	Env []string
+	// Precheck, when set, runs before each hook is executed, on every judged
+	// call and so in SelfTest too; an error denies the call without running
+	// that hook. The native runner sets it to the worktree pin's check
+	// (goodqa#15283), so no hook runs once the recorded worktree has moved.
+	Precheck func() error
 }
 
 var _ agent.Guard = (*Oracle)(nil)
@@ -51,6 +56,11 @@ func (o *Oracle) Check(ctx context.Context, tool string, input json.RawMessage) 
 		to = 10 * time.Second
 	}
 	for _, h := range o.Hooks {
+		if o.Precheck != nil {
+			if err := o.Precheck(); err != nil {
+				return agent.Decision{Reason: "policy oracle refused before running a hook: " + err.Error()}
+			}
+		}
 		cctx, cancel := context.WithTimeout(ctx, to)
 		cmd := exec.CommandContext(cctx, h[0], h[1:]...)
 		cmd.Stdin = bytes.NewReader(payload)

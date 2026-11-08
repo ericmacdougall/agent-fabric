@@ -26,6 +26,10 @@ type Read struct {
 	given    string        // the path as configured, before symlink resolution
 	MaxBytes int64         // bytes returned at most
 	Timeout  time.Duration // wall bound for one read
+	// Pin, when set, is the run's recorded worktree (goodqa#15283): every
+	// read first checks it, then checks that the root it opened is that same
+	// directory, and refuses with ErrWorktreeMoved otherwise.
+	Pin *WorktreePin
 }
 
 var _ agent.Tool = (*Read)(nil)
@@ -49,6 +53,9 @@ func NewRead(worktree string, maxBytes int64, timeout time.Duration) (*Read, err
 	}
 	return &Read{given: filepath.Clean(worktree), root: real, MaxBytes: maxBytes, Timeout: timeout}, nil
 }
+
+// Root is the resolved worktree root every read opens.
+func (r *Read) Root() string { return r.root }
 
 func (r *Read) Name() string        { return "read" }
 func (r *Read) SideEffecting() bool { return false }
@@ -116,9 +123,20 @@ func (r *Read) read(ctx context.Context, p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if r.Pin != nil {
+		if err := r.Pin.Check(); err != nil {
+			return "", err
+		}
+	}
 	dirfd, err := unix.Open(r.root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return "", fmt.Errorf("worktree: %w", err)
+	}
+	if r.Pin != nil {
+		if err := r.Pin.CheckFD(dirfd); err != nil {
+			unix.Close(dirfd)
+			return "", err
+		}
 	}
 	for i, c := range parts {
 		last := i == len(parts)-1

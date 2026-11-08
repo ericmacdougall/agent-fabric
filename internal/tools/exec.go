@@ -108,7 +108,11 @@ type HostConfiner struct {
 	// a leader that backgrounds a process otherwise leaves it running after
 	// Run returns. Off, Run behaves exactly as before the flag existed.
 	ExitCleanup bool
-	n           int
+	// Pin, when set, is the run's recorded worktree (goodqa#15283): every
+	// child start first checks it and refuses with ErrWorktreeMoved, so the
+	// host never starts a child whose cwd is outside the recorded directory.
+	Pin *WorktreePin
+	n   int
 }
 
 // cleanupTries bounds how long a failed cleanup keeps the run's handle.
@@ -130,6 +134,11 @@ func (h *HostConfiner) childGrant() host.Grant {
 func (h *HostConfiner) Run(ctx context.Context, spec ExecSpec) (ExecResult, error) {
 	if len(spec.Argv) == 0 {
 		return ExecResult{}, errors.New("no argv")
+	}
+	if h.Pin != nil {
+		if err := h.Pin.Check(); err != nil {
+			return ExecResult{}, err
+		}
 	}
 	out, err := os.CreateTemp(h.Base.RunDir, "tool-out-*")
 	if err != nil {
@@ -345,6 +354,10 @@ type Grep struct {
 	Root      string
 	Timeout   time.Duration
 	MaxOutput int
+	// Pin, when set, is the run's recorded worktree (goodqa#15283), checked
+	// before the root is read; the confined child is checked again by
+	// HostConfiner.
+	Pin *WorktreePin
 }
 
 var _ agent.Tool = (*Grep)(nil)
@@ -363,6 +376,11 @@ func (g *Grep) Run(ctx context.Context, input json.RawMessage) (string, bool) {
 	}
 	if err := json.Unmarshal(input, &in); err != nil || in.Pattern == "" || len(in.Pattern) > 1024 || strings.ContainsRune(in.Pattern, 0) {
 		return "grep needs {\"pattern\": \"...\"}", true
+	}
+	if g.Pin != nil {
+		if err := g.Pin.Check(); err != nil {
+			return "grep refused: " + err.Error(), true
+		}
 	}
 	p := in.Path
 	if p == "" {
