@@ -407,6 +407,12 @@ var benign = map[string]bool{
 	"skills/changed": true, "configWarning": true, "mcpServer/startupStatus/updated": true,
 	"item/mcpToolCall/progress": true, "serverRequest/resolved": true,
 	"remoteControl/status/changed": true, "thread/tokenUsage/reset": true,
+	"thread/readState/changed": true, "thread/queue/changed": true, "thread/section/changed": true,
+	"thread/project/updated": true, "thread/attachment/updated": true, "thread/prediction/updated": true,
+	"project/changed": true, "app/list/updated": true, "hook/started": true, "hook/completed": true,
+	"deprecationNotice": true, "thread/environment/connected": true, "thread/environment/disconnected": true,
+	"modelProvider/authRecoveryStarted": true, "modelProvider/authRecoveryCompleted": true,
+	"item/commandExecution/terminalInteraction": true,
 }
 
 func isBenign(method string) bool {
@@ -430,6 +436,18 @@ func (s *session) onNotification(pk packet) {
 		return
 	}
 	if isBenign(m) {
+		return
+	}
+	if m == "warning" || m == "guardianWarning" {
+		if head.ThreadID != "" && head.ThreadID != s.threadID() {
+			s.unknown("warning for another thread (subagents are not tracked)", m)
+			return
+		}
+		var w struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(pk.Params, &w)
+		_ = s.em.Message(s.ctx, "system", "codex warning: "+clip(w.Message, harness.MaxText))
 		return
 	}
 	switch m {

@@ -61,7 +61,11 @@ func TestRealCodex(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(dir, "hello.txt"))
 	t.Logf("hello.txt: exists=%v bytes=%d contains_fabric=%v", err == nil, len(b), strings.Contains(string(b), "fabric"))
 	if f.Outcome != harness.OutcomeDone {
-		t.Fatalf("outcome %s, want done", f.Outcome)
+		reason := f.Reason
+		if len(reason) > 300 {
+			reason = reason[:300]
+		}
+		t.Fatalf("outcome %s, want done; reason (failure diagnostics, first 300 bytes): %s", f.Outcome, reason)
 	}
 	if err != nil || !strings.Contains(string(b), "fabric") {
 		t.Fatal("the agent did not create hello.txt containing fabric")

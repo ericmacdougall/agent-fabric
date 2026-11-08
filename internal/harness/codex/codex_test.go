@@ -236,6 +236,25 @@ func TestNormalMapping(t *testing.T) {
 	noSessionGoroutines(t)
 }
 
+func TestWarningsAreMessagesAndChatterIsNotUnknown(t *testing.T) {
+	evs, f := runOnce(t, adapter(t, "warning"), startSpec(t, "go"))
+	if f.Outcome != harness.OutcomeDone {
+		t.Fatalf("final %+v", f)
+	}
+	for _, want := range []string{"codex warning: careful now", "codex warning: guard says hi"} {
+		if !hasText(evs, want) {
+			t.Errorf("missing %q in %q", want, harnesstest.Texts(evs))
+		}
+	}
+	if hasText(evs, "somebody else") {
+		t.Error("a warning for another thread was reported as this session's")
+	}
+	// Only the other thread's warning is unclassified; readState chatter is not.
+	if n := len(ofKind(evs, harness.KindUnknown)); n != 1 {
+		t.Errorf("%d unknown events, want 1", n)
+	}
+}
+
 func TestFramesBeforeTheReplyAreBound(t *testing.T) {
 	evs, f := runOnce(t, adapter(t, "early"), startSpec(t, "go"))
 	if f.Outcome != harness.OutcomeDone {
