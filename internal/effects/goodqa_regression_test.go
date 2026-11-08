@@ -217,6 +217,10 @@ func TestGoodQAArchivedTrailerAcrossValidPagesRemainsCommitted(t *testing.T) {
 		case "":
 			payload = map[string]any{"comments": []any{}, "hasMore": true, "nextCursor": "page-2"}
 		case "page-2":
+			if req.Params.Args["archiveState"] != "all" {
+				payload = map[string]any{"comments": []any{}, "hasMore": false}
+				break
+			}
 			payload = map[string]any{
 				"comments": []any{map[string]any{
 					"id":         "c_archived_page",

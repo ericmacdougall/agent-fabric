@@ -25,6 +25,35 @@ type fakeGoodQA struct {
 	closed    bool
 	loseAfter bool
 	calls     int
+	// archiveStates records the archiveState argument of every readback call.
+	archiveStates []any
+}
+
+// filterArchiveState mirrors GoodQA get_issue_comments: archiveState is
+// active (the default), archived or all; any other value is refused.
+func filterArchiveState(comments []map[string]any, state any) ([]map[string]any, bool) {
+	if state == nil {
+		state = "active"
+	}
+	out := []map[string]any{}
+	for _, c := range comments {
+		_, archived := c["archivedAt"]
+		switch state {
+		case "active":
+			if !archived {
+				out = append(out, c)
+			}
+		case "archived":
+			if archived {
+				out = append(out, c)
+			}
+		case "all":
+			out = append(out, c)
+		default:
+			return nil, false
+		}
+	}
+	return out, true
 }
 
 func (f *fakeGoodQA) handler(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +108,13 @@ func (f *fakeGoodQA) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(map[string]any{"comment": map[string]any{"id": id}}, false)
 	case "get_issue_comments":
-		reply(map[string]any{"comments": f.comments, "hasMore": false}, false)
+		f.archiveStates = append(f.archiveStates, req.Params.Args["archiveState"])
+		list, ok := filterArchiveState(f.comments, req.Params.Args["archiveState"])
+		if !ok {
+			reply(map[string]any{"error": map[string]any{"code": "validation_error"}}, true)
+			return
+		}
+		reply(map[string]any{"comments": list, "hasMore": false}, false)
 	default:
 		reply(map[string]any{"error": map[string]any{"code": "unknown_tool"}}, true)
 	}
