@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"net/url"
 	"strconv"
 	"strings"
@@ -181,7 +183,15 @@ func TestAuthorityTempTablesCannotShadowReservationBackstops(t *testing.T) {
 	})
 }
 
-const authorityRunnerPassword = "authority-runner-password"
+// authorityRunnerPassword is random per test process: the runner role is a
+// cluster-wide LOGIN role and the cluster may also host other databases.
+var authorityRunnerPassword = func() string {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}()
 
 func openAuthorityRunner(t *testing.T, ctx context.Context, r Roles, extra url.Values) *Store {
 	t.Helper()

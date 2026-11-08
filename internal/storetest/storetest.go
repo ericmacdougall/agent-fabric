@@ -5,6 +5,8 @@ package storetest
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
@@ -91,8 +93,16 @@ func Open(t *testing.T) *store.Store {
 func AppRunnerDSNs(t *testing.T, st *store.Store) (string, string) {
 	t.Helper()
 	r := store.Roles{Prefix: fmt.Sprintf("fabric_s%d", os.Getpid())}
-	appPassword := fmt.Sprintf("test-app-password-%d", os.Getpid())
-	runnerPassword := fmt.Sprintf("test-runner-password-%d", os.Getpid())
+	// Random per call: these are cluster-wide LOGIN roles and the test cluster
+	// may host other databases, so no fixed or guessable password is used.
+	randomPassword := func() string {
+		b := make([]byte, 24)
+		if _, err := rand.Read(b); err != nil {
+			t.Fatal(err)
+		}
+		return hex.EncodeToString(b)
+	}
+	appPassword, runnerPassword := randomPassword(), randomPassword()
 	if err := st.ApplyRoles(context.Background(), r, appPassword, runnerPassword); err != nil {
 		t.Fatalf("roles: %v", err)
 	}
