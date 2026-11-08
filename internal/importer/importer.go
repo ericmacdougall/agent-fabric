@@ -212,11 +212,11 @@ func Run(ctx context.Context, st *store.Store, exec Executor, o Options, sf Slot
 	for i, raw := range sf.QueuedInOrder {
 		name, ticket := QueuedItem(raw)
 		id := domain.MissionID(fmt.Sprintf("m_q%02d", i+1))
-		var o struct {
-			Provider *string `json:"provider"`
+		provider, err := queuedProvider(string(id), raw)
+		if err != nil {
+			return res, err
 		}
-		_ = json.Unmarshal(raw, &o) // a plain string item has no provider
-		prov, err := importProvider(string(id), o.Provider)
+		prov, err := importProvider(string(id), provider)
 		if err != nil {
 			return res, err
 		}
@@ -264,6 +264,35 @@ func TicketRef(raw, fallback string) string {
 		return "GoodQA goodqa" + raw
 	}
 	return fallback
+}
+
+// queuedProvider reads a queued row's provider field. A legacy row is a JSON
+// string and has no provider; an object's provider must be a string or null.
+// Anything else is refused, never silently read as an absent provider (which
+// would default the row to claude-code).
+func queuedProvider(row string, raw json.RawMessage) (*string, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed[0] != '{' {
+		var legacy string
+		if trimmed == "" || trimmed[0] != '"' || json.Unmarshal(raw, &legacy) != nil {
+			return nil, fmt.Errorf("%w: import row %s legacy entry must be a JSON string", domain.ErrInvalidProvider, row)
+		}
+		return nil, nil
+	}
+	var o struct {
+		Provider json.RawMessage `json:"provider"`
+	}
+	if err := json.Unmarshal(raw, &o); err != nil {
+		return nil, fmt.Errorf("%w: import row %s is malformed JSON", domain.ErrInvalidProvider, row)
+	}
+	if len(o.Provider) == 0 || string(o.Provider) == "null" {
+		return nil, nil
+	}
+	var provider string
+	if err := json.Unmarshal(o.Provider, &provider); err != nil {
+		return nil, fmt.Errorf("%w: import row %s provider must be a string", domain.ErrInvalidProvider, row)
+	}
+	return &provider, nil
 }
 
 // QueuedItem reads a queue entry that is either a string or an object with

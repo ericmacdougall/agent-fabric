@@ -412,8 +412,8 @@ at all. An operator-only role for these commands is follow-up work.
   `fab db roles`) pass independent review. Runners must connect as the
   runner role (`FABRIC_RUNNER_DSN`), never as the app or owner role.
   Fabd hands a worker only that login, checked as a runner role before the
-  first launch whether or not `--hold` is set; without it the worker gets
-  no `FABRIC_DSN` at all, never fabd's own (goodqa#15173). The check
+  first launch whether or not `--hold` is set; without it fabd launches
+  nothing, and never hands a worker fabd's own login (goodqa#15173). The check
   refuses a runner login holding any write on any table beyond the
   runner's list (column grants, DELETE, TRUNCATE and TRIGGER included), or
   CREATE in the schema (goodqa#15167). Only the owner writes `fabric_schema`

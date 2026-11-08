@@ -48,21 +48,28 @@ type Ledger struct {
 	TTL     time.Duration
 }
 
-func (l *Ledger) resources() []string {
-	rs := make([]string, 0, len(l.Caps))
-	for _, c := range l.Caps {
-		rs = append(rs, c.Resource)
+// lockOrder is the sorted, de-duplicated advisory-lock set: a fixed global
+// order prevents deadlock between concurrent ledgers.
+func lockOrder(resources []string) []string {
+	seen := make(map[string]struct{}, len(resources))
+	rs := make([]string, 0, len(resources))
+	for _, r := range resources {
+		if _, ok := seen[r]; ok {
+			continue
+		}
+		seen[r] = struct{}{}
+		rs = append(rs, r)
 	}
 	sort.Strings(rs)
 	return rs
 }
 
-func (l *Ledger) lock(ctx context.Context) (func(), error) {
+func (l *Ledger) lock(ctx context.Context, resources []string) (func(), error) {
 	conn, err := l.St.Pool().Acquire(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rs := l.resources()
+	rs := lockOrder(resources)
 	for i, r := range rs {
 		if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended($1, 7))`, r); err != nil {
 			for _, p := range rs[:i] {
@@ -94,13 +101,20 @@ func (l *Ledger) Hold(ctx context.Context, key string, amount int64) ([]store.Re
 	if amount <= 0 {
 		return nil, errors.New("hold amount must be positive")
 	}
-	unlock, err := l.lock(ctx)
+	// One snapshot of Caps decides both the locks and the items, so a caller
+	// that moves a cap (for example at a month rollover) cannot split them.
+	caps := append([]Cap(nil), l.Caps...)
+	resources := make([]string, 0, len(caps))
+	for _, c := range caps {
+		resources = append(resources, c.Resource)
+	}
+	unlock, err := l.lock(ctx, resources)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
 	var items []store.HoldItem
-	for _, c := range l.Caps {
+	for _, c := range caps {
 		spent, err := l.Spent(ctx, c.Resource)
 		if err != nil {
 			return nil, err
@@ -133,9 +147,15 @@ func receiptID(res store.Reservation) string {
 	return "ag-" + hex.EncodeToString(h[:16])
 }
 
-// Settle closes holds with the actual cost.
+// Settle closes holds with the actual cost. It locks the resources the
+// reservations were taken against, not the current Caps, which may already
+// name a different resource by settlement time.
 func (l *Ledger) Settle(ctx context.Context, rs []store.Reservation, actual int64) error {
-	unlock, err := l.lock(ctx)
+	resources := make([]string, 0, len(rs))
+	for _, r := range rs {
+		resources = append(resources, r.Resource)
+	}
+	unlock, err := l.lock(ctx, resources)
 	if err != nil {
 		return err
 	}

@@ -39,6 +39,12 @@ type Launcher interface {
 	// came from the confined run and was launched outside its sandbox.
 }
 
+// Stopper is the host Stop a Launcher must also provide when
+// Config.ExitCleanup is on (the Darwin and Linux profiles both do).
+type Stopper interface {
+	Stop(h host.Handle, reason string, grace time.Duration) (host.StopReceipt, error)
+}
+
 // ErrHostJobsDisabled refuses a host job before anything is written or run.
 // Typed, policy-approved job templates are future work (goodqa#15082).
 var ErrHostJobsDisabled = fmt.Errorf("%w: host jobs are disabled (goodqa#15082)", domain.ErrInvalidTransition)
@@ -77,6 +83,12 @@ type Config struct {
 	// RunnerDSN is the database a runner and its jobs connect with: a role
 	// without the scheduler's privileges (0015). Required when gated.
 	RunnerDSN string
+	// ExitCleanup (FABRIC_WORKER_EXIT_CLEANUP=1 in fab daemon; default off)
+	// stops and verifies a worker's descendants after its leader exits and
+	// before anything is settled. A failed or unverified cleanup leaves the
+	// attempt to lease expiry, never a terminal success. Off, a finished
+	// worker settles exactly as before the flag existed.
+	ExitCleanup bool
 }
 
 // Scheduler owns one host's dispatch loop.
@@ -98,6 +110,7 @@ type Scheduler struct {
 	parked map[domain.MissionID]time.Time
 	cfgErr error // gateErr at New; Tick refuses to run with it
 	// runnerChecked: the RunnerDSN role passed CheckRunnerRole (G2).
+	runnerMu      sync.Mutex
 	runnerChecked bool
 	prober        Prober
 	lockProber    LockProber // native attempts' flock readback (goodqa#15087)
@@ -114,6 +127,12 @@ type Scheduler struct {
 	settleBackoff time.Duration
 	// afterSettleTry is a test cutpoint after a failed settle try.
 	afterSettleTry func()
+	// afterWaitDone is a test barrier after a finished worker's settlement
+	// attempt; nil in production.
+	afterWaitDone func()
+	// stopBackoff and stopSleep drive the bounded cleanup retries in tests.
+	stopBackoff time.Duration
+	stopSleep   func(context.Context, time.Duration) error
 	// settleClock runs the settle backoff on fake time in tests.
 	settleClock settle.Clock
 	// afterFinishExec sees each finish command's result and may replace
@@ -137,7 +156,11 @@ func New(st *store.Store, cfg Config, ln Launcher) *Scheduler {
 	if len(cfg.Holds) > 0 && cfg.HoldTTL <= 0 {
 		cfg.HoldTTL = 2 * cfg.Wall
 	}
-	return &Scheduler{st: st, cfg: cfg, ln: ln, cfgErr: cfg.gateErr()}
+	cfgErr := cfg.gateErr()
+	if _, ok := ln.(Stopper); cfgErr == nil && cfg.ExitCleanup && !ok {
+		cfgErr = fmt.Errorf("sched: ExitCleanup needs a launcher that can Stop and verify a worker")
+	}
+	return &Scheduler{st: st, cfg: cfg, ln: ln, cfgErr: cfgErr}
 }
 
 // gateErr refuses a gate that cannot keep its holds for a run (red-team F5):
@@ -145,6 +168,11 @@ func New(st *store.Store, cfg Config, ln Launcher) *Scheduler {
 // out of range, or runners that would share the scheduler's database role
 // (N3). Nothing is silently capped.
 func (c Config) gateErr() error {
+	// Every launch, gated or not, needs the separate runner role: a worker
+	// must never run with the scheduler's FABRIC_DSN, nor with none at all.
+	if strings.TrimSpace(c.RunnerDSN) == "" {
+		return fmt.Errorf("sched: every launch needs a separate runner database role (RunnerDSN)")
+	}
 	if len(c.Holds) == 0 {
 		return nil
 	}
@@ -155,8 +183,6 @@ func (c Config) gateErr() error {
 		return fmt.Errorf("sched: wall %s is over half the hold cap %s", c.Wall, store.MaxHoldTTL)
 	case c.HoldTTL < store.MinHoldTTL || c.HoldTTL > store.MaxHoldTTL:
 		return fmt.Errorf("sched: hold ttl %s outside %s..%s", c.HoldTTL, store.MinHoldTTL, store.MaxHoldTTL)
-	case c.RunnerDSN == "":
-		return fmt.Errorf("sched: the dispatch gate needs a separate runner database role (RunnerDSN)")
 	}
 	return nil
 }
@@ -175,9 +201,29 @@ func (s *Scheduler) checkRunnerRole(ctx context.Context) error {
 	return nil
 }
 
+// ensureRunnerRole refuses any launch until the configured runner login has
+// passed CheckRunnerRole, gate or no gate (goodqa#15173): an owner or
+// scheduler login handed to a worker would give it the scheduler's
+// authority. Success is cached; a failure is retried next time, never skipped.
+func (s *Scheduler) ensureRunnerRole(ctx context.Context) error {
+	if s.cfgErr != nil {
+		return s.cfgErr
+	}
+	s.runnerMu.Lock()
+	defer s.runnerMu.Unlock()
+	if s.runnerChecked {
+		return nil
+	}
+	if err := s.checkRunnerRole(ctx); err != nil {
+		return err
+	}
+	s.runnerChecked = true
+	return nil
+}
+
 // runnerDSN is what a runner connects with: only the configured runner
 // login, never the scheduler's own FABRIC_DSN (goodqa#15173, Kimi K1).
-// Empty means the worker gets no database login and its fab calls fail.
+// gateErr guarantees it is non-empty before any launch.
 func (s *Scheduler) runnerDSN() string {
 	return s.cfg.RunnerDSN
 }
@@ -189,17 +235,8 @@ func (s *Scheduler) gated() bool { return len(s.cfg.Holds) > 0 }
 
 // Tick runs one pass of every sweep and reports whether it did any work.
 func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
-	if s.cfgErr != nil {
-		return false, s.cfgErr // a configuration fault is global: stop before any write
-	}
-	// Any runner login is checked before the first launch, gate or no gate
-	// (goodqa#15173): an owner or scheduler login handed to a worker would
-	// give it the scheduler's authority.
-	if s.cfg.RunnerDSN != "" && !s.runnerChecked {
-		if err := s.checkRunnerRole(ctx); err != nil {
-			return false, err
-		}
-		s.runnerChecked = true
+	if err := s.ensureRunnerRole(ctx); err != nil {
+		return false, err // a configuration or role fault is global: stop before any write
 	}
 	worked := false
 	if n, err := s.consumeOutbox(ctx); err != nil {
@@ -260,19 +297,61 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			backoff = s.cfg.Backoff
 			continue // something changed; rescan before blocking (E6 pattern)
 		}
-		wctx, cancel := context.WithTimeout(ctx, backoff)
-		_, nerr := conn.Conn().WaitForNotification(wctx)
-		cancel()
-		if nerr == nil {
+		notified, err := waitForWake(ctx, func(wctx context.Context) error {
+			_, err := conn.Conn().WaitForNotification(wctx)
+			return err
+		}, backoff, sleepContext)
+		if err != nil {
+			return err
+		}
+		if notified {
 			backoff = s.cfg.Backoff
 			continue
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		backoff = nextBackoff(backoff, s.cfg.MaxBackoff)
+	}
+}
+
+// nextBackoff doubles cur up to max, never past it.
+func nextBackoff(cur, max time.Duration) time.Duration {
+	if cur >= max {
+		return max
+	}
+	return min(cur*2, max)
+}
+
+// waitForWake waits once for a LISTEN notification for up to delay. An
+// expired wait already spent delay; an error while the wait context is
+// still live (a broken LISTEN connection returns at once) gets its own
+// bounded sleep, so Run never spins Tick in a hot loop.
+func waitForWake(ctx context.Context, wait func(context.Context) error, delay time.Duration, sleep func(context.Context, time.Duration) error) (bool, error) {
+	wctx, cancel := context.WithTimeout(ctx, delay)
+	err := wait(wctx)
+	expired := wctx.Err() != nil // read before cancel: cancel is not expiry
+	cancel()
+	if err == nil {
+		return true, nil
+	}
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if !expired {
+		fmt.Fprintln(os.Stderr, "fabd: LISTEN wait failed, backing off:", err)
+		if err := sleep(ctx, delay); err != nil {
+			return false, err
 		}
-		if backoff < s.cfg.MaxBackoff {
-			backoff *= 2
-		}
+	}
+	return false, nil
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	t := time.NewTimer(delay)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
@@ -472,6 +551,11 @@ func (s *Scheduler) parkedIDs() []string {
 
 // runOnce = StartAttempt -> launch -> parse stream -> FinishAttempt -> Reconcile.
 func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error {
+	// The launch boundary does not rely on Tick having checked the runner
+	// role: runOnce is also reached directly by tests and embedders.
+	if err := s.ensureRunnerRole(ctx); err != nil {
+		return err
+	}
 	if s.beforeRun != nil {
 		if err := s.beforeRun(mission); err != nil {
 			return err
@@ -623,6 +707,12 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		if errf != nil {
 			errf.Close()
 		}
+		if s.cfg.ExitCleanup {
+			// Leader exit does not reap descendants. A Wait error does not end
+			// ownership either, so cleanup runs either way, detached from the
+			// scheduler context; a failure makes completion unverified.
+			werr = errors.Join(werr, s.cleanupHandle(context.Background(), h, "leader exited; verify descendant cleanup"))
+		}
 		if werr != nil {
 			close(done) // the exit is unknown: stop beating so the lease expires
 		}
@@ -630,6 +720,9 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		// settle (and its retries) persist it.
 		if err := s.afterWait(context.Background(), mission, attempt, fence, runDir, code, werr); err != nil {
 			fmt.Fprintln(os.Stderr, "fabd: settle:", err)
+		}
+		if s.afterWaitDone != nil {
+			s.afterWaitDone()
 		}
 		if werr == nil {
 			close(done)
@@ -639,9 +732,52 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	return nil
 }
 
-// afterWait settles a finished worker. A failed Wait means the exit is not
-// known (goodqa#15082 T1): nothing is settled, the heartbeat has stopped,
-// and the lease expires into UNKNOWN for the prober to reconcile.
+// cleanupHandle requires a verified Stop receipt with no survivors and no
+// escaped processes, retrying a bounded three times with a doubling pause.
+func (s *Scheduler) cleanupHandle(ctx context.Context, h host.Handle, reason string) error {
+	stopper, ok := s.ln.(Stopper)
+	if !ok {
+		return fmt.Errorf("descendant cleanup for %s: launcher cannot Stop", h.Run)
+	}
+	const tries = 3
+	wait := s.stopBackoff
+	if wait <= 0 {
+		wait = 10 * time.Millisecond
+	}
+	sleep := s.stopSleep
+	if sleep == nil {
+		sleep = sleepContext
+	}
+	var lastErr error
+	for try := 1; try <= tries; try++ {
+		rc, err := stopper.Stop(h, reason, 2*time.Second)
+		switch {
+		case err != nil:
+			lastErr = fmt.Errorf("descendant cleanup for %s failed after %d attempt(s): %w", h.Run, try, err)
+		case !rc.Verified:
+			lastErr = fmt.Errorf("descendant cleanup for %s was not verified after %d attempt(s)", h.Run, try)
+		case len(rc.Survivors) > 0:
+			lastErr = fmt.Errorf("descendant cleanup for %s left %d survivors after %d attempt(s)", h.Run, len(rc.Survivors), try)
+		case len(rc.Escaped) > 0:
+			lastErr = fmt.Errorf("descendant cleanup for %s found %d escaped processes after %d attempt(s)", h.Run, len(rc.Escaped), try)
+		default:
+			return nil
+		}
+		if try < tries {
+			fmt.Fprintf(os.Stderr, "fabd: cleanup %s try %d failed, retrying: %v\n", h.Run, try, lastErr)
+			if err := sleep(ctx, wait); err != nil {
+				return fmt.Errorf("descendant cleanup for %s retry interrupted: %w", h.Run, err)
+			}
+			wait *= 2
+		}
+	}
+	return lastErr
+}
+
+// afterWait settles a finished worker. A failed Wait (or, with ExitCleanup,
+// a failed descendant cleanup) means completion is not known (goodqa#15082
+// T1): nothing is settled, the heartbeat has stopped, and the lease expires
+// into UNKNOWN for the prober to reconcile.
 func (s *Scheduler) afterWait(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, runDir string, code int, werr error) error {
 	if werr != nil {
 		return fmt.Errorf("wait for %s failed, left to lease expiry: %w", attempt, werr)

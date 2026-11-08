@@ -624,7 +624,16 @@ func TestPublishHonoursDeadline(t *testing.T) {
 	dir := t.TempDir()
 	mark := filepath.Join(dir, "calls")
 	hung := filepath.Join(dir, "git")
-	if err := os.WriteFile(hung, []byte("#!/bin/sh\necho call >> '"+mark+"'\nexec sleep 30\n"), 0o755); err != nil {
+	if err := os.WriteFile(hung, []byte("#!/bin/sh\necho call >> '"+mark+"'\nif [ \"$1\" = warmup ]; then exit 0; fi\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The first execution of a new script can consume the whole short deadline
+	// before its shell runs. Warm up this executable outside the contract calls
+	// so the marker count proves that all three operations really reached git.
+	if out, err := exec.Command(hung, "warmup").CombinedOutput(); err != nil {
+		t.Fatalf("warm up hung git: %v: %s", err, out)
+	}
+	if err := os.Remove(mark); err != nil {
 		t.Fatal(err)
 	}
 	e := f.effect(f.a, f.b)

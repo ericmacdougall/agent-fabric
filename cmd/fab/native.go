@@ -37,7 +37,7 @@ func nativeRunMain(args []string) error {
 	if err != nil {
 		return err
 	}
-	opts := native.Options{ReviewGate: reviewGateEnabled(), ReviewDSN: reviewDSN}
+	opts := native.Options{ReviewGate: reviewGateEnabled(), ReviewDSN: reviewDSN, ToolExitCleanup: toolExitCleanupEnabled()}
 	if *fake {
 		if os.Getenv("FABRIC_ALLOW_FAKE_HOST") != "1" {
 			return errors.New("--unconfined-fake-host is refused: it runs tools with no containment")
@@ -88,6 +88,15 @@ const reviewGateFlag = "FABRIC_REVIEW_GATE"
 
 // reviewGateEnabled is true only for the exact value "1".
 func reviewGateEnabled() bool { return os.Getenv(reviewGateFlag) == "1" }
+
+// toolExitCleanupFlag makes every native tool call stop and verify its
+// descendants after the leader exits. Off by default: on Darwin the stop
+// signals the leader's process group after it exited, which widens an
+// existing PGID-reuse window until the host profile closes it (slice 4).
+const toolExitCleanupFlag = "FABRIC_TOOL_EXIT_CLEANUP"
+
+// toolExitCleanupEnabled is true only for the exact value "1".
+func toolExitCleanupEnabled() bool { return os.Getenv(toolExitCleanupFlag) == "1" }
 
 // takeReviewDSN removes the app-role credential from the process environment
 // before any tool worker can be constructed. Native retains it only in Options.

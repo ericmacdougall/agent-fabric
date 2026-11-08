@@ -24,7 +24,7 @@ func TestSchedulerPassesClaudeCodePath(t *testing.T) {
 	ln := &fakeLauncher{st: st, block: make(chan struct{})}
 	t.Cleanup(func() { close(ln.block) })
 	cfg := Config{Host: "h_t2", Model: "fake-model", Effort: "n/a", Rung: "R0", TierTableSHA: "test", Profile: "P1", MaxTurns: 5,
-		MaxBudgetUSD: 0.01, Wall: time.Minute, WorkRoot: t.TempDir()}
+		MaxBudgetUSD: 0.01, Wall: time.Minute, WorkRoot: t.TempDir(), RunnerDSN: storetest.RunnerDSN(t, st)}
 	cfg.Launch.Binary = "/bin/true"
 	s := New(st, cfg, ln)
 

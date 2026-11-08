@@ -103,8 +103,16 @@ type HostConfiner struct {
 	Host  Starter
 	Base  host.Grant // the attempt's grant: worktree, run dir, profile, model...
 	Scrub []string   // extra environment, nil for none
-	n     int
+	// ExitCleanup (FABRIC_TOOL_EXIT_CLEANUP=1 in cmd/fab) stops and verifies
+	// the child's descendants after every leader exit, not only on timeout:
+	// a leader that backgrounds a process otherwise leaves it running after
+	// Run returns. Off, Run behaves exactly as before the flag existed.
+	ExitCleanup bool
+	n           int
 }
+
+// cleanupTries bounds how long a failed cleanup keeps the run's handle.
+const cleanupTries = 3
 
 var _ Confiner = (*HostConfiner)(nil)
 
@@ -161,11 +169,15 @@ func (h *HostConfiner) Run(ctx context.Context, spec ExecSpec) (ExecResult, erro
 	}
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
+	var waitErr error
 wait:
 	for {
 		select {
 		case d := <-done:
 			res.ExitCode = d.code
+			if d.err != nil {
+				waitErr = fmt.Errorf("wait for tool %s: %w", hd.Run, d.err)
+			}
 			break wait
 		case <-timer.C:
 			res.TimedOut = true
@@ -180,6 +192,9 @@ wait:
 			}
 		}
 	}
+	if h.ExitCleanup {
+		return h.finishWithCleanup(hd, done, out, spec, res, waitErr)
+	}
 	if res.TimedOut {
 		if _, err := h.Host.Stop(hd, "tool timeout", 2*time.Second); err != nil {
 			return res, err
@@ -188,6 +203,55 @@ wait:
 	}
 	res.Output, res.Cut = readCapped(out, spec.MaxOutput)
 	return res, nil
+}
+
+// finishWithCleanup is the ExitCleanup ending of Run: every started handle
+// gets a bounded, verified Stop before Run returns, independent of the tool
+// context. A cleanup that cannot be verified is an error beside the output.
+func (h *HostConfiner) finishWithCleanup(hd host.Handle, done <-chan struct {
+	code int
+	err  error
+}, out *os.File, spec ExecSpec, res ExecResult, waitErr error) (ExecResult, error) {
+	reason := "leader exited; verify descendant cleanup"
+	if res.TimedOut {
+		reason = "tool timeout"
+	}
+	cleanupErr := h.cleanup(hd, reason)
+	if res.TimedOut && cleanupErr == nil {
+		// After a verified Stop the leader is gone: reap it before reading its
+		// output. After a failed Stop, never block on a child that may live.
+		<-done
+	}
+	res.Output, res.Cut = readCapped(out, spec.MaxOutput)
+	if cleanupErr != nil {
+		return res, errors.Join(waitErr, cleanupErr)
+	}
+	return res, waitErr
+}
+
+// cleanup asks the host to stop hd and accepts only a verified receipt with
+// no survivors and no escaped processes, retrying a bounded number of times.
+func (h *HostConfiner) cleanup(hd host.Handle, reason string) error {
+	var lastErr error
+	for try := 1; try <= cleanupTries; try++ {
+		rc, err := h.Host.Stop(hd, reason, 2*time.Second)
+		switch {
+		case err != nil:
+			lastErr = fmt.Errorf("cleanup for tool %s failed after %d attempt(s): %w", hd.Run, try, err)
+		case !rc.Verified:
+			lastErr = fmt.Errorf("cleanup for tool %s was not verified after %d attempt(s)", hd.Run, try)
+		case len(rc.Survivors) > 0:
+			lastErr = fmt.Errorf("cleanup for tool %s left %d survivors after %d attempt(s)", hd.Run, len(rc.Survivors), try)
+		case len(rc.Escaped) > 0:
+			lastErr = fmt.Errorf("cleanup for tool %s found %d escaped processes after %d attempt(s)", hd.Run, len(rc.Escaped), try)
+		default:
+			return nil
+		}
+		if try < cleanupTries {
+			time.Sleep(time.Duration(1<<(try-1)) * 10 * time.Millisecond)
+		}
+	}
+	return lastErr
 }
 
 func readCapped(f *os.File, max int) (string, bool) {

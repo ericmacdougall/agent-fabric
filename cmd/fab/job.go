@@ -86,7 +86,7 @@ func daemonMain(args []string) error {
 	workerUser := fs.String("worker-user", os.Getenv("FABRIC_WORKER_USER"), "dedicated worker account (Linux); empty means same-UID shadow mode")
 	var holds holdFlags
 	fs.Var(&holds, "hold", "turn on the dispatch gate: hold resource:unit:amount per attempt (repeatable)")
-	runnerDSNEnv := fs.String("runner-dsn-env", "FABRIC_RUNNER_DSN", "environment variable holding the runner role DSN (required with --hold)")
+	runnerDSNEnv := fs.String("runner-dsn-env", "FABRIC_RUNNER_DSN", "environment variable holding the runner role DSN (required for every launch)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -152,6 +152,11 @@ func daemonMain(args []string) error {
 		MaxTurns: 40, MaxBudgetUSD: 2, Wall: 45 * time.Minute, WorkRoot: *workRoot, FabBin: selfPath()}
 	cfg.Holds = holds
 	cfg.RunnerDSN = os.Getenv(*runnerDSNEnv)
+	// FABRIC_WORKER_EXIT_CLEANUP=1 (exact; default off) verifies descendant
+	// cleanup after every worker exit before settling. Off by default: on
+	// Darwin the Stop signals the exited leader's process group, which
+	// widens a PGID-reuse window until the host profile closes it.
+	cfg.ExitCleanup = os.Getenv("FABRIC_WORKER_EXIT_CLEANUP") == "1"
 	// goodqa#15087 AC-6: the same launch the AC-6 (f) live check runs. It
 	// must stay dp.Launch: the operator's name, re-resolved per launch (N1;
 	// TestDaemonLaunchComesFromDaemonProvider guards this line).
