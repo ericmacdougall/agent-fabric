@@ -322,7 +322,8 @@ func (m *Mediator) handle(client net.Conn) {
 	}()
 	client.SetDeadline(minTime(start.Add(m.limits.IdleTimeout), totalDeadline))
 
-	br := bufio.NewReaderSize(client, 4096)
+	// Large enough to peek a whole TLS record for the SNI check.
+	br := bufio.NewReaderSize(client, maxClientHelloRecord+64)
 	raw, err := readHeader(br, m.limits.HeaderBytes)
 	if err != nil {
 		writeStatus(client, http.StatusRequestHeaderFieldsTooLarge)
@@ -369,6 +370,11 @@ func (m *Mediator) handle(client net.Conn) {
 	target.SetDeadline(minTime(time.Now().Add(m.limits.IdleTimeout), totalDeadline))
 	client.SetDeadline(minTime(time.Now().Add(m.limits.IdleTimeout), totalDeadline))
 	if _, err := io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		return
+	}
+	// H1 (goodqa#15235): the pinned IP may be a shared edge that serves any
+	// site by SNI, so nothing is relayed until the ClientHello names d.host.
+	if err := checkClientHello(br, d.host); err != nil {
 		return
 	}
 	m.runTunnel(client, target, br, totalDeadline)

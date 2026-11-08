@@ -190,6 +190,16 @@ func established(t *testing.T, m *Mediator, authority string) (net.Conn, *bufio.
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("CONNECT status = %d", resp.StatusCode)
 	}
+	// Every real client opens the tunnel with a ClientHello naming the host;
+	// the mediator relays nothing before it (H1). The fake target echoes it.
+	host, _, _ := net.SplitHostPort(authority)
+	hello := clientHello(host)
+	if _, err := c.Write(hello); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(br, make([]byte, len(hello))); err != nil {
+		t.Fatal(err)
+	}
 	return c, br
 }
 
@@ -365,7 +375,9 @@ func TestTunnelTimeAndByteBounds(t *testing.T) {
 	})
 
 	t.Run("aggregate bytes", func(t *testing.T) {
-		m, _ := newBoundMediator(t, Limits{MaxBytes: 6})
+		// The opening ClientHello and its echo count toward the limit too.
+		h := int64(len(clientHello("api.anthropic.com")))
+		m, _ := newBoundMediator(t, Limits{MaxBytes: 2*h + 6})
 		c, br := established(t, m, DefaultDestination)
 		io.WriteString(c, "abcd")
 		got, err := io.ReadAll(io.LimitReader(br, 32))
