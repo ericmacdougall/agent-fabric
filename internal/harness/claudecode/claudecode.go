@@ -231,11 +231,7 @@ func (s *session) read() {
 	s.wmu.Unlock()
 	stopping := s.stopping.Load()
 	f := s.settle(code, werr, stopping, pending, panicked)
-	_ = s.em.Final(context.Background(), f)
-	if s.em.Err() != nil && f.Outcome == harness.OutcomeDone {
-		f.Outcome = harness.OutcomeFailed
-	}
-	s.final = f
+	s.final, _ = s.em.FinalOutcome(context.Background(), f)
 }
 
 func (s *session) settle(code int, werr error, stopping bool, pending int, panicked any) harness.Final {
