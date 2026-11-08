@@ -685,7 +685,26 @@ func (b *Broker) Retry(ctx context.Context, id string) (Effect, error) {
 	if e.ApprovalSHA != "" {
 		next = Approved // the approval still binds the same request hash
 	}
-	if _, err := b.pool.Exec(ctx, `UPDATE effects SET state = $2, updated_at = now() WHERE id = $1 AND state = $3`, id, string(next), string(e.State)); err != nil {
+	// goodqa#15166 review F1(a): a re-armed effect can only be dispatched by
+	// its own attempt at its fence (attempt_id and fence are immutable), and
+	// once it is INTENT with dispatches > 0 neither abandon nor retry can move
+	// it. Re-arming it after that attempt ended would strand it and block the
+	// mission's admission for good, so retry needs the attempt live at the
+	// effect's fence, read in the transaction that re-arms it. (A concurrent
+	// end of the attempt between the read and the commit is the residual
+	// crash variant; its audited exit is the follow-up ticket.)
+	tx, err := b.pool.Begin(ctx)
+	if err != nil {
+		return Effect{}, err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck
+	if err := liveFence(ctx, tx, e.Mission, e.Attempt, e.Fence); err != nil {
+		return Effect{}, fmt.Errorf("retry refused: %w; the effect stays %s (a new attempt must submit it under a new key)", err, e.State)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE effects SET state = $2, updated_at = now() WHERE id = $1 AND state = $3`, id, string(next), string(e.State)); err != nil {
+		return Effect{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return Effect{}, err
 	}
 	return b.Load(ctx, id)

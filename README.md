@@ -48,6 +48,17 @@ production readiness.
   whatever readback the app reports; a DISPATCHED settle needs a receipt
   naming its dispatch number and outcome, which the app role can still forge
   by hand. No daemon sweeps unresolved effects yet.
+  `fab admit`, `fab unpause` and `fab done` are refused while any of the
+  mission's effects is unsettled (fails closed), and `Retry` re-arms an
+  effect only while its attempt is live at the effect's fence. Runbook: on a
+  refusal naming "effect(s) … are unsettled", the mission is stuck if
+  `SELECT id, state, dispatches FROM effects WHERE mission_id = '<m>' AND
+  state NOT IN ('CONFIRMED', 'FAILED_DEFINITE', 'NOT_APPLIED',
+  'RESOLVED_APPLIED', 'RESOLVED_NOT_APPLIED')` shows an INTENT or APPROVED
+  row with `dispatches > 0`, or an UNKNOWN row that `fab effect reconcile`
+  keeps returning to UNKNOWN. Those have no audited exit yet
+  (goodqa#15216, required before the first unattended production
+  mission): the mission stays blocked; do not hand-edit the row.
 - Done means live-tested: `fab done` is refused until `fab live-test` records a
   receipt for the deployed commit of the current candidate, and while any of
   the mission's effects (reducer or broker) is unsettled.

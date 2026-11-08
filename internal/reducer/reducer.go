@@ -22,7 +22,7 @@ import (
 type Env struct {
 	Cap       int
 	SlotsUsed int // missions other than this one that hold a slot
-	// UnsettledEffects: COMPLETE_MISSION and UNPAUSE_MISSION only, the mission's broker effects
+	// UnsettledEffects: COMPLETE_MISSION, UNPAUSE_MISSION and ADMIT_MISSION only, the mission's broker effects
 	// that are DISPATCHED, UNKNOWN, RECONCILING or QUARANTINED (review N1).
 	UnsettledEffects int
 	// Operator: the command comes from a human operator (domain.IsOperator),
@@ -101,6 +101,18 @@ func decide(m domain.Mission, cmd domain.Command, env Env) ([]domain.Event, erro
 	case domain.CmdAdmitMission:
 		if m.ParkedReason != "" && (!env.Operator || cmd.Reason == "") {
 			return nil, fmt.Errorf("%w: mission is parked (%s); re-admit it as an operator: FABRIC_ACTOR=op:<name> fab admit --mission %s --reason <why> --key <key>", domain.ErrInvalidTransition, m.ParkedReason, m.ID)
+		}
+		// goodqa#15166 (Kimi K10): admission leads to a new attempt, which
+		// could dispatch a subject whose earlier effect has an unknown
+		// outcome. Refuse, as unpause and done do, until every effect is
+		// settled. This fails closed: most unsettled states have an operator
+		// exit (fab effect unresolved then reconcile; resolve for QUARANTINED;
+		// abandon for a never-dispatched intent), but not every one does
+		// (review F1 on b47c337: a re-armed intent with dispatches > 0 whose
+		// attempt ended, or an UNKNOWN effect whose readback can never answer).
+		// Those keep the mission un-admittable until an audited exit exists.
+		if n := m.UnsettledEffects() + env.UnsettledEffects; n > 0 {
+			return nil, fmt.Errorf("%w: %d effect(s) of mission %s are unsettled; settle them before admitting it (fab effect show/unresolved; reconcile, resolve or abandon where the state allows)", domain.ErrInvalidTransition, n, m.ID)
 		}
 		if parkedIdle(m) {
 			// goodqa#15082 T2: a park recorded while another attempt was
