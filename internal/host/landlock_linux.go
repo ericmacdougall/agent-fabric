@@ -5,6 +5,7 @@ package host
 import (
 	"fmt"
 	"os"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -91,6 +92,73 @@ type Sandbox struct {
 	ReadOnly  []string
 	ReadWrite []string
 	TCPPorts  []int
+	// ReadyFile and ReadyCGroup are passed only by the Linux worker manager
+	// (goodqa#15235 S5b). Their presence selects manager containment: Landlock
+	// ABI 4 TCP rules and the worker socket filter become mandatory. The
+	// legacy Linux profile never sets them, so its behaviour is unchanged.
+	ReadyFile   string
+	ReadyCGroup string
+}
+
+// managerContainment reports whether sb is a worker-manager launch and so
+// requires ABI 4 TCP containment and the worker socket filter.
+func managerContainment(sb Sandbox) bool {
+	return sb.ReadyFile != "" || sb.ReadyCGroup != ""
+}
+
+// sandboxMinABI is the lowest Landlock ABI a launch accepts: 1 for the legacy
+// profile, 4 (TCP connect rules) for the worker manager.
+func sandboxMinABI(sb Sandbox) int {
+	if managerContainment(sb) {
+		return 4
+	}
+	return 1
+}
+
+// CompleteSandboxReady proves the trusted confined launcher reached the exact
+// unit cgroup before exec. The marker is created once, after all restrictions;
+// a fast command can then exit without making Start mistake it for a unit that
+// never became ready.
+func CompleteSandboxReady(sb Sandbox) error {
+	if sb.ReadyFile == "" && sb.ReadyCGroup == "" {
+		return nil
+	}
+	if sb.ReadyFile == "" || sb.ReadyCGroup == "" {
+		return fmt.Errorf("sandbox readiness marker configuration is incomplete")
+	}
+	cgroup, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return fmt.Errorf("sandbox readiness cgroup: %w", err)
+	}
+	if strings.TrimSpace(string(cgroup)) != "0::"+sb.ReadyCGroup {
+		return fmt.Errorf("sandbox readiness cgroup %q does not match %q", strings.TrimSpace(string(cgroup)), sb.ReadyCGroup)
+	}
+	// The marker is not secret and must be readable by the Fabric controller
+	// through the jobs directory's inherited group when the worker has another UID.
+	fd, err := unix.Open(sb.ReadyFile, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o640)
+	if err != nil {
+		return fmt.Errorf("sandbox readiness marker: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), sb.ReadyFile)
+	if file == nil {
+		_ = unix.Close(fd)
+		return fmt.Errorf("sandbox readiness marker returned no file")
+	}
+	if err := file.Chmod(0o640); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sandbox readiness marker permissions: %w", err)
+	}
+	// PrivatePIDs can give this process a namespace-local PID that has no
+	// meaning in the controller's procfs. The trusted cgroup check above and
+	// exclusive marker are the readiness proof; no host PID is serialized.
+	if _, err := file.WriteString("ready\n"); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sandbox readiness marker write: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("sandbox readiness marker close: %w", err)
+	}
+	return nil
 }
 
 // DefaultReadOnly is the system part of the read allow-list; callers add the
@@ -102,8 +170,8 @@ var DefaultReadOnly = []string{"/usr", "/lib", "/lib64", "/lib32", "/bin", "/sbi
 // be added, the caller must not launch.
 func ApplyLandlock(sb Sandbox) error {
 	abi, err := LandlockABI()
-	if err != nil || abi < 1 {
-		return fmt.Errorf("landlock unavailable (abi=%d): %v", abi, err)
+	if minABI := sandboxMinABI(sb); err != nil || abi < minABI {
+		return fmt.Errorf("landlock unavailable (abi=%d, need %d): %v", abi, minABI, err)
 	}
 	read := uint64(llExecute | llReadFile | llReadDir)
 	write := uint64(llWriteFile | llRemoveDir | llRemoveFile | llMakeChar | llMakeDir | llMakeReg | llMakeSock | llMakeFifo | llMakeBlock | llMakeSym)
@@ -173,6 +241,11 @@ func ApplyLandlock(sb Sandbox) error {
 	}
 	if err := landlockRestrictSelf(fd); err != nil {
 		return fmt.Errorf("landlock restrict: %w", err)
+	}
+	if managerContainment(sb) {
+		if err := ApplyWorkerSocketPolicy(); err != nil {
+			return fmt.Errorf("worker protocol containment: %w", err)
+		}
 	}
 	return nil
 }
