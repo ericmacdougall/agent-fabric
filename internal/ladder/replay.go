@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,7 +24,7 @@ type PolicyRung struct {
 }
 
 // Limits are model_tiers.json ladder_limits. MaxTotalReviewUSD keeps the
-// number's text; Status parses it to float64 the way Python does.
+// number's text; Status compares it the way Python does (pyNumber).
 type Limits struct {
 	MaxReviewLaunches int         `json:"max_review_launches"`
 	MaxRungClimbs     int         `json:"max_rung_climbs"`
@@ -140,7 +141,7 @@ func (p Policy) Validate() error {
 	if _, err := p.order(); err != nil {
 		return err
 	}
-	if _, err := decimal(string(p.Limits.MaxTotalReviewUSD)); err != nil {
+	if _, err := pyNumber(string(p.Limits.MaxTotalReviewUSD)); err != nil {
 		return fmt.Errorf("%w: max_total_review_usd: %v", ErrPolicy, err)
 	}
 	return nil
@@ -195,37 +196,45 @@ func Replay(p Policy, events []LedgerEvent) (Computed, error) {
 	return c, nil
 }
 
-// decimal parses a JSON number the way Python's json module does: to the
-// nearest float64. escalation.py stores and compares spend as a Python
-// float, so parity needs the same rounding; an exact decimal would disagree
-// on inputs such as 0.29999999999999999, which Python reads as 0.3. Empty
-// text is zero (an absent spend_usd defaults to 0). Non-finite values are
-// refused rather than compared.
-func decimal(text string) (float64, error) {
+// pyNumber gives a JSON number the exact value Python's json module gives
+// it: an integral token is a Python int (exact), any other token is a
+// Python float (the nearest float64, held exactly as a rational). Python
+// then compares int and float by exact value, which big.Rat.Cmp matches;
+// so 0.29999999999999999 equals 0.3, and an int limit of 2**53+1 is above
+// a float spend of 2**53. Empty text is zero (an absent spend_usd defaults
+// to 0). Non-finite values are refused rather than compared.
+func pyNumber(text string) (*big.Rat, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return 0, nil
+		return new(big.Rat), nil
+	}
+	if !strings.ContainsAny(text, ".eE") {
+		r, ok := new(big.Rat).SetString(text)
+		if !ok {
+			return nil, fmt.Errorf("not a number: %q", text)
+		}
+		return r, nil
 	}
 	f, err := strconv.ParseFloat(text, 64)
 	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
-		return 0, fmt.Errorf("not a finite number: %q", text)
+		return nil, errors.New("not a finite number")
 	}
-	return f, nil
+	return new(big.Rat).SetFloat64(f), nil
 }
 
 // Status is ladder_status: the computed rung plus the limits that block
 // further review launches. Comparisons match Python: climbs >, launches
-// >=, spend >= (as float64, like Python).
+// >=, spend >= (see pyNumber).
 func Status(p Policy, st LedgerState) (LadderStatus, error) {
 	c, err := Replay(p, st.Events)
 	if err != nil {
 		return LadderStatus{}, err
 	}
-	spend, err := decimal(string(st.SpendUSD))
+	spend, err := pyNumber(string(st.SpendUSD))
 	if err != nil {
 		return LadderStatus{}, fmt.Errorf("ladder: spend_usd: %w", err)
 	}
-	limit, err := decimal(string(p.Limits.MaxTotalReviewUSD))
+	limit, err := pyNumber(string(p.Limits.MaxTotalReviewUSD))
 	if err != nil {
 		return LadderStatus{}, fmt.Errorf("%w: max_total_review_usd: %v", ErrPolicy, err)
 	}
@@ -236,7 +245,7 @@ func Status(p Policy, st LedgerState) (LadderStatus, error) {
 	if st.Launches >= p.Limits.MaxReviewLaunches {
 		blocked = append(blocked, "max_review_launches")
 	}
-	if spend >= limit {
+	if spend.Cmp(limit) >= 0 {
 		blocked = append(blocked, "max_total_review_usd")
 	}
 	return LadderStatus{

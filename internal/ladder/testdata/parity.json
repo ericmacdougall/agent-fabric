@@ -79,6 +79,10 @@
    }
   }
  },
+ "reference_sha256": {
+  "escalation.py": "f501898821c34271675b41b409a6e2958752e0af2ba4ce3952533f27e288b7e9",
+  "model_tiers.py": "90ea8240c91a55b24925dc4ee31436852f6898ea605fb5cc3f6a1bce35bc081e"
+ },
  "seed": 15324,
  "vectors": [
   {
@@ -115,17 +119,113 @@
    }
   },
   {
+   "name": "base/climb_to_top_and_stay",
+   "policy": "base",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h0"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h4"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h5"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h6"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h7"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h8"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h9"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h10"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h11"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h12"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h13"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 0.3,
+    "task": "synthetic-climb_to_top_and_stay"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 2,
+    "fingerprint": "fa",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-climb_to_top_and_stay"
+   }
+  },
+  {
    "name": "base/empty",
    "policy": "base",
    "state": {
     "events": [],
-    "launches": 2,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 60.0,
     "task": "synthetic-empty"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
     "climbs": 0,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -150,16 +250,13 @@
       "head": ""
      }
     ],
-    "launches": 9,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 60.0,
+    "spend_usd": 0.1,
     "task": "synthetic-empty_head_never_skipped"
    },
    "want": {
-    "blocked_by": [
-     "max_review_launches",
-     "max_total_review_usd"
-    ],
+    "blocked_by": [],
     "climbs": 1,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -186,7 +283,7 @@
     ],
     "launches": 0,
     "permission": null,
-    "spend_usd": 0.1,
+    "spend_usd": 59.99,
     "task": "synthetic-ignored_classes"
    },
    "want": {
@@ -220,9 +317,9 @@
       "head": "h3"
      }
     ],
-    "launches": 0,
+    "launches": 2,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 0,
     "task": "synthetic-new_fingerprint_resets"
    },
    "want": {
@@ -251,13 +348,15 @@
       "head": "h2"
      }
     ],
-    "launches": 2,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 59.99,
     "task": "synthetic-null_fingerprint_is_a_fingerprint"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches"
+    ],
     "climbs": 1,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -282,15 +381,13 @@
       "head": null
      }
     ],
-    "launches": 8,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 0.3,
     "task": "synthetic-null_head_never_skipped"
    },
    "want": {
-    "blocked_by": [
-     "max_review_launches"
-    ],
+    "blocked_by": [],
     "climbs": 1,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -310,13 +407,15 @@
       "head": "h2"
      }
     ],
-    "launches": 0,
+    "launches": 2,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 60,
     "task": "synthetic-random_00"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
     "climbs": 0,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -341,9 +440,9 @@
       "head": "h2"
      }
     ],
-    "launches": 2,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 60,
+    "spend_usd": 75.5,
     "task": "synthetic-random_01"
    },
    "want": {
@@ -414,15 +513,13 @@
       "head": "h1"
      }
     ],
-    "launches": 0,
+    "launches": 7,
     "permission": null,
-    "spend_usd": 75.5,
+    "spend_usd": 59.99,
     "task": "synthetic-random_02"
    },
    "want": {
-    "blocked_by": [
-     "max_total_review_usd"
-    ],
+    "blocked_by": [],
     "climbs": 1,
     "failures_at_rung": 1,
     "fingerprint": null,
@@ -464,7 +561,7 @@
     ],
     "launches": 7,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 0.30000000000000004,
     "task": "synthetic-random_03"
    },
    "want": {
@@ -523,13 +620,15 @@
       "head": "h3"
      }
     ],
-    "launches": 7,
+    "launches": 9,
     "permission": null,
     "spend_usd": 0.30000000000000004,
     "task": "synthetic-random_04"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches"
+    ],
     "climbs": 1,
     "failures_at_rung": 1,
     "fingerprint": "fc",
@@ -586,7 +685,7 @@
     ],
     "launches": 9,
     "permission": null,
-    "spend_usd": 0.30000000000000004,
+    "spend_usd": 0.3,
     "task": "synthetic-random_05"
    },
    "want": {
@@ -677,9 +776,9 @@
       "head": "h1"
      }
     ],
-    "launches": 9,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 0,
     "task": "synthetic-random_06"
    },
    "want": {
@@ -735,15 +834,13 @@
       "head": ""
      }
     ],
-    "launches": 8,
+    "launches": 7,
     "permission": null,
     "spend_usd": 0,
     "task": "synthetic-random_07"
    },
    "want": {
-    "blocked_by": [
-     "max_review_launches"
-    ],
+    "blocked_by": [],
     "climbs": 1,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -768,9 +865,9 @@
       "head": "h3"
      }
     ],
-    "launches": 7,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 59.99,
     "task": "synthetic-random_08"
    },
    "want": {
@@ -794,9 +891,9 @@
       "head": "h1"
      }
     ],
-    "launches": 0,
+    "launches": 7,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 0.30000000000000004,
     "task": "synthetic-random_09"
    },
    "want": {
@@ -867,11 +964,13 @@
     ],
     "launches": 7,
     "permission": null,
-    "spend_usd": 0.30000000000000004,
+    "spend_usd": 60.0,
     "task": "synthetic-random_10"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
     "climbs": 2,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -933,7 +1032,7 @@
     ],
     "launches": 7,
     "permission": null,
-    "spend_usd": 60.0,
+    "spend_usd": 60,
     "task": "synthetic-random_11"
    },
    "want": {
@@ -976,7 +1075,7 @@
     ],
     "launches": 7,
     "permission": null,
-    "spend_usd": 60,
+    "spend_usd": 75.5,
     "task": "synthetic-random_12"
    },
    "want": {
@@ -1012,15 +1111,13 @@
       "head": "h1"
      }
     ],
-    "launches": 7,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 75.5,
+    "spend_usd": 0,
     "task": "synthetic-random_13"
    },
    "want": {
-    "blocked_by": [
-     "max_total_review_usd"
-    ],
+    "blocked_by": [],
     "climbs": 0,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -1077,7 +1174,7 @@
     ],
     "launches": 1,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 0.3,
     "task": "synthetic-random_14"
    },
    "want": {
@@ -1111,13 +1208,15 @@
       "head": ""
      }
     ],
-    "launches": 1,
+    "launches": 8,
     "permission": null,
     "spend_usd": 0.3,
     "task": "synthetic-random_15"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches"
+    ],
     "climbs": 0,
     "failures_at_rung": 1,
     "fingerprint": "fa",
@@ -1147,9 +1246,9 @@
       "head": "h1"
      }
     ],
-    "launches": 8,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 59.99,
     "task": "synthetic-random_16"
    },
    "want": {
@@ -1215,9 +1314,9 @@
       "head": null
      }
     ],
-    "launches": 9,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 0.3,
     "task": "synthetic-random_17"
    },
    "want": {
@@ -1283,15 +1382,13 @@
       "head": "h3"
      }
     ],
-    "launches": 8,
+    "launches": 2,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 0.30000000000000004,
     "task": "synthetic-random_18"
    },
    "want": {
-    "blocked_by": [
-     "max_review_launches"
-    ],
+    "blocked_by": [],
     "climbs": 1,
     "failures_at_rung": 1,
     "fingerprint": "fa",
@@ -1321,13 +1418,15 @@
       "head": ""
      }
     ],
-    "launches": 2,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 0.30000000000000004,
+    "spend_usd": 59.99,
     "task": "synthetic-random_19"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches"
+    ],
     "climbs": 0,
     "failures_at_rung": 1,
     "fingerprint": null,
@@ -1407,7 +1506,7 @@
       "head": null
      }
     ],
-    "launches": 8,
+    "launches": 9,
     "permission": null,
     "spend_usd": 59.99,
     "task": "synthetic-random_20"
@@ -1435,15 +1534,13 @@
       "head": "h1"
      }
     ],
-    "launches": 9,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 0.30000000000000004,
     "task": "synthetic-random_21"
    },
    "want": {
-    "blocked_by": [
-     "max_review_launches"
-    ],
+    "blocked_by": [],
     "climbs": 0,
     "failures_at_rung": 1,
     "fingerprint": "fc",
@@ -1523,13 +1620,15 @@
       "head": "h1"
      }
     ],
-    "launches": 0,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 0.30000000000000004,
+    "spend_usd": 59.99,
     "task": "synthetic-random_22"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches"
+    ],
     "climbs": 0,
     "failures_at_rung": 1,
     "fingerprint": null,
@@ -1564,15 +1663,13 @@
       "head": "h1"
      }
     ],
-    "launches": 9,
+    "launches": 2,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 0.1,
     "task": "synthetic-random_23"
    },
    "want": {
-    "blocked_by": [
-     "max_review_launches"
-    ],
+    "blocked_by": [],
     "climbs": 1,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -1592,13 +1689,16 @@
       "head": ""
      }
     ],
-    "launches": 2,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 0.1,
+    "spend_usd": 60,
     "task": "synthetic-random_24"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
     "climbs": 0,
     "failures_at_rung": 1,
     "fingerprint": "fb",
@@ -1628,14 +1728,13 @@
       "head": "h1"
      }
     ],
-    "launches": 8,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 60,
+    "spend_usd": 75.5,
     "task": "synthetic-random_25"
    },
    "want": {
     "blocked_by": [
-     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 0,
@@ -1702,15 +1801,13 @@
       "head": null
      }
     ],
-    "launches": 1,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 75.5,
+    "spend_usd": 0,
     "task": "synthetic-random_26"
    },
    "want": {
-    "blocked_by": [
-     "max_total_review_usd"
-    ],
+    "blocked_by": [],
     "climbs": 1,
     "failures_at_rung": 1,
     "fingerprint": null,
@@ -1760,9 +1857,9 @@
       "head": "h1"
      }
     ],
-    "launches": 0,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 0.30000000000000004,
     "task": "synthetic-random_27"
    },
    "want": {
@@ -1796,9 +1893,9 @@
       "head": "h1"
      }
     ],
-    "launches": 1,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 0.30000000000000004,
+    "spend_usd": 0.1,
     "task": "synthetic-random_28"
    },
    "want": {
@@ -1872,13 +1969,15 @@
       "head": null
      }
     ],
-    "launches": 0,
+    "launches": 8,
     "permission": null,
     "spend_usd": 0.1,
     "task": "synthetic-random_29"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches"
+    ],
     "climbs": 1,
     "failures_at_rung": 1,
     "fingerprint": "fc",
@@ -1928,9 +2027,9 @@
       "head": "h1"
      }
     ],
-    "launches": 8,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 0.1,
+    "spend_usd": 0,
     "task": "synthetic-random_30"
    },
    "want": {
@@ -1991,15 +2090,13 @@
       "head": null
      }
     ],
-    "launches": 9,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 59.99,
     "task": "synthetic-random_31"
    },
    "want": {
-    "blocked_by": [
-     "max_review_launches"
-    ],
+    "blocked_by": [],
     "climbs": 0,
     "failures_at_rung": 1,
     "fingerprint": null,
@@ -2059,9 +2156,9 @@
       "head": "h1"
      }
     ],
-    "launches": 0,
+    "launches": 2,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 0.3,
     "task": "synthetic-random_32"
    },
    "want": {
@@ -2079,9 +2176,9 @@
    "policy": "base",
    "state": {
     "events": [],
-    "launches": 2,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 0,
     "task": "synthetic-random_33"
    },
    "want": {
@@ -2165,13 +2262,15 @@
       "head": "h1"
      }
     ],
-    "launches": 0,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 59.99,
     "task": "synthetic-random_34"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches"
+    ],
     "climbs": 1,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -2246,9 +2345,9 @@
       "head": "h1"
      }
     ],
-    "launches": 9,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 0.3,
     "task": "synthetic-random_35"
    },
    "want": {
@@ -2334,15 +2433,13 @@
       "head": "h1"
      }
     ],
-    "launches": 8,
+    "launches": 7,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 0.1,
     "task": "synthetic-random_36"
    },
    "want": {
-    "blocked_by": [
-     "max_review_launches"
-    ],
+    "blocked_by": [],
     "climbs": 1,
     "failures_at_rung": 1,
     "fingerprint": null,
@@ -2394,11 +2491,13 @@
     ],
     "launches": 7,
     "permission": null,
-    "spend_usd": 0.1,
+    "spend_usd": 60.0,
     "task": "synthetic-random_37"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_total_review_usd"
+    ],
     "climbs": 0,
     "failures_at_rung": 1,
     "fingerprint": "fb",
@@ -2443,15 +2542,13 @@
       "head": "h1"
      }
     ],
-    "launches": 7,
+    "launches": 2,
     "permission": null,
-    "spend_usd": 60.0,
+    "spend_usd": 0.1,
     "task": "synthetic-random_38"
    },
    "want": {
-    "blocked_by": [
-     "max_total_review_usd"
-    ],
+    "blocked_by": [],
     "climbs": 0,
     "failures_at_rung": 1,
     "fingerprint": "fc",
@@ -2486,13 +2583,15 @@
       "head": ""
      }
     ],
-    "launches": 2,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 0.1,
+    "spend_usd": 0,
     "task": "synthetic-random_39"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches"
+    ],
     "climbs": 1,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -2524,7 +2623,7 @@
     ],
     "launches": 9,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 0.1,
     "task": "synthetic-same_head_after_claim_counts"
    },
    "want": {
@@ -2555,9 +2654,9 @@
       "head": "h1"
      }
     ],
-    "launches": 9,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 0.1,
+    "spend_usd": 0,
     "task": "synthetic-same_head_no_claim_skipped"
    },
    "want": {
@@ -2638,14 +2737,14 @@
       "head": "h11"
      }
     ],
-    "launches": 8,
+    "launches": 2,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 75.5,
     "task": "synthetic-top_stays"
    },
    "want": {
     "blocked_by": [
-     "max_review_launches"
+     "max_total_review_usd"
     ],
     "climbs": 0,
     "failures_at_rung": 1,
@@ -2671,7 +2770,7 @@
       "head": "h2"
      }
     ],
-    "launches": 2,
+    "launches": 0,
     "permission": null,
     "spend_usd": 75.5,
     "task": "synthetic-climb_after_two"
@@ -2679,7 +2778,6 @@
    "want": {
     "blocked_by": [
      "max_rung_climbs",
-     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 2,
@@ -2691,17 +2789,113 @@
    }
   },
   {
+   "name": "tight/climb_to_top_and_stay",
+   "policy": "tight",
+   "state": {
+    "events": [
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h0"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h1"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h2"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h3"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h4"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h5"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h6"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h7"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h8"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h9"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h10"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h11"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h12"
+     },
+     {
+      "class": "FAIL",
+      "fingerprint": "fa",
+      "head": "h13"
+     }
+    ],
+    "launches": 2,
+    "permission": null,
+    "spend_usd": 60,
+    "task": "synthetic-climb_to_top_and_stay"
+   },
+   "want": {
+    "blocked_by": [
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
+    "climbs": 4,
+    "failures_at_rung": 1,
+    "fingerprint": "fa",
+    "needs_user_permission": true,
+    "rung": "R5",
+    "task": "synthetic-climb_to_top_and_stay"
+   }
+  },
+  {
    "name": "tight/empty",
    "policy": "tight",
    "state": {
     "events": [],
-    "launches": 0,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 75.5,
+    "spend_usd": 0.30000000000000004,
     "task": "synthetic-empty"
    },
    "want": {
     "blocked_by": [
+     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 0,
@@ -2728,9 +2922,9 @@
       "head": ""
      }
     ],
-    "launches": 2,
+    "launches": 7,
     "permission": null,
-    "spend_usd": 60,
+    "spend_usd": 0.30000000000000004,
     "task": "synthetic-empty_head_never_skipped"
    },
    "want": {
@@ -2763,14 +2957,13 @@
       "head": null
      }
     ],
-    "launches": 9,
+    "launches": 0,
     "permission": null,
     "spend_usd": 0.30000000000000004,
     "task": "synthetic-ignored_classes"
    },
    "want": {
     "blocked_by": [
-     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 0,
@@ -2802,15 +2995,14 @@
       "head": "h3"
      }
     ],
-    "launches": 7,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 0.30000000000000004,
+    "spend_usd": 75.5,
     "task": "synthetic-new_fingerprint_resets"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
-     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 3,
@@ -2837,14 +3029,15 @@
       "head": "h2"
      }
     ],
-    "launches": 0,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 0.30000000000000004,
+    "spend_usd": 60,
     "task": "synthetic-null_fingerprint_is_a_fingerprint"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
+     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 2,
@@ -2871,14 +3064,15 @@
       "head": null
      }
     ],
-    "launches": 1,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 75.5,
+    "spend_usd": 0.3,
     "task": "synthetic-null_head_never_skipped"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
+     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 2,
@@ -2900,9 +3094,9 @@
       "head": "h2"
      }
     ],
-    "launches": 9,
+    "launches": 7,
     "permission": null,
-    "spend_usd": 60,
+    "spend_usd": 60.0,
     "task": "synthetic-random_00"
    },
    "want": {
@@ -2934,14 +3128,13 @@
       "head": "h2"
      }
     ],
-    "launches": 9,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 60,
     "task": "synthetic-random_01"
    },
    "want": {
     "blocked_by": [
-     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 1,
@@ -3008,9 +3201,9 @@
       "head": "h1"
      }
     ],
-    "launches": 7,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 60.0,
+    "spend_usd": 59.99,
     "task": "synthetic-random_02"
    },
    "want": {
@@ -3058,14 +3251,15 @@
       "head": "h2"
      }
     ],
-    "launches": 1,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 60,
+    "spend_usd": 0.3,
     "task": "synthetic-random_03"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
+     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 4,
@@ -3122,9 +3316,9 @@
       "head": "h3"
      }
     ],
-    "launches": 8,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 60.0,
     "task": "synthetic-random_04"
    },
    "want": {
@@ -3189,7 +3383,7 @@
     ],
     "launches": 9,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 59.99,
     "task": "synthetic-random_05"
    },
    "want": {
@@ -3282,9 +3476,9 @@
       "head": "h1"
      }
     ],
-    "launches": 9,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 60.0,
+    "spend_usd": 0.30000000000000004,
     "task": "synthetic-random_06"
    },
    "want": {
@@ -3342,15 +3536,14 @@
       "head": ""
      }
     ],
-    "launches": 9,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 60,
     "task": "synthetic-random_07"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
-     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 2,
@@ -3377,15 +3570,14 @@
       "head": "h3"
      }
     ],
-    "launches": 8,
+    "launches": 2,
     "permission": null,
-    "spend_usd": 0.30000000000000004,
+    "spend_usd": 0,
     "task": "synthetic-random_08"
    },
    "want": {
     "blocked_by": [
-     "max_review_launches",
-     "max_total_review_usd"
+     "max_review_launches"
     ],
     "climbs": 1,
     "failures_at_rung": 0,
@@ -3406,13 +3598,14 @@
       "head": "h1"
      }
     ],
-    "launches": 1,
+    "launches": 7,
     "permission": null,
-    "spend_usd": 60,
+    "spend_usd": 0.3,
     "task": "synthetic-random_09"
    },
    "want": {
     "blocked_by": [
+     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 0,
@@ -3481,13 +3674,14 @@
     ],
     "launches": 2,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 60.0,
     "task": "synthetic-random_10"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
-     "max_review_launches"
+     "max_review_launches",
+     "max_total_review_usd"
     ],
     "climbs": 4,
     "failures_at_rung": 1,
@@ -3548,16 +3742,14 @@
       "head": "h1"
      }
     ],
-    "launches": 7,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 0,
     "task": "synthetic-random_11"
    },
    "want": {
     "blocked_by": [
-     "max_rung_climbs",
-     "max_review_launches",
-     "max_total_review_usd"
+     "max_rung_climbs"
     ],
     "climbs": 4,
     "failures_at_rung": 1,
@@ -3593,16 +3785,14 @@
       "head": "h3"
      }
     ],
-    "launches": 2,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 60.0,
+    "spend_usd": 0.1,
     "task": "synthetic-random_12"
    },
    "want": {
     "blocked_by": [
-     "max_rung_climbs",
-     "max_review_launches",
-     "max_total_review_usd"
+     "max_rung_climbs"
     ],
     "climbs": 2,
     "failures_at_rung": 0,
@@ -3633,13 +3823,16 @@
       "head": "h1"
      }
     ],
-    "launches": 1,
+    "launches": 2,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 0.30000000000000004,
     "task": "synthetic-random_13"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches",
+     "max_total_review_usd"
+    ],
     "climbs": 0,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -3694,14 +3887,16 @@
       "head": "h2"
      }
     ],
-    "launches": 1,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 0.1,
+    "spend_usd": 0.30000000000000004,
     "task": "synthetic-random_14"
    },
    "want": {
     "blocked_by": [
-     "max_rung_climbs"
+     "max_rung_climbs",
+     "max_review_launches",
+     "max_total_review_usd"
     ],
     "climbs": 4,
     "failures_at_rung": 0,
@@ -3732,9 +3927,9 @@
       "head": ""
      }
     ],
-    "launches": 2,
+    "launches": 7,
     "permission": null,
-    "spend_usd": 0.30000000000000004,
+    "spend_usd": 0.3,
     "task": "synthetic-random_15"
    },
    "want": {
@@ -3771,9 +3966,9 @@
       "head": "h1"
      }
     ],
-    "launches": 8,
+    "launches": 7,
     "permission": null,
-    "spend_usd": 0.30000000000000004,
+    "spend_usd": 60,
     "task": "synthetic-random_16"
    },
    "want": {
@@ -3841,9 +4036,9 @@
       "head": null
      }
     ],
-    "launches": 7,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 60.0,
     "task": "synthetic-random_17"
    },
    "want": {
@@ -3911,15 +4106,14 @@
       "head": "h3"
      }
     ],
-    "launches": 7,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 60,
+    "spend_usd": 60.0,
     "task": "synthetic-random_18"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
-     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 4,
@@ -3951,16 +4145,14 @@
       "head": ""
      }
     ],
-    "launches": 9,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 60.0,
+    "spend_usd": 0.1,
     "task": "synthetic-random_19"
    },
    "want": {
     "blocked_by": [
-     "max_rung_climbs",
-     "max_review_launches",
-     "max_total_review_usd"
+     "max_rung_climbs"
     ],
     "climbs": 2,
     "failures_at_rung": 0,
@@ -4041,14 +4233,15 @@
       "head": null
      }
     ],
-    "launches": 1,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 60.0,
+    "spend_usd": 75.5,
     "task": "synthetic-random_20"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
+     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 4,
@@ -4070,13 +4263,15 @@
       "head": "h1"
      }
     ],
-    "launches": 1,
+    "launches": 2,
     "permission": null,
-    "spend_usd": 0.1,
+    "spend_usd": 0,
     "task": "synthetic-random_21"
    },
    "want": {
-    "blocked_by": [],
+    "blocked_by": [
+     "max_review_launches"
+    ],
     "climbs": 1,
     "failures_at_rung": 0,
     "fingerprint": null,
@@ -4156,15 +4351,14 @@
       "head": "h1"
      }
     ],
-    "launches": 8,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 75.5,
+    "spend_usd": 59.99,
     "task": "synthetic-random_22"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
-     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 4,
@@ -4201,9 +4395,9 @@
       "head": "h1"
      }
     ],
-    "launches": 2,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 0.1,
     "task": "synthetic-random_23"
    },
    "want": {
@@ -4230,9 +4424,9 @@
       "head": ""
      }
     ],
-    "launches": 0,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 0.3,
     "task": "synthetic-random_24"
    },
    "want": {
@@ -4268,14 +4462,15 @@
       "head": "h1"
      }
     ],
-    "launches": 9,
+    "launches": 8,
     "permission": null,
-    "spend_usd": 0.1,
+    "spend_usd": 59.99,
     "task": "synthetic-random_25"
    },
    "want": {
     "blocked_by": [
-     "max_review_launches"
+     "max_review_launches",
+     "max_total_review_usd"
     ],
     "climbs": 1,
     "failures_at_rung": 0,
@@ -4341,7 +4536,7 @@
       "head": null
      }
     ],
-    "launches": 1,
+    "launches": 0,
     "permission": null,
     "spend_usd": 0.3,
     "task": "synthetic-random_26"
@@ -4400,9 +4595,9 @@
       "head": "h1"
      }
     ],
-    "launches": 8,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 59.99,
+    "spend_usd": 60,
     "task": "synthetic-random_27"
    },
    "want": {
@@ -4440,14 +4635,14 @@
       "head": "h1"
      }
     ],
-    "launches": 0,
+    "launches": 9,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 0.1,
     "task": "synthetic-random_28"
    },
    "want": {
     "blocked_by": [
-     "max_total_review_usd"
+     "max_review_launches"
     ],
     "climbs": 1,
     "failures_at_rung": 0,
@@ -4518,16 +4713,14 @@
       "head": null
      }
     ],
-    "launches": 9,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 60,
+    "spend_usd": 0.1,
     "task": "synthetic-random_29"
    },
    "want": {
     "blocked_by": [
-     "max_rung_climbs",
-     "max_review_launches",
-     "max_total_review_usd"
+     "max_rung_climbs"
     ],
     "climbs": 4,
     "failures_at_rung": 1,
@@ -4580,13 +4773,14 @@
     ],
     "launches": 9,
     "permission": null,
-    "spend_usd": 0.1,
+    "spend_usd": 60.0,
     "task": "synthetic-random_30"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
-     "max_review_launches"
+     "max_review_launches",
+     "max_total_review_usd"
     ],
     "climbs": 4,
     "failures_at_rung": 1,
@@ -4642,14 +4836,15 @@
       "head": null
      }
     ],
-    "launches": 0,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 0.1,
+    "spend_usd": 60.0,
     "task": "synthetic-random_31"
    },
    "want": {
     "blocked_by": [
-     "max_rung_climbs"
+     "max_rung_climbs",
+     "max_total_review_usd"
     ],
     "climbs": 4,
     "failures_at_rung": 0,
@@ -4710,16 +4905,14 @@
       "head": "h1"
      }
     ],
-    "launches": 9,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 60.0,
+    "spend_usd": 0,
     "task": "synthetic-random_32"
    },
    "want": {
     "blocked_by": [
-     "max_rung_climbs",
-     "max_review_launches",
-     "max_total_review_usd"
+     "max_rung_climbs"
     ],
     "climbs": 4,
     "failures_at_rung": 1,
@@ -4734,13 +4927,14 @@
    "policy": "tight",
    "state": {
     "events": [],
-    "launches": 1,
+    "launches": 2,
     "permission": null,
-    "spend_usd": 60.0,
+    "spend_usd": 0.3,
     "task": "synthetic-random_33"
    },
    "want": {
     "blocked_by": [
+     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 0,
@@ -4822,14 +5016,15 @@
       "head": "h1"
      }
     ],
-    "launches": 0,
+    "launches": 8,
     "permission": null,
     "spend_usd": 0,
     "task": "synthetic-random_34"
    },
    "want": {
     "blocked_by": [
-     "max_rung_climbs"
+     "max_rung_climbs",
+     "max_review_launches"
     ],
     "climbs": 4,
     "failures_at_rung": 0,
@@ -4907,14 +5102,13 @@
     ],
     "launches": 2,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 0,
     "task": "synthetic-random_35"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
-     "max_review_launches",
-     "max_total_review_usd"
+     "max_review_launches"
     ],
     "climbs": 4,
     "failures_at_rung": 1,
@@ -4995,7 +5189,7 @@
       "head": "h1"
      }
     ],
-    "launches": 8,
+    "launches": 2,
     "permission": null,
     "spend_usd": 0,
     "task": "synthetic-random_36"
@@ -5054,7 +5248,7 @@
       "head": "h1"
      }
     ],
-    "launches": 2,
+    "launches": 8,
     "permission": null,
     "spend_usd": 0,
     "task": "synthetic-random_37"
@@ -5110,13 +5304,14 @@
     ],
     "launches": 2,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 75.5,
     "task": "synthetic-random_38"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
-     "max_review_launches"
+     "max_review_launches",
+     "max_total_review_usd"
     ],
     "climbs": 4,
     "failures_at_rung": 0,
@@ -5152,15 +5347,15 @@
       "head": ""
      }
     ],
-    "launches": 8,
+    "launches": 0,
     "permission": null,
-    "spend_usd": 0,
+    "spend_usd": 0.3,
     "task": "synthetic-random_39"
    },
    "want": {
     "blocked_by": [
      "max_rung_climbs",
-     "max_review_launches"
+     "max_total_review_usd"
     ],
     "climbs": 2,
     "failures_at_rung": 0,
@@ -5191,7 +5386,7 @@
       "head": "h1"
      }
     ],
-    "launches": 2,
+    "launches": 1,
     "permission": null,
     "spend_usd": 75.5,
     "task": "synthetic-same_head_after_claim_counts"
@@ -5199,7 +5394,6 @@
    "want": {
     "blocked_by": [
      "max_rung_climbs",
-     "max_review_launches",
      "max_total_review_usd"
     ],
     "climbs": 2,
@@ -5226,9 +5420,9 @@
       "head": "h1"
      }
     ],
-    "launches": 0,
+    "launches": 1,
     "permission": null,
-    "spend_usd": 0.3,
+    "spend_usd": 0.30000000000000004,
     "task": "synthetic-same_head_no_claim_skipped"
    },
    "want": {
@@ -5310,7 +5504,7 @@
       "head": "h11"
      }
     ],
-    "launches": 1,
+    "launches": 0,
     "permission": null,
     "spend_usd": 75.5,
     "task": "synthetic-top_stays"

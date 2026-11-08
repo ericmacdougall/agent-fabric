@@ -9,7 +9,9 @@ Usage: python3 -I tools/ladder-parity/gen.py HOOKS_DIR OUT_JSON [SEED]
 HOOKS_DIR is the directory holding escalation.py and model_tiers.py. No
 real ledger is read; every input is generated here.
 """
+import hashlib
 import json
+import os
 import random
 import sys
 
@@ -59,6 +61,7 @@ def handmade():
         "ignored_classes": [{"class": "PASS", "fingerprint": "fa", "head": "h1"},
                             {"class": "NOT_COUNTED", "fingerprint": None, "head": None}],
         "top_stays": [f("f%d" % i, "h%d" % i) for i in range(12)],
+        "climb_to_top_and_stay": [f("fa", "h%d" % i) for i in range(14)],
         "null_fingerprint_is_a_fingerprint": [f(None, "h1"), f(None, "h2")],
     }
 
@@ -92,8 +95,15 @@ def main(argv):
                 "want": {k: got[k] for k in ("rung", "failures_at_rung", "fingerprint", "climbs",
                                              "blocked_by", "needs_user_permission", "task")},
             })
+    # Record which reference produced the expected values, so a
+    # regeneration against a changed escalation.py shows up in review.
+    reference = {}
+    for name in ("escalation.py", "model_tiers.py"):
+        with open(os.path.join(hooks, name), "rb") as src:
+            reference[name] = hashlib.sha256(src.read()).hexdigest()
     with open(out, "w") as handle:
-        json.dump({"seed": seed, "policies": policies(), "vectors": vectors}, handle, indent=1, sort_keys=True)
+        json.dump({"seed": seed, "reference_sha256": reference, "policies": policies(), "vectors": vectors},
+                  handle, indent=1, sort_keys=True)
         handle.write("\n")
     print("wrote %d vectors (seed %d)" % (len(vectors), seed))
 
