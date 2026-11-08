@@ -172,7 +172,11 @@ func (g *GoodQA) Reconcile(ctx context.Context, e Effect) (Observation, string, 
 	seenCursors := map[string]bool{}
 	matches := 0
 	for page := 0; page < pages; page++ {
-		args := map[string]any{"issueId": r.IssueID, "order": "asc", "limit": 200}
+		// goodqa#15260: GoodQA lists active comments only unless asked, and
+		// retention archives old ones. A posted comment that was archived is
+		// still the write, so every page asks for every archive state (the
+		// server requires the same archiveState with a cursor).
+		args := map[string]any{"issueId": r.IssueID, "order": "asc", "limit": 200, "archiveState": "all"}
 		if cursor != "" {
 			args["cursor"] = cursor
 		}
