@@ -56,6 +56,7 @@ func harnessRunMain(args []string) error {
 	prompt := fs.String("prompt", "", "claude-code: first prompt")
 	input := fs.String("input", "", "claude-code: a second message sent after the first reply")
 	cancelInput := fs.Bool("cancel-input", false, "claude-code: also send an Input whose context is cancelled mid-call")
+	passEnv := fs.String("pass-env", "", "claude-code: comma-separated names of extra environment variables to pass (names only; PATH and HOME are always passed)")
 	model := fs.String("model", "", "claude-code: model name")
 	wait := fs.Duration("wait", 120*time.Second, "claude-code: how long to wait for replies before Stop")
 	if err := fs.Parse(args); err != nil {
@@ -77,7 +78,7 @@ func harnessRunMain(args []string) error {
 	case "native":
 		runErr = runNative(*grantFile, *fake, out)
 	case "claude-code":
-		runErr = runClaudeCode(*claudeBin, *model, *prompt, *input, *cancelInput, *wait, out)
+		runErr = runClaudeCode(*claudeBin, *model, *prompt, *input, *passEnv, *cancelInput, *wait, out)
 	default:
 		runErr = fmt.Errorf("--adapter %q is not wired into fab harness run (native, claude-code)", *adapter)
 	}
@@ -114,9 +115,9 @@ func runNative(grantFile string, fake bool, sink harness.Sink) error {
 
 // runClaudeCode drives one interactive Claude Code session: the prompt, an
 // Input cancelled mid-call (the session must survive it), a real second
-// Input, an Interrupt, and a Stop. The environment given to claude is PATH
-// and HOME only.
-func runClaudeCode(bin, model, prompt, input string, cancelInput bool, wait time.Duration, sink harness.Sink) error {
+// Input, an Interrupt, and a Stop. The environment given to claude is PATH,
+// HOME and the variables named by --pass-env.
+func runClaudeCode(bin, model, prompt, input, passEnv string, cancelInput bool, wait time.Duration, sink harness.Sink) error {
 	if prompt == "" {
 		return errors.New("--prompt is required for claude-code")
 	}
@@ -129,9 +130,17 @@ func runClaudeCode(bin, model, prompt, input string, cancelInput bool, wait time
 		return err
 	}
 	defer os.RemoveAll(dir)
+	env := map[string]string{"PATH": os.Getenv("PATH"), "HOME": os.Getenv("HOME")}
+	for _, k := range strings.Split(passEnv, ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			if v, ok := os.LookupEnv(k); ok {
+				env[k] = v
+			}
+		}
+	}
 	a := &claudecode.Adapter{Launch: claudecode.ExecLauncher(path), StopGrace: 15 * time.Second}
 	spec := harness.StartSpec{SessionID: fmt.Sprintf("ses_%d", time.Now().UnixNano()), Prompt: prompt, Dir: dir, Model: model,
-		Env: map[string]string{"PATH": os.Getenv("PATH"), "HOME": os.Getenv("HOME")}}
+		Env: env}
 	s, err := a.Start(context.Background(), spec, sink)
 	if err != nil {
 		return err

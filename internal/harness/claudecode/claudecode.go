@@ -501,7 +501,8 @@ func (s *session) handle(line []byte) {
 	switch w.Type {
 	case "system":
 		switch w.Subtype {
-		case "init", "api_retry", "status", "compact_boundary":
+		case "init", "api_retry", "status", "compact_boundary", "hook_started", "hook_response":
+			// hook_* are session-hook progress that real claude emits on start.
 		default:
 			_ = s.em.Unknown(ctx, "system event subtype "+w.Subtype, string(line))
 		}
