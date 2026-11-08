@@ -613,10 +613,13 @@ func (s *Store) applyAttemptRow(ctx context.Context, tx pgx.Tx, e domain.Event) 
 	case domain.EvAttemptStarted:
 		// path and lock_path come from the launcher's command (goodqa#15087);
 		// the attempts_path trigger checks them against missions.provider.
-		_, err := tx.Exec(ctx, `INSERT INTO attempts (id, mission_id, fence, revision, generation, host, role, state, lease_until, path, lock_path)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + $9::interval, $10, NULLIF($11, ''))`,
+		// worktree (goodqa#15283, 0038) is the canonical directory a native
+		// attempt is bound to; attempts_worktree_check and the immutability
+		// trigger are its database backstop.
+		_, err := tx.Exec(ctx, `INSERT INTO attempts (id, mission_id, fence, revision, generation, host, role, state, lease_until, path, lock_path, worktree)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + $9::interval, $10, NULLIF($11, ''), NULLIF($12, ''))`,
 			string(e.Attempt), string(e.Mission), e.Fence, e.Revision, e.Generation, string(e.Host), e.Role,
-			string(domain.AttemptLeased), pgInterval(s.Lease), string(e.Path), e.LockPath)
+			string(domain.AttemptLeased), pgInterval(s.Lease), string(e.Path), e.LockPath, e.Worktree)
 		return err
 	case domain.EvAttemptAcked:
 		tag, err := tx.Exec(ctx, `UPDATE attempts SET state = $3, lease_until = now() + $4::interval
