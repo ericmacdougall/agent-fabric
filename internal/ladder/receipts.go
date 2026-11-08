@@ -143,10 +143,12 @@ func StatusOf(p Policy, task string, evs []domain.Event) (TaskStatus, error) {
 		out.ByFP = []FPCount{}
 	}
 	switch {
+	case st.NeedsUserPermission && !f.Approved:
+		// NEG-3 first: at a permission rung without a task-bound approval the
+		// answer is to ask, even when a limit is also reached (the user grants more).
+		out.Decision = "STOP_AND_ASK"
 	case len(st.BlockedBy) > 0:
 		out.Decision = "STOP"
-	case st.NeedsUserPermission && !f.Approved:
-		out.Decision = "STOP_AND_ASK"
 	}
 	return out, nil
 }

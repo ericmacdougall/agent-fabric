@@ -47,6 +47,8 @@ var (
 
 // LadderMissionID returns the mission id for a task. A task that does not fit
 // is refused, never truncated.
+//
+// Single-tenant: id m_ladder-<task> has no tenant/org/harness scope; actor "ladder"/"op:*" unscoped; rows sit on provider anthropic-api. Advisory until S3; re-scoping is a forward migration of ladder rows only (roadmap).
 func LadderMissionID(task string) (MissionID, error) {
 	if !ladderTask.MatchString(task) {
 		return "", fmt.Errorf("%w: ladder task is not a SAFE_KEY", ErrInvalidID)

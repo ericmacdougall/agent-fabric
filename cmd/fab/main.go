@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -261,8 +262,13 @@ func writeMissions(out io.Writer, rows []store.MissionRow) error {
 		if r.AwaitingGrant {
 			exec += " (awaiting mission run --grant)"
 		}
+		name := r.Name
+		if domain.IsLadderMission(r.ID) {
+			// goodqa#15324: only a ladder row in a bad state is listed; tag it.
+			name = strings.TrimSpace("[LADDER] " + name)
+		}
 		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%d/%d/%d\t%s\t%s\n", r.ID, r.Provider, r.Priority, exec, r.Candidate, r.Delivery,
-			r.Version.IntentRevision, r.Version.AttemptFence, r.Version.CandidateGeneration, r.Ticket, r.Name)
+			r.Version.IntentRevision, r.Version.AttemptFence, r.Version.CandidateGeneration, r.Ticket, name)
 	}
 	return w.Flush()
 }
