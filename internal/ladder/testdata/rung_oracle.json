@@ -1,5 +1,5 @@
 {
- "generator_sha256": "059b9f226caf83c90c491ceb8481a7d933f7518bfcf86108e6bd411a8de07730",
+ "generator_sha256": "59ba6eea1a3e46c4b7b79c069dbf4373edd057f3291f650a2397e4a0b2b493db",
  "policy": {
   "caps": {
    "_doc": "owner cap (memory feedback-token-budget: at most 4 active owners): owner_types count toward session_owner_agents; helpers (red-team, click-tester, fixer, Explore, Plan) count only toward session_live_agents. The owner count comes from ah owners liveness when the session has a main WAL, else from the SubagentStart live map.",
@@ -219,6 +219,10 @@
   "schema": 1,
   "top_writing_rung": "R5",
   "unknown_author_reviewer_rung": "R1"
+ },
+ "reference": {
+  "escalation_py_sha256": "f501898821c34271675b41b409a6e2958752e0af2ba4ce3952533f27e288b7e9",
+  "model_tiers_json_sha256": "dcb221bac11825023db120300dd437f1a5c3305327dfc322f1003a499dc5e9b9"
  },
  "refusals": [
   {

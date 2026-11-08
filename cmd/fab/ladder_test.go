@@ -254,6 +254,20 @@ func TestLadderStatusPoolIsReadOnly(t *testing.T) {
 	}
 }
 
+// CI-7: nothing but whitespace may follow the record object. dec.More() is false
+// for a stray "]" or "}", so the end is checked with Token() == io.EOF.
+func TestDecodeLadderRecordRefusesTrailingData(t *testing.T) {
+	one := `{"class":"CLAIM","step":"claim","commit":"abcdef0"}`
+	if _, err := decodeLadderRecord([]byte(one + " \n\t")); err != nil {
+		t.Fatalf("trailing whitespace refused: %v", err)
+	}
+	for name, tail := range map[string]string{"bracket": "]", "brace": "}", "text": " x", "second object": one, "comma": ",", "null": "null"} {
+		if _, err := decodeLadderRecord([]byte(one + tail)); exitCode(usageError{err}) != 3 || err == nil {
+			t.Errorf("trailing %s accepted: %v", name, err)
+		}
+	}
+}
+
 // PL-11: a ladder row that is listed at all is a fault and carries a tag.
 func TestStatusTableTagsLadderRows(t *testing.T) {
 	rows := []store.MissionRow{

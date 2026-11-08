@@ -132,25 +132,36 @@ func TestValidateLadderRecord(t *testing.T) {
 				r.IDs[i] = "F"
 			}
 		}),
-		"src with a space":            mut(review("PASS"), func(r *LadderRecord) { r.Src = "a b" }),
-		"src 65":                      mut(review("PASS"), func(r *LadderRecord) { r.Src = strings.Repeat("a", 65) }),
-		"approval on a review":        mut(review("PASS"), func(r *LadderRecord) { r.Approval = &LadderApproval{Ask: "a_1", Src: "user:x", By: "op:e"} }),
-		"approve without approval":    {Step: "approve_top"},
-		"approve with a class":        {Class: "PASS", Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:x", By: "op:e"}},
-		"approve inferred source":     {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "inferred: from x", By: "op:e"}},
-		"approve ticket source":       {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "ticket:GoodQA goodqa#1", By: "op:e"}},
-		"approve wal source":          {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "wal:/x#w1", By: "op:e"}},
-		"approve file source":         {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "file:/x:1@abc", By: "op:e"}},
-		"approve pasted source":       {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "pasted:s/u \"x\"", By: "op:e"}},
-		"approve uuid source":         {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "uuid:abc", By: "op:e"}},
-		"approve bare user:":          {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:", By: "op:e"}},
-		"approve source with newline": {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:x\ninferred: y", By: "op:e"}},
-		"approve empty source":        {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", By: "op:e"}},
-		"approve agent source":        {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "agent:x", By: "op:e"}},
-		"approve by non operator":     {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:x", By: "chat"}},
-		"approve by bare op:":         {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:x", By: "op:"}},
-		"approve without ask":         {Step: "approve_top", Approval: &LadderApproval{Src: "user:x", By: "op:e"}},
-		"approve with a receipt sha":  {Step: "approve_top", Rsha: s(sha), Approval: &LadderApproval{Ask: "a_1", Src: "user:x", By: "op:e"}},
+		"src with a space":         mut(review("PASS"), func(r *LadderRecord) { r.Src = "a b" }),
+		"src 65":                   mut(review("PASS"), func(r *LadderRecord) { r.Src = strings.Repeat("a", 65) }),
+		"approval on a review":     mut(review("PASS"), func(r *LadderRecord) { r.Approval = &LadderApproval{Ask: "a_1", Src: "user:x", By: "op:e"} }),
+		"approve without approval": {Step: "approve_top"},
+		"approve with a class":     {Class: "PASS", Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:x", By: "op:e"}},
+		"approve inferred source":  {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "inferred: from x", By: "op:e"}},
+		"approve ticket source":    {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "ticket:GoodQA goodqa#1", By: "op:e"}},
+		"approve wal source":       {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "wal:/x#w1", By: "op:e"}},
+		"approve file source":      {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "file:/x:1@abc", By: "op:e"}},
+		"approve pasted source":    {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "pasted:s/u \"x\"", By: "op:e"}},
+		"approve uuid source":      {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "uuid:abc", By: "op:e"}},
+		"approve bare user:":       {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:", By: "op:e"}},
+		// CI-1: after the kind prefix the body starts with a printable non-space
+		// ASCII character and the whole field is printable ASCII.
+		"approve user: then a space":         {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user: ", By: "op:e"}},
+		"approve user: space x":              {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user: x", By: "op:e"}},
+		"approve answer: space x":            {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "answer: x", By: "op:e"}},
+		"approve user: NBSP":                 {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user: x", By: "op:e"}},
+		"approve user: C1 control":           {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:\u0085", By: "op:e"}},
+		"approve queue: zero width":          {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "queue:​x", By: "op:e"}},
+		"approve user: bidi override":        {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:x‮y", By: "op:e"}},
+		"approve user: invalid utf8":         {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:\xff\xfe", By: "op:e"}},
+		"approve user: words with non-ascii": {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:s/u \"café\"", By: "op:e"}},
+		"approve source with newline":        {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:x\ninferred: y", By: "op:e"}},
+		"approve empty source":               {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", By: "op:e"}},
+		"approve agent source":               {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "agent:x", By: "op:e"}},
+		"approve by non operator":            {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:x", By: "chat"}},
+		"approve by bare op:":                {Step: "approve_top", Approval: &LadderApproval{Ask: "a_1", Src: "user:x", By: "op:"}},
+		"approve without ask":                {Step: "approve_top", Approval: &LadderApproval{Src: "user:x", By: "op:e"}},
+		"approve with a receipt sha":         {Step: "approve_top", Rsha: s(sha), Approval: &LadderApproval{Ask: "a_1", Src: "user:x", By: "op:e"}},
 	}
 	for name, r := range bad {
 		r := r
@@ -305,6 +316,20 @@ func TestOldEventsAndCommandsHaveNoLadderKey(t *testing.T) {
 	c, _ := json.Marshal(Command{Kind: CmdAdmitMission, Mission: "m_a", Head: h40})
 	if strings.Contains(string(e), "ladder") || strings.Contains(string(c), "ladder") {
 		t.Fatalf("a ladder key leaked into old shapes: %s %s", e, c)
+	}
+}
+
+// CI-3: a ladder mission id must round-trip through the builder, so "m_ladder-"
+// and "m_ladder-_x" (no valid task) are never accepted by the store.
+func TestValidLadderMissionID(t *testing.T) {
+	for id, want := range map[MissionID]bool{
+		"m_ladder-ok": true, "m_ladder-a.b_c-d": true, MissionID("m_ladder-" + strings.Repeat("a", 55)): true,
+		"m_ladder-": false, "m_ladder-_x": false, "m_ladder-.x": false, "m_ladder--x": false, "m_ladder-a b": false,
+		MissionID("m_ladder-" + strings.Repeat("a", 56)): false, "m_real": false, "": false,
+	} {
+		if got := ValidLadderMissionID(id); got != want {
+			t.Errorf("ValidLadderMissionID(%q) = %v, want %v", id, got, want)
+		}
 	}
 }
 

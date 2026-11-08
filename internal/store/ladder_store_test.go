@@ -315,9 +315,106 @@ func TestLadderCapCountsReceiptsOnly(t *testing.T) {
 	}
 }
 
+// CI-2 (S1B-A2): spend records never use receipt slots (escalation.py add_spend
+// adds no event); they have their own bound, refused with ErrPolicy. The broken
+// variant that counts spends toward the receipt cap fails this test.
+func TestLadderSpendsDoNotUseReceiptSlots(t *testing.T) {
+	st, ctx := openTest(t)
+	const capN, spendCap = 25, 5
+	oldR, oldS := ladderMaxReceipts, ladderMaxSpends
+	ladderMaxReceipts, ladderMaxSpends = capN, spendCap
+	t.Cleanup(func() { ladderMaxReceipts, ladderMaxSpends = oldR, oldS })
+	for i := 0; i < capN-1; i++ {
+		if _, err := st.RecordLadderReceipt(ctx, "t5s", lfail(i)); err != nil {
+			t.Fatalf("receipt %d: %v", i, err)
+		}
+	}
+	for ord := int64(1); ord <= spendCap-1; ord++ {
+		if _, err := st.RecordLadderReceipt(ctx, "t5s", lspend(1000, ord)); err != nil {
+			t.Fatalf("spend %d: %v", ord, err)
+		}
+	}
+	if _, err := st.RecordLadderReceipt(ctx, "t5s", lfail(capN-1)); err != nil {
+		t.Fatalf("receipt number %d after %d spends: %v (spends must not use receipt slots)", capN, spendCap-1, err)
+	}
+	if _, err := st.RecordLadderReceipt(ctx, "t5s", lfail(capN)); !errors.Is(err, domain.ErrTooManyReceipts) {
+		t.Fatalf("receipt past the cap: %v, want ErrTooManyReceipts", err)
+	}
+	if _, err := st.RecordLadderReceipt(ctx, "t5s", lspend(1000, spendCap)); err != nil {
+		t.Fatalf("spend number %d: %v", spendCap, err)
+	}
+	_, err := st.RecordLadderReceipt(ctx, "t5s", lspend(1000, spendCap+1))
+	if !errors.Is(err, ladder.ErrPolicy) || !errors.Is(err, domain.ErrTooManyReceipts) || !strings.Contains(err.Error(), fmt.Sprint(spendCap)) {
+		t.Fatalf("spend past its cap: %v, want ErrPolicy + ErrTooManyReceipts naming %d", err, spendCap)
+	}
+	if n := countAll(t, st, "SELECT count(*) FROM events WHERE mission_id = 'm_ladder-t5s' AND payload->'ladder'->>'step' = 'spend'"); n != spendCap {
+		t.Fatalf("%d spend events after the refusal, want %d (nothing stored)", n, spendCap)
+	}
+	evs, err := st.LadderEvents(ctx, "t5s")
+	if err != nil {
+		t.Fatalf("reading a log at both caps: %v", err)
+	}
+	if f, err := ladder.Fold(evs); err != nil || f.Receipts != capN || f.Spends != spendCap {
+		t.Fatalf("fold at both caps: (%d receipts, %d spends, %v)", f.Receipts, f.Spends, err)
+	}
+}
+
+// CI-3: the store accepts only ids the builder would make. A direct Execute on
+// "m_ladder-" or "m_ladder-_x" is refused and creates no row.
+func TestLadderPrepareRefusesMalformedLadderIDs(t *testing.T) {
+	st, ctx := openTest(t)
+	r := lclaim("abcdef0")
+	for _, id := range []domain.MissionID{"m_ladder-", "m_ladder-_x", "m_ladder-.x", "m_ladder--x"} {
+		_, err := st.Execute(ctx, domain.LadderActor, "direct", domain.Command{Kind: domain.CmdRecordLadderReceipt, Mission: id, Ladder: &r})
+		if !errors.Is(err, domain.ErrInvalidID) {
+			t.Errorf("%q: %v, want ErrInvalidID", id, err)
+		}
+	}
+	if n := countAll(t, st, "SELECT count(*) FROM missions"); n != 0 {
+		t.Fatalf("%d rows created for malformed ladder ids", n)
+	}
+}
+
+// CI-6: a stored refusal still satisfies errors.Is when it is replayed.
+func TestLadderRefusalsReplayWithTheirSentinels(t *testing.T) {
+	st, ctx := openTest(t)
+	if _, err := st.RecordLadderReceipt(ctx, "t6r", lclaim("abcdef0")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateMission(ctx, "m_real", domain.ProviderClaudeCode, "GoodQA goodqa#1", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	r := lclaim("abcdef0")
+	cases := []struct {
+		name string
+		cmd  domain.Command
+		want error
+	}{
+		{"admit on a ladder mission", domain.Command{Kind: domain.CmdAdmitMission, Mission: "m_ladder-t6r"}, domain.ErrLadderMission},
+		{"record on a real mission", domain.Command{Kind: domain.CmdRecordLadderReceipt, Mission: "m_real", Ladder: &r}, domain.ErrNotLadderMission},
+	}
+	for _, c := range cases {
+		actor := domain.ActorID("chat")
+		if c.want == domain.ErrNotLadderMission {
+			actor = domain.LadderActor
+		}
+		_, first := st.Execute(ctx, actor, "refused-key", c.cmd)
+		if !errors.Is(first, c.want) {
+			t.Fatalf("%s: first call %v, want %v", c.name, first, c.want)
+		}
+		resp, again := st.Execute(ctx, actor, "refused-key", c.cmd)
+		if !errors.Is(again, c.want) || !resp.Replayed {
+			t.Fatalf("%s: replayed refusal %v (replayed=%v), want %v", c.name, again, resp.Replayed, c.want)
+		}
+	}
+}
+
 func TestLadderProductionCap(t *testing.T) {
 	if ladderMaxReceipts != 4096 || domain.MaxLadderReceipts != 4096 || ladder.MaxReceiptsPerTask != 4096 {
 		t.Fatalf("cap drifted: %d %d %d, escalation.py MAX_EVENTS is 4096", ladderMaxReceipts, domain.MaxLadderReceipts, ladder.MaxReceiptsPerTask)
+	}
+	if ladderMaxSpends != 4096 || domain.MaxLadderSpends != 4096 {
+		t.Fatalf("spend cap drifted: %d %d, S1B-A2 is 4096", ladderMaxSpends, domain.MaxLadderSpends)
 	}
 }
 
@@ -390,6 +487,8 @@ func TestLadderOracleThroughTheDatabase(t *testing.T) {
 			Record domain.LadderRecord `json:"record"`
 			Status struct {
 				Rung        string   `json:"rung"`
+				Fingerprint *string  `json:"fingerprint"`
+				NeedsUser   bool     `json:"needs_user_permission"`
 				Fails       int      `json:"failures_at_rung"`
 				Climbs      int      `json:"climbs"`
 				BlockedBy   []string `json:"blocked_by"`
@@ -406,11 +505,8 @@ func TestLadderOracleThroughTheDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("seed=%d", o.Seed)
-	n := len(o.Steps)
-	if n > 120 {
-		n = 120 // the full 272-step prefix comparison is the pure test; this one proves the database path
-	}
-	if n < 100 {
+	n := len(o.Steps) // CI-5: every step, through the database
+	if n < 200 {
 		t.Fatalf("seed %d: only %d oracle steps", o.Seed, len(o.Steps))
 	}
 	for i := 0; i < n; i++ {
@@ -428,7 +524,9 @@ func TestLadderOracleThroughTheDatabase(t *testing.T) {
 		}
 		if got.Rung != s.Status.Rung || got.FailuresAtRung != s.Status.Fails || got.Climbs != s.Status.Climbs ||
 			got.Launches != s.Status.Launches || got.SpendMicros != s.Status.SpendMicros ||
-			strings.Join(got.BlockedBy, ",") != strings.Join(s.Status.BlockedBy, ",") {
+			strings.Join(got.BlockedBy, ",") != strings.Join(s.Status.BlockedBy, ",") ||
+			got.NeedsUserPermission != s.Status.NeedsUser ||
+			(got.Fingerprint == nil) != (s.Status.Fingerprint == nil) || (got.Fingerprint != nil && *got.Fingerprint != *s.Status.Fingerprint) {
 			t.Fatalf("seed %d step %d: stored log folds to %+v, python said %+v", o.Seed, i, got.LadderStatus, s.Status)
 		}
 	}

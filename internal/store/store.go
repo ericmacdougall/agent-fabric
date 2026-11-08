@@ -312,6 +312,9 @@ var errKinds = map[string]error{
 	"attempt_live":       domain.ErrAttemptLive,
 	"live_test_missing":  domain.ErrLiveTestMissing,
 	"invalid_transition": domain.ErrInvalidTransition,
+	// goodqa#15324 CI-6: a replayed stored refusal still satisfies errors.Is.
+	"ladder_mission":     domain.ErrLadderMission,
+	"not_ladder_mission": domain.ErrNotLadderMission,
 }
 
 func kindOf(err error) string {

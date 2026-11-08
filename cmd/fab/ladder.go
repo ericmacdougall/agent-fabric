@@ -216,8 +216,10 @@ func decodeLadderRecord(body []byte) (domain.LadderRecord, error) {
 	if err := dec.Decode(&rec); err != nil {
 		return rec, fmt.Errorf("%w: ladder record is not a record object", ladder.ErrInput)
 	}
-	if dec.More() {
-		return rec, fmt.Errorf("%w: ladder record file holds more than one value", ladder.ErrInput)
+	// CI-7: dec.More() is false for a stray "]" or "}", so require the end of
+	// input: Token() returns io.EOF only when nothing but whitespace follows.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return rec, fmt.Errorf("%w: ladder record file holds data after the record", ladder.ErrInput)
 	}
 	if err := domain.ValidateLadderRecord(&rec); err != nil {
 		return rec, err

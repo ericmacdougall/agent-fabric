@@ -115,7 +115,12 @@ def main():
                                                     'commit': 'not-a-sha', 'launched': True}},
                 {'why': 'fingerprint is a finding id', 'record': {'class': 'FAIL', 'step': 'review', 'fp': 'RT-1', 'rsha': 'b' * 64,
                                                                    'launched': True}}]
-    out = {'seed': a.seed, 'policy': policy, 'steps': steps, 'refusals': refusals,
+    # CI-4: pin the reference implementation the oracle was generated from, so a
+    # later change to escalation.py or model_tiers.json is noticed by the Go test.
+    hooks = Path(a.hooks)
+    reference = {'escalation_py_sha256': hashlib.sha256((hooks / 'escalation.py').read_bytes()).hexdigest(),
+                 'model_tiers_json_sha256': hashlib.sha256((hooks / 'model_tiers.json').read_bytes()).hexdigest()}
+    out = {'seed': a.seed, 'reference': reference, 'policy': policy, 'steps': steps, 'refusals': refusals,
            'generator_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
     Path(a.out).write_text(json.dumps(out, indent=1, sort_keys=True) + '\n')
     print('wrote %d steps to %s' % (len(steps), a.out))

@@ -1,10 +1,14 @@
 package ladder
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -181,6 +185,43 @@ func TestFoldSumsIdenticalSpends(t *testing.T) {
 	}
 }
 
+// CI-2 (S1B-A2): escalation.py MAX_EVENTS counts events only and add_spend adds
+// none, so spend records never use up receipt slots; they have their own bound.
+func TestFoldSpendsDoNotCountTowardTheReceiptCap(t *testing.T) {
+	var evs []domain.Event
+	for i := 0; i < MaxReceiptsPerTask-1; i++ {
+		evs = append(evs, failEv(i%7, ""))
+	}
+	for i := 1; i <= 500; i++ {
+		evs = append(evs, ev(domain.LadderRecord{Class: "NOT_COUNTED", Step: "spend", SpendMicros: 1000, Ordinal: int64(i)}))
+	}
+	evs = append(evs, failEv(1, "")) // receipt number 4096 after 500 spends: still accepted
+	f, err := Fold(evs)
+	if err != nil || f.Receipts != MaxReceiptsPerTask || f.SpendMicros != 500*1000 {
+		t.Fatalf("cap-1 receipts + 500 spends + 1 receipt: (receipts %d, spend %d, %v)", f.Receipts, f.SpendMicros, err)
+	}
+	if _, err := Fold(append(evs, failEv(2, ""))); !errors.Is(err, domain.ErrTooManyReceipts) {
+		t.Fatalf("receipt 4097 must still be refused: %v", err)
+	}
+}
+
+func TestFoldSpendCapRefusesWithErrPolicy(t *testing.T) {
+	mk := func(n int) []domain.Event {
+		out := make([]domain.Event, n)
+		for i := range out {
+			out[i] = ev(domain.LadderRecord{Class: "NOT_COUNTED", Step: "spend", SpendMicros: 1, Ordinal: int64(i + 1)})
+		}
+		return out
+	}
+	if f, err := Fold(mk(domain.MaxLadderSpends)); err != nil || f.SpendMicros != domain.MaxLadderSpends {
+		t.Fatalf("exactly the spend cap: (%d, %v)", f.SpendMicros, err)
+	}
+	_, err := Fold(mk(domain.MaxLadderSpends + 1))
+	if !errors.Is(err, ErrPolicy) || !errors.Is(err, domain.ErrTooManyReceipts) || !strings.Contains(err.Error(), "4096") {
+		t.Fatalf("one spend past the cap: %v, want ErrPolicy and ErrTooManyReceipts naming 4096", err)
+	}
+}
+
 type oracleStep struct {
 	Record domain.LadderRecord `json:"record"`
 	Status struct {
@@ -196,6 +237,10 @@ type oracleStep struct {
 }
 
 type oracleFile struct {
+	Reference struct {
+		EscalationPy string `json:"escalation_py_sha256"`
+		ModelTiers   string `json:"model_tiers_json_sha256"`
+	} `json:"reference"`
 	Seed     int64           `json:"seed"`
 	Policy   json.RawMessage `json:"policy"`
 	Steps    []oracleStep    `json:"steps"`
@@ -263,6 +308,33 @@ func TestOracleEveryPrefixEqualsEscalationPy(t *testing.T) {
 	}
 	if !climbed || !blocked || !perm || fails < 30 || spends < 3 {
 		t.Fatalf("seed %d: the oracle sequence is vacuous (climbed=%v blocked=%v permission=%v fails=%d spends=%d)", o.Seed, climbed, blocked, perm, fails, spends)
+	}
+}
+
+// CI-4: the oracle names the reference implementation it came from. Where that
+// implementation is present (LADDER_REFERENCE_HOOKS, else ~/.claude/hooks), its
+// current sha256 must match, so a changed escalation.py or model_tiers.json is
+// noticed instead of the oracle quietly going stale.
+func TestOracleReferenceMatchesTheHooks(t *testing.T) {
+	o, _ := loadOracle(t)
+	hexRe := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	if !hexRe.MatchString(o.Reference.EscalationPy) || !hexRe.MatchString(o.Reference.ModelTiers) {
+		t.Fatalf("the oracle carries no reference sha256s: %+v", o.Reference)
+	}
+	dir := os.Getenv("LADDER_REFERENCE_HOOKS")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".claude", "hooks")
+	}
+	for name, want := range map[string]string{"escalation.py": o.Reference.EscalationPy, "model_tiers.json": o.Reference.ModelTiers} {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Skipf("reference %s not present (%v); set LADDER_REFERENCE_HOOKS to compare", name, err)
+		}
+		sum := sha256.Sum256(b)
+		if got := hex.EncodeToString(sum[:]); got != want {
+			t.Fatalf("%s is %s but the oracle was generated from %s: regenerate it with tools/ladder-parity/gen_events.py and review the diff", name, got[:12], want[:12])
+		}
 	}
 }
 

@@ -29,7 +29,8 @@ type Folded struct {
 	Ledger      []LedgerEvent
 	Launches    int
 	SpendMicros int64
-	Receipts    int
+	Receipts    int // LADDER_RECEIPT events that are not spend records
+	Spends      int // spend records (their own bound)
 	Approved    bool
 	Approvals   []domain.LadderApproval
 	ByFP        []FPCount
@@ -55,11 +56,20 @@ func Fold(evs []domain.Event) (Folded, error) {
 			if err := domain.ValidateLadderRecord(e.Ladder); err != nil || e.Ladder.Step == "approve_top" {
 				return Folded{}, fmt.Errorf("%w: stored receipt is malformed", domain.ErrInvalidReceipt)
 			}
-			if f.Receipts >= MaxReceiptsPerTask {
-				return Folded{}, fmt.Errorf("%w: more than %d receipts", domain.ErrTooManyReceipts, MaxReceiptsPerTask)
-			}
-			f.Receipts++
 			r := e.Ladder
+			if r.Step == "spend" {
+				// CI-2: escalation.py add_spend adds no event, so spends do not use
+				// receipt slots; they have their own bound (S1B-A2).
+				if f.Spends >= domain.MaxLadderSpends {
+					return Folded{}, fmt.Errorf("%w: %w: more than %d spend records", ErrPolicy, domain.ErrTooManyReceipts, domain.MaxLadderSpends)
+				}
+				f.Spends++
+			} else {
+				if f.Receipts >= MaxReceiptsPerTask {
+					return Folded{}, fmt.Errorf("%w: more than %d receipts", domain.ErrTooManyReceipts, MaxReceiptsPerTask)
+				}
+				f.Receipts++
+			}
 			f.Ledger = append(f.Ledger, LedgerEvent{Class: r.Class, Fingerprint: r.Fp, Head: r.Commit})
 			if r.Counted {
 				f.Launches++

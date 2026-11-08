@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"fabric/internal/domain"
+	"fabric/internal/ladder"
 	"fabric/internal/reducer"
 )
 
@@ -23,6 +24,10 @@ import (
 // A package variable only so a test can lower it; production is
 // domain.MaxLadderReceipts (checked by a test).
 var ladderMaxReceipts = domain.MaxLadderReceipts
+
+// ladderMaxSpends bounds spend records per task; they do not use receipt slots
+// (escalation.py add_spend adds no event). A variable only for tests.
+var ladderMaxSpends = domain.MaxLadderSpends
 
 // reserveLadderPrefix keeps the m_ladder- namespace for ladder records: no
 // operator, importer or native start can create such a mission.
@@ -81,6 +86,10 @@ func ladderPrepare(ctx context.Context, tx pgx.Tx, actor domain.ActorID, cmd dom
 	if actor != domain.LadderActor {
 		return fmt.Errorf("%w: ladder records are written by the ladder actor only", domain.ErrInvalidTransition)
 	}
+	// CI-3: only an id the builder would make: the prefix plus a SAFE_KEY task.
+	if !domain.ValidLadderMissionID(cmd.Mission) {
+		return fmt.Errorf("%w: not a ladder mission id", domain.ErrInvalidID)
+	}
 	if _, err := reducer.Decide(domain.NewMission(cmd.Mission), cmd, reducer.Env{}); err != nil {
 		return err
 	}
@@ -137,16 +146,30 @@ func ladderGuard(ctx context.Context, tx pgx.Tx, cmd domain.Command, m domain.Mi
 			return nil, err
 		}
 	}
+	// Three separate bounds (CI-2, S1B-A2). Receipts: LADDER_RECEIPT events that
+	// are not spend records, like escalation.py MAX_EVENTS. Spends: their own
+	// bound, refused with ErrPolicy (escalation.py add_spend adds no event and
+	// has no cap). Approvals: LADDER_TOP_APPROVED.
 	kind, limit := domain.LadderEventKind(r), ladderMaxReceipts
-	if kind == domain.EvLadderTopApproved {
-		limit = domain.MaxLadderApprovals
+	what := "receipt"
+	q := "SELECT count(*) FROM events WHERE mission_id = $1 AND kind = $2 AND COALESCE(payload->'ladder'->>'step', '') <> 'spend'"
+	switch {
+	case kind == domain.EvLadderTopApproved:
+		limit, what = domain.MaxLadderApprovals, "approval"
+		q = "SELECT count(*) FROM events WHERE mission_id = $1 AND kind = $2"
+	case r.Step == "spend":
+		limit, what = ladderMaxSpends, "spend"
+		q = "SELECT count(*) FROM events WHERE mission_id = $1 AND kind = $2 AND payload->'ladder'->>'step' = 'spend'"
 	}
 	var n int
-	if err := tx.QueryRow(ctx, "SELECT count(*) FROM events WHERE mission_id = $1 AND kind = $2", string(cmd.Mission), string(kind)).Scan(&n); err != nil {
+	if err := tx.QueryRow(ctx, q, string(cmd.Mission), string(kind)).Scan(&n); err != nil {
 		return nil, err
 	}
 	if n >= limit {
-		return nil, fmt.Errorf("%w: task already holds %d %s events (limit %d); an operator must escalate", domain.ErrTooManyReceipts, n, kind, limit)
+		if what == "spend" {
+			return nil, fmt.Errorf("%w: %w: task already holds %d spend records (limit %d); an operator must escalate", ladder.ErrPolicy, domain.ErrTooManyReceipts, n, limit)
+		}
+		return nil, fmt.Errorf("%w: task already holds %d %s records (limit %d); an operator must escalate", domain.ErrTooManyReceipts, n, what, limit)
 	}
 	return nil, nil
 }
@@ -169,7 +192,7 @@ func (s *Store) LadderEvents(ctx context.Context, task string) ([]domain.Event, 
 // ReadLadderEvents reads inside a caller's READ ONLY transaction, so the
 // status command can use the read-only pool.
 func ReadLadderEvents(ctx context.Context, tx pgx.Tx, id domain.MissionID) ([]domain.Event, error) {
-	max := ladderMaxReceipts + domain.MaxLadderApprovals
+	max := ladderMaxReceipts + ladderMaxSpends + domain.MaxLadderApprovals
 	rows, err := tx.Query(ctx, `SELECT payload FROM events WHERE mission_id = $1 ORDER BY seq LIMIT $2`, string(id), max+1)
 	if err != nil {
 		return nil, err
@@ -193,14 +216,21 @@ func ReadLadderEvents(ctx context.Context, tx pgx.Tx, id domain.MissionID) ([]do
 	if len(out) > max {
 		return nil, fmt.Errorf("%w: more than %d events for %s", domain.ErrTooManyReceipts, max, id)
 	}
-	n := 0
+	n, spends := 0, 0
 	for _, e := range out {
-		if e.Kind == domain.EvLadderReceipt {
+		switch {
+		case e.Kind != domain.EvLadderReceipt || e.Ladder == nil:
+		case e.Ladder.Step == "spend":
+			spends++
+		default:
 			n++
 		}
 	}
 	if n > ladderMaxReceipts {
 		return nil, fmt.Errorf("%w: more than %d receipts for %s", domain.ErrTooManyReceipts, ladderMaxReceipts, id)
+	}
+	if spends > ladderMaxSpends {
+		return nil, fmt.Errorf("%w: %w: more than %d spend records for %s", ladder.ErrPolicy, domain.ErrTooManyReceipts, ladderMaxSpends, id)
 	}
 	return out, nil
 }

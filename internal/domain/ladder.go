@@ -30,6 +30,10 @@ const (
 	// MaxLadderReceipts equals escalation.py MAX_EVENTS. Only LADDER_RECEIPT
 	// events count toward it.
 	MaxLadderReceipts = 4096
+	// MaxLadderSpends bounds spend records per task. escalation.py has no spend
+	// cap (add_spend adds no event), so spends do not count toward
+	// MaxLadderReceipts; an unbounded count is not accepted (S1B-A2).
+	MaxLadderSpends = 4096
 	// MaxLadderApprovals bounds LADDER_TOP_APPROVED events per task.
 	MaxLadderApprovals = 64
 )
@@ -59,6 +63,16 @@ func LadderMissionID(task string) (MissionID, error) {
 		return "", fmt.Errorf("%w: ladder task is longer than %d bytes", ErrInvalidID, maxIDLen-len(LadderMissionPrefix))
 	}
 	return MissionID(id), nil
+}
+
+// ValidLadderMissionID reports whether id is exactly what LadderMissionID
+// builds from its task (CI-3): the prefix, then a task that is a SAFE_KEY.
+func ValidLadderMissionID(id MissionID) bool {
+	if !IsLadderMission(id) {
+		return false
+	}
+	back, err := LadderMissionID(LadderTask(id))
+	return err == nil && back == id
 }
 
 // IsLadderMission is true for exactly the ids that start with the prefix.
@@ -225,16 +239,19 @@ func validateApproval(r *LadderRecord) error {
 	}
 	ok := false
 	for _, k := range approvalSourceKinds {
-		if strings.HasPrefix(a.Src, k) && len(a.Src) > len(k) {
+		// CI-1: the body after the kind starts with a printable non-space ASCII byte.
+		if strings.HasPrefix(a.Src, k) && len(a.Src) > len(k) && a.Src[len(k)] > 0x20 && a.Src[len(k)] < 0x7f {
 			ok = true
 		}
 	}
 	if !ok || len(a.Src) > 256 {
 		return bad("approval needs a user:, answer: or queue: source")
 	}
-	for _, c := range a.Src {
-		if c < 0x20 || c == 0x7f {
-			return bad("approval source has control characters")
+	// The whole field is printable ASCII: no NBSP, zero-width, bidi or C1
+	// characters, no controls and no invalid UTF-8 can pass as a user's words.
+	for i := 0; i < len(a.Src); i++ {
+		if c := a.Src[i]; c < 0x20 || c > 0x7e {
+			return bad("approval source must be printable ASCII")
 		}
 	}
 	return nil
