@@ -115,8 +115,16 @@ func installWorkerSeccomp(filters []unix.SockFilter) error {
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 		return fmt.Errorf("no_new_privs: %w", err)
 	}
-	if err := unix.Prctl(unix.PR_SET_SECCOMP, unix.SECCOMP_MODE_FILTER, uintptr(unsafe.Pointer(&program)), 0, 0); err != nil {
-		return fmt.Errorf("seccomp: %w", err)
+	// seccomp(2) with TSYNC applies the filter to every thread of the
+	// process; prctl(PR_SET_SECCOMP) covers only the calling thread
+	// (goodqa#15235 S5b delta red-team D2). A positive return names a thread
+	// that could not be synchronized.
+	r, _, errno := unix.Syscall(unix.SYS_SECCOMP, unix.SECCOMP_SET_MODE_FILTER, unix.SECCOMP_FILTER_FLAG_TSYNC, uintptr(unsafe.Pointer(&program)))
+	if errno != 0 {
+		return fmt.Errorf("seccomp: %w", errno)
+	}
+	if r != 0 {
+		return fmt.Errorf("seccomp: thread %d could not be synchronized", r)
 	}
 	return nil
 }

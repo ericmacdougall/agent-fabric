@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -162,6 +163,11 @@ var (
 // Preflight modes only probe sockets and procfs; they never exec a command and
 // cannot be used to bypass the worker sandbox.
 func sandboxMain(args []string) error {
+	// Landlock restrict_self and PR_SET_NO_NEW_PRIVS apply to the calling OS
+	// thread only. Pin this goroutine for the life of the process so the
+	// restrictions and the final execve run on one thread (goodqa#15235 S5b
+	// delta red-team D1). Never unlocked: the process ends in exec.
+	runtime.LockOSThread()
 	if len(args) > 0 && (args[0] == "--manager-preflight" || args[0] == "--egress-preflight") {
 		if err := host.ApplyWorkerSocketPolicy(); err != nil {
 			return err

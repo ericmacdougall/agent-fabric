@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -170,5 +171,18 @@ func TestWorkerManagerLockRejectsWritableAncestor(t *testing.T) {
 	}
 	if _, err := workerManagerLockPath(filepath.Join(private, "worker.lock"), 1000); err == nil {
 		t.Fatal("lock path beneath a replaceable directory was accepted")
+	}
+}
+
+// goodqa#15235 S5b delta red-team D3: the unoverridden lock base is derived
+// from the controller uid alone.
+func TestLockRuntimeBaseIgnoresEnvironment(t *testing.T) {
+	want := "/run/user/" + strconv.Itoa(os.Getuid())
+	for _, env := range [][2]string{{t.TempDir(), t.TempDir()}, {"", ""}, {"/nonexistent", "/nonexistent"}} {
+		t.Setenv("XDG_RUNTIME_DIR", env[0])
+		t.Setenv("HOME", env[1])
+		if got := lockRuntimeBase(); got != want {
+			t.Fatalf("lockRuntimeBase()=%q with XDG_RUNTIME_DIR=%q HOME=%q, want %q", got, env[0], env[1], want)
+		}
 	}
 }
