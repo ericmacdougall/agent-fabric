@@ -21,7 +21,6 @@
 package claudecode
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,6 +31,7 @@ import (
 	"time"
 
 	"fabric/internal/harness"
+	"fabric/internal/harness/proc"
 	"fabric/internal/provider/claude"
 )
 
@@ -581,36 +581,5 @@ func (s *session) blocks(raw json.RawMessage, line []byte) []block {
 	return bs
 }
 
-// readLines calls f for every line of r, with the line truncated to max and
-// oversize set when it was longer. A line longer than max is skipped to its
-// end, not allowed to grow memory.
-func readLines(r io.Reader, max int, f func(line []byte, oversize bool)) {
-	br := bufio.NewReaderSize(r, 64<<10)
-	var cur []byte
-	over := false
-	for {
-		chunk, err := br.ReadSlice('\n')
-		if len(chunk) > 0 && !over {
-			if len(cur)+len(chunk) > max {
-				over = true
-				cur = append(cur, chunk[:max-len(cur)]...)
-			} else {
-				cur = append(cur, chunk...)
-			}
-		}
-		if errors.Is(err, bufio.ErrBufferFull) {
-			continue
-		}
-		if len(chunk) > 0 || len(cur) > 0 {
-			line := cur
-			for len(line) > 0 && (line[len(line)-1] == '\n' || line[len(line)-1] == '\r') {
-				line = line[:len(line)-1]
-			}
-			f(line, over)
-		}
-		cur, over = nil, false
-		if err != nil {
-			return
-		}
-	}
-}
+// readLines is proc.ReadLines (bounded line reader).
+var readLines = proc.ReadLines
