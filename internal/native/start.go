@@ -175,7 +175,7 @@ func heartbeat(ctx context.Context, st *store.Store, attempt domain.AttemptID, f
 				err = heartbeatFault()
 			}
 			if err == nil {
-				err = st.Heartbeat(ctx, attempt, fence)
+				err = st.HeartbeatLive(ctx, attempt, fence)
 			}
 			switch {
 			case err == nil:

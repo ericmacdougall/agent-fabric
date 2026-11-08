@@ -106,8 +106,8 @@ func newRig(t *testing.T, steps ...fakeapi.Step) *rig {
 	}
 	for _, q := range []string{
 		`INSERT INTO missions (id, ticket, state, provider) VALUES ('m_t1', 'goodqa#15040', '{}'::jsonb, 'anthropic-api')`,
-		`INSERT INTO attempts (id, mission_id, fence, revision, generation, state, host, role, path, lock_path)
-			VALUES ('r_t1', 'm_t1', 1, 0, 0, 'RUNNING', 'h_test', 'worker', 'anthropic-api', '/nonexistent/fabric-rig/native-locks/r_t1.lock')`,
+		`INSERT INTO attempts (id, mission_id, fence, revision, generation, state, host, role, path, lock_path, lease_until)
+			VALUES ('r_t1', 'm_t1', 1, 0, 0, 'RUNNING', 'h_test', 'worker', 'anthropic-api', '/nonexistent/fabric-rig/native-locks/r_t1.lock', now() + interval '1 hour')`,
 	} {
 		if _, err := st.Pool().Exec(ctx, q); err != nil {
 			t.Fatalf("seed: %v", err)
