@@ -55,8 +55,12 @@ type Command struct {
 	// anthropic-api attempt, the native runner's liveness lock file.
 	Path     Provider `json:"path,omitempty"`
 	LockPath string   `json:"lock_path,omitempty"`
-	Receipt  string   `json:"receipt,omitempty"`
-	Outcome  string   `json:"outcome,omitempty"` // FINISH_ATTEMPT: checkpoint|wait|ready_for_review|blocked|abandoned
+	// START_ATTEMPT, anthropic-api only (goodqa#15283): the canonical
+	// worktree the attempt is bound to. omitempty keeps the request hash of
+	// every command without it byte-identical to earlier binaries.
+	Worktree string `json:"worktree,omitempty"`
+	Receipt  string `json:"receipt,omitempty"`
+	Outcome  string `json:"outcome,omitempty"` // FINISH_ATTEMPT: checkpoint|wait|ready_for_review|blocked|abandoned
 	// FINISH_ATTEMPT abandoned: the runner was never started (red-team F1).
 	Prelaunch bool `json:"prelaunch,omitempty"`
 	// With Prelaunch: the cause is a full resource, a wait not a failure (red-team D2).
@@ -156,15 +160,18 @@ type Event struct {
 	Mission MissionID `json:"mission"`
 	Seq     int64     `json:"seq,omitempty"`
 
-	Attempt    AttemptID    `json:"attempt,omitempty"`
-	Fence      int64        `json:"fence,omitempty"`
-	Revision   int64        `json:"revision,omitempty"`
-	Generation int64        `json:"generation,omitempty"`
-	Head       string       `json:"head,omitempty"`
-	Host       HostID       `json:"host,omitempty"`
-	Role       string       `json:"role,omitempty"`
-	Path       Provider     `json:"path,omitempty"`      // ATTEMPT_STARTED (goodqa#15087)
-	LockPath   string       `json:"lock_path,omitempty"` // ATTEMPT_STARTED, anthropic-api only
+	Attempt    AttemptID `json:"attempt,omitempty"`
+	Fence      int64     `json:"fence,omitempty"`
+	Revision   int64     `json:"revision,omitempty"`
+	Generation int64     `json:"generation,omitempty"`
+	Head       string    `json:"head,omitempty"`
+	Host       HostID    `json:"host,omitempty"`
+	Role       string    `json:"role,omitempty"`
+	Path       Provider  `json:"path,omitempty"`      // ATTEMPT_STARTED (goodqa#15087)
+	LockPath   string    `json:"lock_path,omitempty"` // ATTEMPT_STARTED, anthropic-api only
+	// ATTEMPT_STARTED, anthropic-api only (goodqa#15283). omitempty keeps a
+	// stored pre-0038 event, which has none, byte-identical on replay.
+	Worktree   string       `json:"worktree,omitempty"`
 	Receipt    string       `json:"receipt,omitempty"`
 	Outcome    string       `json:"outcome,omitempty"`
 	Prelaunch  bool         `json:"prelaunch,omitempty"`  // ATTEMPT_FINISHED: abandoned before the runner started
