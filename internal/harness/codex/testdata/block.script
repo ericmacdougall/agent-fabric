@@ -1,0 +1,11 @@
+# scripted codex app-server session; see fake_test.go
+on initialize reply {"userAgent":"fake-codex/0"}
+on thread/start reply {"thread":{"id":"{{thread}}"}}
+on turn/start#1 reply {"turn":{"id":"turn_{{seq}}","status":"inProgress","items":[]}}
+on turn/start#1 send {"method":"turn/started","params":{"threadId":"{{thread}}","turn":{"id":"turn_{{seq}}","status":"inProgress"}}}
+on turn/start#1 send {"method":"item/completed","params":{"threadId":"{{thread}}","turnId":"turn_{{seq}}","completedAtMs":1,"item":{"type":"agentMessage","id":"msg_{{seq}}","text":"hello"}}}
+on turn/start#1 send {"method":"turn/completed","params":{"threadId":"{{thread}}","turn":{"id":"turn_{{seq}}","status":"completed"}}}
+on turn/start#2+ reply {"turn":{"id":"turn_{{seq}}","status":"inProgress","items":[]}}
+on turn/start#2+ send {"method":"item/completed","params":{"threadId":"{{thread}}","turnId":"turn_{{seq}}","completedAtMs":1,"item":{"type":"agentMessage","id":"msg_{{seq}}","text":"echo:{{text}}"}}}
+on turn/start#2+ send {"method":"turn/completed","params":{"threadId":"{{thread}}","turn":{"id":"turn_{{seq}}","status":"completed"}}}
+on turn/interrupt reply {}
