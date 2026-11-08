@@ -34,7 +34,7 @@ func runtimeStart(t *testing.T, l *LinuxManager, argv ...string) (Handle, error)
 		t.Fatal(err)
 	}
 	defer out.Close()
-	return l.Start(controlGrant(t.TempDir()), argv, nil, out, out)
+	return l.Start(mgrControlGrant(t.TempDir()), argv, nil, out, out)
 }
 
 func requireRuntimeProxyClosed(t *testing.T, proxyURL string) {
@@ -57,7 +57,7 @@ func TestLinuxRuntimeSerializationCleanupFailover(t *testing.T) {
 	if os.Getenv("FABRIC_HOST_CONTROLS") == "" {
 		t.Skip("set FABRIC_HOST_CONTROLS=1 to run Linux runtime serialization controls")
 	}
-	first := testProfile(t).(*LinuxManager)
+	first := testManagerProfile(t)
 	second := runtimeLinuxProfile(first)
 	third := runtimeLinuxProfile(first)
 
@@ -155,7 +155,7 @@ func TestLinuxRuntimeDelayedManagerReadiness(t *testing.T) {
 	if os.Getenv("FABRIC_HOST_CONTROLS") == "" {
 		t.Skip("set FABRIC_HOST_CONTROLS=1 to run delayed-manager readiness control")
 	}
-	profile := testProfile(t).(*LinuxManager)
+	profile := testManagerProfile(t)
 	profile.commandFn = func(ctx context.Context, name string, args ...string) *exec.Cmd {
 		delay := name == "systemd-run"
 		for _, arg := range args {
@@ -195,8 +195,8 @@ func TestLinuxRuntimeWorkerCannotReplaceManagerLock(t *testing.T) {
 	if os.Getenv("FABRIC_HOST_CONTROLS") == "" {
 		t.Skip("set FABRIC_HOST_CONTROLS=1 to run lock replacement control")
 	}
-	profile := testProfile(t).(*LinuxManager)
-	profile.LockPath = filepath.Join(t.TempDir(), "worker-manager.lock")
+	profile := testManagerProfile(t)
+	profile.LockPath = filepath.Join(lockTestDir(t), "worker-manager.lock")
 	outputPath := filepath.Join(t.TempDir(), "lock-control.out")
 	output, err := os.Create(outputPath)
 	if err != nil {
@@ -209,7 +209,7 @@ try:
 except OSError as e:
     print("lock=" + ("denied" if e.errno in (errno.EACCES, errno.EPERM) else "error:" + str(e.errno)))
 ' %q; sleep 1`, profile.LockPath)
-	h, err := profile.Start(controlGrant(t.TempDir()), []string{"sh", "-c", script}, nil, output, output)
+	h, err := profile.Start(mgrControlGrant(t.TempDir()), []string{"sh", "-c", script}, nil, output, output)
 	_ = output.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +249,7 @@ func TestLinuxRuntimeDelayedSubmissionCannotEscapeCleanup(t *testing.T) {
 	if os.Getenv("FABRIC_HOST_CONTROLS") == "" {
 		t.Skip("set FABRIC_HOST_CONTROLS=1 to run delayed submission control")
 	}
-	profile := testProfile(t).(*LinuxManager)
+	profile := testManagerProfile(t)
 	profile.unitReadinessTimeout = 250 * time.Millisecond
 	profile.managerCallTimeout = 500 * time.Millisecond
 	profile.launcherReapTimeout = 500 * time.Millisecond
@@ -297,7 +297,7 @@ func TestLinuxRuntimeBlockedManagerReturnsRetryableHandle(t *testing.T) {
 	if os.Getenv("FABRIC_HOST_CONTROLS") == "" {
 		t.Skip("set FABRIC_HOST_CONTROLS=1 to run blocked-manager timeout control")
 	}
-	profile := testProfile(t).(*LinuxManager)
+	profile := testManagerProfile(t)
 	profile.managerCallTimeout = 150 * time.Millisecond
 	profile.unitReadinessTimeout = 300 * time.Millisecond
 	profile.launcherReapTimeout = 500 * time.Millisecond
@@ -338,7 +338,7 @@ func TestLinuxRuntimeFastSuccessfulCommand(t *testing.T) {
 	if os.Getenv("FABRIC_HOST_CONTROLS") == "" {
 		t.Skip("set FABRIC_HOST_CONTROLS=1 to run fast-command control")
 	}
-	profile := testProfile(t).(*LinuxManager)
+	profile := testManagerProfile(t)
 	h, err := runtimeStart(t, profile, "/bin/true")
 	if err != nil {
 		t.Fatalf("fast successful command was misclassified: %v", err)
@@ -357,7 +357,7 @@ func TestLinuxRuntimeSameUIDProcessAttacksDenied(t *testing.T) {
 	if os.Getenv("FABRIC_HOST_CONTROLS") == "" {
 		t.Skip("set FABRIC_HOST_CONTROLS=1 to run same-UID process attack controls")
 	}
-	profile := testProfile(t).(*LinuxManager)
+	profile := testManagerProfile(t)
 	targetContext, cancelTarget := context.WithCancel(context.Background())
 	target := profile.asWorkerContext(targetContext, "sleep", "30")
 	if err := target.Start(); err != nil {
@@ -369,7 +369,7 @@ func TestLinuxRuntimeSameUIDProcessAttacksDenied(t *testing.T) {
 		_ = syscall.Kill(-target.Process.Pid, syscall.SIGKILL)
 		_, _ = target.Process.Wait()
 	}()
-	g := controlGrant(t.TempDir())
+	g := mgrControlGrant(t.TempDir())
 	outputPath := filepath.Join(g.RunDir, "process-attacks.out")
 	output, err := os.Create(outputPath)
 	if err != nil {
@@ -443,12 +443,12 @@ func TestLinuxRuntimeDedicatedWorkerTraversal(t *testing.T) {
 	if os.Getenv("FABRIC_HOST_CONTROLS") == "" {
 		t.Skip("set FABRIC_HOST_CONTROLS=1 to run dedicated-worker traversal control")
 	}
-	profile := testProfile(t).(*LinuxManager)
+	profile := testManagerProfile(t)
 	root := os.Getenv("FABRIC_WORKER_ROOT")
 	if profile.User == "" || root == "" {
 		t.Fatal("dedicated traversal requires FABRIC_WORKER_USER and FABRIC_WORKER_ROOT")
 	}
-	g := controlGrant(t.TempDir())
+	g := mgrControlGrant(t.TempDir())
 	outputPath := filepath.Join(g.RunDir, "traversal.out")
 	output, err := os.Create(outputPath)
 	if err != nil {

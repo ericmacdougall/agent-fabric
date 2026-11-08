@@ -108,7 +108,7 @@ func startWithDevNull(t *testing.T, l *LinuxManager) error {
 		t.Fatal(err)
 	}
 	defer out.Close()
-	_, err = l.Start(controlGrant(t.TempDir()), []string{"worker"}, nil, out, out)
+	_, err = l.Start(mgrControlGrant(t.TempDir()), []string{"worker"}, nil, out, out)
 	return err
 }
 

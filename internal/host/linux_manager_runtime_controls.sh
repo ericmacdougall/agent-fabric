@@ -42,5 +42,5 @@ export FABRIC_EXPECT_CONTAINMENT=1
 # abstract buses, UDP/DNS, lock replacement, dedicated-worker traversal,
 # mediator cleanup, concurrent Stop and verified failover.
 go test ./internal/host \
-    -run '^(TestNegativeControls|TestLinuxRuntimeSerializationCleanupFailover|TestLinuxRuntimeDelayedManagerReadiness|TestLinuxRuntimeDelayedSubmissionCannotEscapeCleanup|TestLinuxRuntimeBlockedManagerReturnsRetryableHandle|TestLinuxRuntimeFastSuccessfulCommand|TestLinuxRuntimeSameUIDProcessAttacksDenied|TestLinuxRuntimeDedicatedWorkerTraversal|TestLinuxRuntimeWorkerCannotReplaceManagerLock)$' \
+    -run '^(TestNegativeControls|TestLinuxManagerNegativeControls|TestLinuxRuntimeSerializationCleanupFailover|TestLinuxRuntimeDelayedManagerReadiness|TestLinuxRuntimeDelayedSubmissionCannotEscapeCleanup|TestLinuxRuntimeBlockedManagerReturnsRetryableHandle|TestLinuxRuntimeFastSuccessfulCommand|TestLinuxRuntimeSameUIDProcessAttacksDenied|TestLinuxRuntimeDedicatedWorkerTraversal|TestLinuxRuntimeWorkerCannotReplaceManagerLock)$' \
     -count=1 -v
