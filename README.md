@@ -456,14 +456,24 @@ FABRIC_TEST_DSN=postgres://... go test ./...     # disposable database only
 python3 -I tools/mutants/run.py --repo . --out mutants.tsv
 ```
 
-Go 1.22, `pgx/v5` and `x/sys` only.
+Dependencies: `pgx/v5` and `x/sys` (plus what they pull in).
+
+Toolchain: `go.mod` needs Go 1.26.0 or later, and pins `toolchain
+go1.26.10`, which is what release binaries are built with (goodqa#15299).
+Run the go command with `GOTOOLCHAIN=local` so an older go fails with
+"requires go >= 1.26.0" instead of silently downloading a toolchain; the
+in-repo scripts that build (`internal/host/linux_manager_runtime_controls.sh`,
+`tools/native-mutants/mutants.py`) set it and take the go binary from
+`FAB_GO`.
 
 ## Deploying
 
 1. Back up the database first (`pg_dump -Fc`), check the dump with
    `pg_restore --list`, and keep the previous `fab` binary for rollback.
 2. Build from a fresh `git clone` checked out at the release commit, with
-   `CGO_ENABLED=0 go build -buildvcs=true -o <path> ./cmd/fab`. Check that
+   the pinned Go 1.26.10 and `GOTOOLCHAIN=local CGO_ENABLED=0 go build
+   -trimpath -buildvcs=true -o <path> ./cmd/fab`. Check that `go version -m
+   <path>` names go1.26.10, and that
    `git status --porcelain` is empty, that `go version -m <path>` shows
    `build CGO_ENABLED=0` (a worker is a static fab, so it loads no shared
    library a worker-user environment could redirect), and that `<path>
