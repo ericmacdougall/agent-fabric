@@ -320,10 +320,12 @@ at all. An operator-only role for these commands is follow-up work.
   undone in Commander (an undo also archives it), and it is never reposted
   on its own. To post the same text again on purpose, submit a new effect
   with a new `--key`. The readback reads at most 5 pages of 200 comments
-  (1,000), archived ones included. A longer thread reads UNKNOWN ("comment
+  (1,000), archived ones included. A longer thread reads EXHAUSTED ("comment
   history exceeded the page budget") and moves to QUARANTINED, because a
   later pass cannot read more; check the ticket by hand and settle it with
-  `fab effect resolve --outcome applied|not_applied` (goodqa#15260).
+  `fab effect resolve --id E --outcome applied|not_applied --reason R
+  --evidence REF` (goodqa#15260). `not_applied` is final: to post again,
+  submit a new effect with a new `--key`.
 - **Final admission.** Every launch, gated or not, rechecks the attempt's
   fence, lease and intent revision against the database clock just before
   the runner starts. A database error at that moment abandons the attempt
