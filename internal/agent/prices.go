@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"math/bits"
 )
 
 // Prices are micro-USD per million tokens (and per server-tool use). Every
@@ -52,26 +54,48 @@ func (p Prices) Validate() error {
 	return nil
 }
 
-// ceilMul returns ceil(tokens*rate/1e6) without overflow for any int64 input
-// a request can produce (rates and counts are bounded well below 2^31).
-func ceilMul(tokens, rate int64) int64 {
-	if tokens <= 0 || rate <= 0 {
+// scaleCeil returns ceil(a*b/divisor), saturating at MaxInt64. Usage counts
+// come from the provider and are untrusted, so the product is computed in
+// 128 bits and never wraps.
+func scaleCeil(a, b, divisor int64) int64 {
+	if a <= 0 || b <= 0 || divisor <= 0 {
 		return 0
 	}
-	const lim = int64(1) << 62
-	if tokens > lim/rate {
-		return lim / 2 // saturate: refuses any realistic cap
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	if hi >= uint64(divisor) {
+		return math.MaxInt64 // the quotient would not fit in 64 bits
 	}
-	return (tokens*rate + 999_999) / 1_000_000
+	q, rem := bits.Div64(hi, lo, uint64(divisor))
+	if q > uint64(math.MaxInt64) || (q == uint64(math.MaxInt64) && rem != 0) {
+		return math.MaxInt64
+	}
+	if rem != 0 {
+		q++
+	}
+	return int64(q)
+}
+
+// ceilMul returns ceil(tokens*rate/1e6), saturating rather than wrapping.
+func ceilMul(tokens, rate int64) int64 { return scaleCeil(tokens, rate, 1_000_000) }
+
+// addCost adds two non-negative costs, saturating at MaxInt64.
+func addCost(a, b int64) int64 {
+	if a >= math.MaxInt64 || b > math.MaxInt64-a {
+		return math.MaxInt64
+	}
+	return a + b
 }
 
 // Cost is the billed estimate for the usage actually reported.
 func (p Prices) Cost(u Usage) int64 {
-	c := ceilMul(u.Input, *p.Input) + ceilMul(u.Output, *p.Output) +
-		ceilMul(u.CacheCreate, *p.CacheWrite) + ceilMul(u.CacheRead, *p.CacheRead) +
-		u.ServerToolUses**p.ServerToolUse
-	if u.Input+u.CacheCreate+u.CacheRead > *p.LongContextThreshold && *p.LongContextThreshold > 0 {
-		c = (c*(*p.LongContextPercent) + 99) / 100
+	c := ceilMul(u.Input, *p.Input)
+	c = addCost(c, ceilMul(u.Output, *p.Output))
+	c = addCost(c, ceilMul(u.CacheCreate, *p.CacheWrite))
+	c = addCost(c, ceilMul(u.CacheRead, *p.CacheRead))
+	c = addCost(c, scaleCeil(u.ServerToolUses, *p.ServerToolUse, 1))
+	input := addCost(addCost(max(u.Input, 0), max(u.CacheCreate, 0)), max(u.CacheRead, 0))
+	if *p.LongContextThreshold > 0 && input > *p.LongContextThreshold {
+		c = scaleCeil(c, *p.LongContextPercent, 100)
 	}
 	return c
 }
@@ -82,9 +106,9 @@ func (p Prices) Cost(u Usage) int64 {
 // price, with the long-context uplift when the estimate crosses the tier.
 func (p Prices) WorstCase(bodyBytes, maxTokens int) int64 {
 	inRate := max(*p.Input, *p.CacheWrite, *p.CacheRead)
-	c := ceilMul(int64(bodyBytes), inRate) + ceilMul(int64(maxTokens), *p.Output)
+	c := addCost(ceilMul(int64(bodyBytes), inRate), ceilMul(int64(maxTokens), *p.Output))
 	if *p.LongContextThreshold > 0 && int64(bodyBytes) > *p.LongContextThreshold {
-		c = (c*(*p.LongContextPercent) + 99) / 100
+		c = scaleCeil(c, *p.LongContextPercent, 100)
 	}
 	if c < 1 {
 		c = 1
