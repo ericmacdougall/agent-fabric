@@ -33,6 +33,7 @@ var secretShapes = regexp.MustCompile(
 		`AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[abprs]-[A-Za-z0-9-]{10,}|` +
 		`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*|` +
 		`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)|` +
+		`(?:[A-Za-z0-9+/=]{40,}\s+)+-----END [A-Z ]*PRIVATE KEY-----|` +
 		`(?i)(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}|` +
 		`(?i)"?(?:password|passwd|secret|token|api[_-]?key|authorization|private[_-]?key)"?\s*[=:]\s*"[^"]*"|` +
 		`(?i)(?:password|passwd|secret|token|api[_-]?key)\s*[=:]\s*\S+|` +
@@ -138,6 +139,15 @@ func (e *Emitter) emit(ctx context.Context, k Kind, payload any) error {
 }
 
 func (e *Emitter) clean(s string, max int) string {
+	// Bound the work before the regex runs, with a margin so a secret that
+	// straddles the final cut is still whole when redacted.
+	if pre := max + 4096; len(s) > pre {
+		s = s[:pre]
+		// the cut may have left half a token at the end
+		if i := strings.LastIndexAny(s, " \t\r\n"); i > 0 {
+			s = s[:i]
+		}
+	}
 	s = e.red.Redact(zeroWidth.Replace(s))
 	if !utf8.ValidString(s) {
 		s = strings.ToValidUTF8(s, "�")
