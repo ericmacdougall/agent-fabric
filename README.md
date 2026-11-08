@@ -180,6 +180,36 @@ Two flags are not the mission provider:
 The native month cap is keyed on the database clock, never the host's, and
 a run charges the UTC month it started in, even if it ends in the next one.
 
+### Review gate (off by default)
+
+`FABRIC_REVIEW_GATE=1` makes `fab mission run` send every native tool call
+(`read`, `grep`, `shell`) through a durable review before it can run. With
+the variable unset, or anything other than exactly `1`, native runs behave
+as they did before the gate existed: no review DSN is needed and tools are
+not gated. A grant that sets `review_gate` while the flag is off is refused,
+so a run can never believe it is gated when it is not.
+
+With the flag on:
+
+- `FABRIC_REVIEW_DSN` must name a separate **app-role** database login
+  (not the owner, not the runner). `fab mission run` reads it, removes it
+  from its own environment before any worker is built, and the worker never
+  sees it. The runner role cannot read review proposals or results and can
+  only settle the exact attempt, fence and tool call it holds, from bytes
+  the database already stored (migrations 0033 to 0036; rerun `fab db roles`
+  after `fab migrate`).
+- The grant's `review_gate.mode` is `shadow` (the default: calls are
+  reviewed and recorded, never executed), `evaluate` (also never executed)
+  or `enforce` (approved calls run once). `review_gate.safe_tools` names
+  tools that need no human approval. `shell` needs a human by default.
+- `FABRIC_ACTOR=op:<name> fab review list|show|approve|reject` is the
+  operator side. It shows request metadata only, never arguments or prompts.
+  Approving or rejecting wakes the waiting native process, which keeps its
+  lock, fence and heartbeat while it waits.
+
+The schema migrations always apply and are
+harmless with the flag off; only the native wiring is gated.
+
 ### Worker environment
 
 A worker's environment is exactly what fabric builds, whatever fabd, the

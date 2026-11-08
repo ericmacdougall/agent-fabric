@@ -144,6 +144,18 @@ func (d *DB) StartRun(ctx context.Context, attempt domain.AttemptID, fence int64
 	return starts, nil
 }
 
+// ResumeRun validates the existing run and fence without counting a process
+// start. It is used after an in-process durable-review wait, not after a crash.
+func (d *DB) ResumeRun(ctx context.Context, attempt domain.AttemptID, fence int64, configSHA string) (int, error) {
+	var starts int
+	err := d.fenced(ctx, attempt, fence, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT starts FROM agent_runs
+			WHERE attempt_id = $1 AND fence = $2 AND billing_mode = $3 AND config_sha = $4 AND outcome IS NULL`,
+			string(attempt), fence, BillingAPIKey, configSHA).Scan(&starts)
+	})
+	return starts, err
+}
+
 func (d *DB) Run(ctx context.Context, attempt domain.AttemptID) (RunRow, error) {
 	var r RunRow
 	var o, n *string
@@ -284,6 +296,34 @@ func (d *DB) MarkExecuting(ctx context.Context, attempt domain.AttemptID, fence 
 		}
 		if tag.RowsAffected() != 1 {
 			return fmt.Errorf("%w: tool call %s is not PENDING", domain.ErrInvalidTransition, id)
+		}
+		return nil
+	})
+}
+
+// FinishReviewedTool settles a call deliberately left PENDING while the review
+// gate owned execution. Owner/app callers use the guarded direct transition;
+// migration 0036 restricts runners to exact settlement from durable review data.
+func (d *DB) FinishReviewedTool(ctx context.Context, attempt domain.AttemptID, fence int64, id string, result []byte, isErr bool) error {
+	var runner bool
+	if err := d.Pool.QueryRow(ctx, `SELECT session_user = 'agent' OR session_user ~ '(^|_)runner$'`).Scan(&runner); err != nil {
+		return err
+	}
+	if runner {
+		// The runner supplies compatibility arguments, but the database derives
+		// durable output and control metadata solely from the exact reviewed call.
+		_, err := d.Pool.Exec(ctx, `SELECT fabric_review_gate_finish_reviewed_tool($1,$2,$3)`,
+			string(attempt), fence, id)
+		return err
+	}
+	return d.fenced(ctx, attempt, fence, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE agent_tool_calls SET state = 'DONE', result = $3, is_error = $4, ended_at = now()
+			WHERE attempt_id = $1 AND tool_use_id = $2 AND state = 'PENDING' AND fence = $5`, string(attempt), id, result, isErr, fence)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("%w: reviewed tool call %s is not PENDING", domain.ErrInvalidTransition, id)
 		}
 		return nil
 	})

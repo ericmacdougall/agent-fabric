@@ -86,6 +86,24 @@ func newRig(t *testing.T, steps ...fakeapi.Step) *rig {
 	t.Helper()
 	st := storetest.Open(t)
 	ctx := context.Background()
+	// storetest predates the review tables; keep independent attempt fixtures
+	// from inheriting another test's durable requests, approvals or circuits.
+	tx, err := st.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		"SET LOCAL fabric.allow_truncate = 'on'",
+		"TRUNCATE review_gate_approvals, review_gate_audit, review_gate_requests, review_gate_circuits RESTART IDENTITY CASCADE",
+		"UPDATE review_gate_audit_head SET seq = 0, last_hash = '' WHERE id = 1",
+	} {
+		if _, err := tx.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
 	for _, q := range []string{
 		`INSERT INTO missions (id, ticket, state, provider) VALUES ('m_t1', 'goodqa#15040', '{}'::jsonb, 'anthropic-api')`,
 		`INSERT INTO attempts (id, mission_id, fence, revision, generation, state, host, role, path, lock_path)

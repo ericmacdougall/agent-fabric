@@ -51,7 +51,7 @@ func testRoles(t *testing.T, owner *Store, ctx context.Context) Roles {
 func TestRolesLeastPrivilege(t *testing.T) {
 	owner, ctx := openTest(t)
 	r := testRoles(t, owner, ctx)
-	app, runner := openAs(t, ctx, r.App()), openAs(t, ctx, r.Runner())
+	app, runner := openAs(t, ctx, r.App()), authorityRunnerLogin(t, owner, ctx, r)
 	for _, c := range []struct {
 		who  string
 		st   *Store
@@ -161,7 +161,7 @@ func TestRolesLeastPrivilege(t *testing.T) {
 	if err := runner.CheckRunnerRole(ctx); err != nil {
 		t.Fatalf("the runner role failed its own check: %v", err)
 	}
-	for name, st := range map[string]*Store{"app": app, "owner": owner} {
+	for name, st := range map[string]*Store{"app": app, "owner": owner, "owner role=runner": openAs(t, ctx, r.Runner())} {
 		if err := st.CheckRunnerRole(ctx); err == nil {
 			t.Errorf("CheckRunnerRole accepted the %s role as a runner", name)
 		}
@@ -220,7 +220,7 @@ func TestRunnerCannotApproveEffects(t *testing.T) {
 func TestRolesUpgradeNarrowsRunner(t *testing.T) {
 	owner, ctx := openTest(t)
 	r := testRoles(t, owner, ctx)
-	runner := openAs(t, ctx, r.Runner())
+	runner := authorityRunnerLogin(t, owner, ctx, r)
 	// Each grant alone is enough to be refused.
 	for _, g := range []string{"UPDATE ON attempts", "UPDATE ON missions", "UPDATE ON slots", "DELETE ON waits", "INSERT ON commands", "INSERT ON effect_resolutions"} {
 		if _, err := owner.pool.Exec(ctx, "GRANT "+g+" TO "+r.Runner()); err != nil {
@@ -239,7 +239,7 @@ func TestRolesUpgradeNarrowsRunner(t *testing.T) {
 	if err := runner.CheckRunnerRole(ctx); err == nil {
 		t.Fatal("CheckRunnerRole passed a runner that can UPDATE attempts")
 	}
-	if err := owner.ApplyRoles(ctx, r, "", ""); err != nil {
+	if err := owner.ApplyRoles(ctx, r, "", authorityRunnerPassword); err != nil {
 		t.Fatal(err)
 	}
 	if err := runner.CheckRunnerRole(ctx); err != nil {

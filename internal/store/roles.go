@@ -94,7 +94,12 @@ func (s *Store) ApplyRoles(ctx context.Context, r Roles, appPassword, runnerPass
 			fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", id(db), rl),
 			fmt.Sprintf("GRANT USAGE ON SCHEMA public TO %s", rl),
 			fmt.Sprintf("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO %s", rl),
+			fmt.Sprintf("REVOKE CREATE ON SCHEMA public FROM %s", rl),
 		)
+	}
+	runnerRoleName, err := quote(r.Runner())
+	if err != nil {
+		return err
 	}
 	stmts = append(stmts,
 		fmt.Sprintf("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %s", app),
@@ -103,6 +108,32 @@ func (s *Store) ApplyRoles(ctx context.Context, r Roles, appPassword, runnerPass
 		fmt.Sprintf("REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON fabric_schema FROM %s, %s", app, runner),
 		fmt.Sprintf("REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM %s", runner),
 		fmt.Sprintf("GRANT SELECT ON ALL TABLES IN SCHEMA public TO %s", runner),
+		// Slice 2 (goodqa#15235): the runner, any role it inherits and PUBLIC
+		// must not read review proposals or results (plaintext tool
+		// arguments). The app role keeps SELECT: it is the review authority.
+		"REVOKE SELECT ON public.review_gate_requests FROM PUBLIC",
+		"REVOKE SELECT ON public.review_gate_results FROM PUBLIC",
+		fmt.Sprintf("REVOKE SELECT ON public.review_gate_requests FROM %s", runner),
+		fmt.Sprintf("REVOKE SELECT ON public.review_gate_results FROM %s", runner),
+		fmt.Sprintf(`DO $do$ DECLARE parent text; fn regprocedure; BEGIN
+			FOR parent IN SELECT r.rolname FROM pg_catalog.pg_roles r WHERE pg_has_role(%s, r.rolname, 'MEMBER') LOOP
+				EXECUTE format('REVOKE SELECT ON public.review_gate_requests FROM %%I', parent);
+				EXECUTE format('REVOKE SELECT ON public.review_gate_results FROM %%I', parent);
+			END LOOP;
+			FOR fn IN SELECT p.oid::regprocedure FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+				WHERE n.nspname = 'public' AND p.proname LIKE 'fabric\_review\_gate\_broker\_%%' LOOP
+				EXECUTE format('REVOKE ALL ON FUNCTION %%s FROM PUBLIC', fn);
+				EXECUTE format('REVOKE ALL ON FUNCTION %%s FROM %s', fn);
+				EXECUTE format('GRANT EXECUTE ON FUNCTION %%s TO %s', fn);
+			END LOOP;
+			IF has_table_privilege(%s, 'public.review_gate_requests', 'SELECT')
+			   OR has_table_privilege(%s, 'public.review_gate_results', 'SELECT') THEN
+				RAISE EXCEPTION 'runner retains effective review-table SELECT';
+			END IF;
+		END $do$`, runnerRoleName, runner, app, runnerRoleName, runnerRoleName),
+		"REVOKE ALL ON FUNCTION public.fabric_review_gate_finish_reviewed_tool(text,bigint,text) FROM PUBLIC",
+		fmt.Sprintf("REVOKE ALL ON FUNCTION public.fabric_review_gate_finish_reviewed_tool(text,bigint,text) FROM %s", app),
+		fmt.Sprintf("GRANT EXECUTE ON FUNCTION public.fabric_review_gate_finish_reviewed_tool(text,bigint,text) TO %s", runner),
 	)
 	for tb, privs := range runnerWrites {
 		stmts = append(stmts, fmt.Sprintf("GRANT %s ON %s TO %s", privs, id(tb), runner))
@@ -155,6 +186,8 @@ func redactPassword(err error) error {
 	return errors.New("statement failed")
 }
 
+var roleSwitchOption = regexp.MustCompile(`(?i)(?:^|\s)-(?:c\s*|-)(?:role|session_authorization)\s*=`)
+
 // CheckRunnerRole refuses a runner connection that could act as the
 // scheduler (red-team G2): a superuser, a scheduler member, a role with an
 // owner's privileges, one that may CREATE in the schema, or one holding any
@@ -162,36 +195,94 @@ func redactPassword(err error) error {
 // are checked on every table and view, including column-level INSERT,
 // UPDATE and REFERENCES grants, and DELETE, TRUNCATE and TRIGGER. Run it on
 // a store opened with the runner's DSN.
+//
+// Slice 2 (goodqa#15235, from the Kimi combined patch) adds: direct
+// authentication only (a startup or session role switch lets an owner
+// RESET ROLE after this check ran), every dangerous attribute and
+// membership, CREATE on the database, server-file/program roles, SELECT on
+// the review-gate tables, and a per-member-role scan so a NOINHERIT
+// membership the runner can SET ROLE to counts too.
 func (s *Store) CheckRunnerRole(ctx context.Context) error {
+	for name, value := range s.pool.Config().ConnConfig.RuntimeParams {
+		switch strings.ToLower(name) {
+		case "role", "session_authorization":
+			return fmt.Errorf("direct runner authentication required: startup parameter %s switches roles", name)
+		case "options":
+			unquoted := strings.NewReplacer("'", "", "\"", "").Replace(value)
+			if roleSwitchOption.MatchString(unquoted) {
+				return fmt.Errorf("direct runner authentication required: startup options switch roles")
+			}
+		}
+	}
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
 	var who string
-	var super, owner, sched, create bool
-	err := s.pool.QueryRow(ctx, `SELECT current_user,
-		(SELECT rolsuper FROM pg_roles WHERE rolname = current_user),
-		EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace
-		        AND pg_has_role(current_user, c.relowner, 'USAGE'))
-		OR pg_has_role(current_user, (SELECT nspowner FROM pg_namespace WHERE nspname = 'public'), 'USAGE'),
-		COALESCE((SELECT pg_has_role(current_user, value, 'MEMBER') FROM fabric_settings
-		          WHERE key = 'scheduler_role' AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = value)), false),
-		has_schema_privilege(current_user, 'public', 'CREATE')`).Scan(&who, &super, &owner, &sched, &create)
+	var direct, super, dangerous, inheritedDangerous, owner, sched, create, memberCreate, databaseCreate, serverAccess bool
+	var reviewRequestRead, reviewResultRead bool
+	err = conn.QueryRow(ctx, `SELECT current_user, session_user = current_user,
+		COALESCE((SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = current_user), false),
+		COALESCE((SELECT rolcreatedb OR rolcreaterole OR rolbypassrls OR rolreplication
+			FROM pg_catalog.pg_roles WHERE rolname = current_user), false),
+		EXISTS (SELECT 1 FROM pg_catalog.pg_roles AS r
+			WHERE r.rolname <> current_user
+			AND (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolbypassrls OR r.rolreplication)
+			AND pg_has_role(current_user, r.rolname, 'MEMBER')),
+		EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.relnamespace = 'public'::regnamespace
+		        AND pg_has_role(current_user, c.relowner, 'MEMBER'))
+		OR pg_has_role(current_user, (SELECT nspowner FROM pg_catalog.pg_namespace WHERE nspname = 'public'), 'MEMBER'),
+		COALESCE((SELECT pg_has_role(current_user, value, 'MEMBER') FROM public.fabric_settings
+		          WHERE key = 'scheduler_role' AND EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = value)), false),
+		has_schema_privilege(current_user, 'public', 'CREATE'),
+		EXISTS (SELECT 1 FROM pg_catalog.pg_roles AS r
+			WHERE pg_has_role(current_user, r.rolname, 'MEMBER') AND has_schema_privilege(r.oid, 'public', 'CREATE')),
+		EXISTS (SELECT 1 FROM pg_catalog.pg_roles AS r
+			WHERE pg_has_role(current_user, r.rolname, 'MEMBER') AND has_database_privilege(r.oid, current_database(), 'CREATE')),
+		EXISTS (SELECT 1 FROM pg_catalog.pg_roles AS r
+			WHERE r.rolname IN ('pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files', 'pg_signal_backend')
+			AND pg_has_role(current_user, r.rolname, 'MEMBER')),
+		COALESCE(to_regclass('public.review_gate_requests') IS NOT NULL
+			AND has_table_privilege(current_user, 'public.review_gate_requests', 'SELECT'), false),
+		COALESCE(to_regclass('public.review_gate_results') IS NOT NULL
+			AND has_table_privilege(current_user, 'public.review_gate_results', 'SELECT'), false)`).Scan(
+		&who, &direct, &super, &dangerous, &inheritedDangerous, &owner, &sched, &create, &memberCreate, &databaseCreate, &serverAccess,
+		&reviewRequestRead, &reviewResultRead)
 	if err != nil {
 		return err
 	}
 	switch {
+	case !direct:
+		return fmt.Errorf("direct runner authentication required: session user differs from current role %s", who)
 	case super:
 		return fmt.Errorf("runner role %s is a superuser", who)
+	case dangerous:
+		return fmt.Errorf("runner role %s has a dangerous role attribute", who)
+	case inheritedDangerous:
+		return fmt.Errorf("runner role %s is a member of a role with dangerous attributes", who)
 	case owner:
 		return fmt.Errorf("runner role %s has an owner's privileges in the schema", who)
 	case sched:
 		return fmt.Errorf("runner role %s is a scheduler member", who)
-	case create:
+	case create || memberCreate:
 		return fmt.Errorf("runner role %s may create objects in the schema", who)
+	case databaseCreate:
+		return fmt.Errorf("runner role %s can create schemas", who)
+	case serverAccess:
+		return fmt.Errorf("runner role %s has inherited server access", who)
+	case reviewRequestRead || reviewResultRead:
+		return fmt.Errorf("runner role %s has effective review-table SELECT", who)
 	}
-	rows, err := s.pool.Query(ctx, `SELECT c.relname, p.priv FROM pg_class c
+	// Every role the runner is a member of is scanned, not only current_user:
+	// a NOINHERIT membership does not inherit privileges but SET ROLE reaches it.
+	rows, err := conn.Query(ctx, `SELECT DISTINCT c.relname, p.priv FROM pg_catalog.pg_class c
 		CROSS JOIN unnest(ARRAY['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']) AS p(priv)
+		JOIN pg_catalog.pg_roles AS r ON pg_has_role(current_user, r.rolname, 'MEMBER')
 		WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'f')
 		AND CASE WHEN p.priv IN ('INSERT', 'UPDATE', 'REFERENCES')
-		         THEN has_any_column_privilege(current_user, c.oid, p.priv)
-		         ELSE has_table_privilege(current_user, c.oid, p.priv) END
+		         THEN has_any_column_privilege(r.oid, c.oid, p.priv)
+		         ELSE has_table_privilege(r.oid, c.oid, p.priv) END
 		ORDER BY 1, 2`)
 	if err != nil {
 		return err

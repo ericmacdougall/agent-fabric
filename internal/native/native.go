@@ -24,6 +24,7 @@ import (
 	"fabric/internal/hostid"
 	"fabric/internal/policy"
 	"fabric/internal/provider/anthropic"
+	"fabric/internal/reviewgate"
 	"fabric/internal/settle"
 	"fabric/internal/store"
 	"fabric/internal/tools"
@@ -82,6 +83,10 @@ type Grant struct {
 	ShellAllow       []string   `json:"shell_allow"`
 	OracleHooks      [][]string `json:"oracle_hooks"`
 	RequiredControls []string   `json:"required_controls"`
+	// ReviewGate configures the durable tool review gate. It takes effect only
+	// when FABRIC_REVIEW_GATE=1 (Options.ReviewGate); with the flag off a grant
+	// that sets it is refused rather than silently running ungated.
+	ReviewGate ReviewGateConfig `json:"review_gate,omitempty"`
 }
 
 func LoadGrant(path string) (Grant, error) {
@@ -132,6 +137,9 @@ func (g Grant) Validate() error {
 	if g.LiveTest && g.Caps.Run > liveTestCapMicros {
 		p = append(p, "a live test is capped at 1 USD")
 	}
+	if err := validateReviewGateConfig(g.ReviewGate); err != nil {
+		p = append(p, err.Error())
+	}
 	if len(p) > 0 {
 		return errors.New("grant refused: " + strings.Join(p, "; "))
 	}
@@ -143,6 +151,13 @@ type Options struct {
 	Starter  tools.Starter
 	Boundary tools.Boundary
 	HTTP     *http.Client
+	// ReviewGate turns on the durable tool review gate (FABRIC_REVIEW_GATE=1
+	// in cmd/fab). Off, Run behaves exactly as before the gate existed and
+	// needs no review DSN. On, every tool is gated and ReviewDSN is required.
+	ReviewGate bool
+	// ReviewDSN authenticates the separate trusted app-role review pool. It
+	// must never be the runner DSN or be inherited by a tool worker.
+	ReviewDSN string
 }
 
 // Receipt is the run summary printed for the live-test record.
@@ -195,6 +210,18 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		// send nothing; no key is needed.
 		led := &agent.Ledger{St: st, Attempt: domain.AttemptID(g.Attempt), Fence: plan.fence}
 		return finishNative(ctx, st, db, led, g, plan.fence, agent.Outcome{Kind: plan.outcome, Note: plan.note})
+	}
+	var reviewStore *reviewgate.PostgresStore
+	if o.ReviewGate {
+		if o.ReviewDSN == "" {
+			return nil, errors.New("native: review DSN is required (set FABRIC_REVIEW_DSN to the app-role database)")
+		}
+		if reviewStore, err = reviewgate.Open(ctx, o.ReviewDSN); err != nil {
+			return nil, fmt.Errorf("native: open app-role review store: %w", err)
+		}
+		defer reviewStore.Close()
+	} else if g.ReviewGate.set() {
+		return nil, errors.New("native: grant sets review_gate but FABRIC_REVIEW_GATE is not 1; refusing to run its tools ungated")
 	}
 	lockPath := plan.lockPath
 	if plan.c != caseResume {
@@ -267,6 +294,11 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		&tools.Grep{C: conf, Root: g.Worktree, Timeout: 20 * time.Second, MaxOutput: 32 << 10},
 		&tools.Shell{C: conf, Allow: allow, Timeout: 30 * time.Second, MaxOutput: 32 << 10},
 	}
+	if o.ReviewGate {
+		if toolset, err = wrapReviewTools(toolset, st, reviewStore, g, keys); err != nil {
+			return nil, err
+		}
+	}
 
 	led := &agent.Ledger{St: st, Attempt: domain.AttemptID(g.Attempt), Fence: fence, TTL: time.Duration(g.WallSeconds+600) * time.Second,
 		Caps: []agent.Cap{
@@ -280,7 +312,7 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 		Attempt: domain.AttemptID(g.Attempt), Fence: fence,
 		Model: g.Model, MaxTokens: g.MaxTokens, System: g.System, Extra: g.Extra, Prompt: g.Prompt,
 		MaxTurns: g.MaxTurns, MaxTotalTokens: g.MaxTotalTokens, Wall: time.Duration(g.WallSeconds) * time.Second, RestartCap: restartCap(g.RestartCap),
-		Prices: prices, BillingMode: agent.BillingAPIKey, Pin: g.pin(),
+		Prices: prices, BillingMode: agent.BillingAPIKey, Pin: g.pin(o.ReviewGate),
 	})
 	if err != nil {
 		return nil, err
@@ -290,11 +322,34 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (*Receipt, er
 	stop := heartbeat(lctx, st, domain.AttemptID(g.Attempt), fence, cancel)
 	defer stop()
 	out, err := loop.Run(lctx)
-	if cause := context.Cause(lctx); cause != nil && lctx.Err() != nil && ctx.Err() == nil {
-		return nil, cause // the heartbeat stopped the loop: settle nothing
-	}
-	if err != nil {
-		return nil, err
+	for {
+		if cause := context.Cause(lctx); cause != nil && lctx.Err() != nil && ctx.Err() == nil {
+			return nil, cause // the heartbeat stopped the loop: settle nothing
+		}
+		if err != nil {
+			return nil, err
+		}
+		if out.Kind != agent.OutcomeApprovalRequired {
+			break
+		}
+		// Only a gated tool can pause; without a review store there is nothing
+		// that could wake the call, so settle nothing.
+		if reviewStore == nil || out.Review == nil || out.Review.RequestHash == "" {
+			return nil, fmt.Errorf("native: malformed durable review pause")
+		}
+		// The flock, attempt fence and heartbeat remain held across the wait.
+		// Approval is only a wake hint: replaying the same Loop revalidates the
+		// exact PENDING call, current trusted state and live approval before use.
+		if err := reviewStore.WaitForReviewDecision(lctx, out.Review.RequestHash); err != nil {
+			if cause := context.Cause(lctx); cause != nil && lctx.Err() != nil && ctx.Err() == nil {
+				return nil, cause
+			}
+			return nil, fmt.Errorf("native: wait for review decision: %w", err)
+		}
+		if err := st.HeartbeatLive(lctx, domain.AttemptID(g.Attempt), fence); err != nil {
+			return nil, fmt.Errorf("native: resume after review: %w", err)
+		}
+		out, err = loop.Resume(lctx)
 	}
 	return finishNative(ctx, st, db, led, g, fence, out)
 }
@@ -445,7 +500,14 @@ func restartCap(n int) int {
 }
 
 // pin hashes the parts of the grant that bound what a resumed run may do.
-func (g Grant) pin() string {
+// With the review gate off the pin bytes are exactly those of a build without
+// the gate; with it on, the gate mode and safe tools are pinned too, so a
+// resume under a different gate configuration is refused.
+func (g Grant) pin(reviewGate bool) string {
+	review := ""
+	if reviewGate {
+		review = reviewGatePin(g.ReviewGate)
+	}
 	b, _ := json.Marshal(struct {
 		Allow  []string
 		Hooks  [][]string
@@ -453,7 +515,8 @@ func (g Grant) pin() string {
 		Wall   int
 		Turns  int
 		Tokens int64
-	}{g.ShellAllow, g.OracleHooks, g.Caps, g.WallSeconds, g.MaxTurns, g.MaxTotalTokens})
+		Review string `json:",omitempty"`
+	}{g.ShellAllow, g.OracleHooks, g.Caps, g.WallSeconds, g.MaxTurns, g.MaxTotalTokens, review})
 	return string(b)
 }
 
