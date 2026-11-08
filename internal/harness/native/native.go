@@ -6,16 +6,19 @@
 // The loop is one-shot and runs to completion, so the adapter is not
 // interactive: Input returns ErrNotInteractive, Interrupt cancels the run
 // (outcome interrupted, resumable through Extra {"resume":true}).
+//
+// Fail closed on the event sink: once an event cannot be recorded, the
+// observer refuses to start the next provider call and refuses to run the next
+// tool, so the run stops acting. It never cancels between a tool's Run and the
+// loop saving that tool's result, which would leave a completed call
+// unrecorded.
 package native
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 
 	"fabric/internal/agent"
 	"fabric/internal/harness"
@@ -24,15 +27,21 @@ import (
 // Name is the registry name of this adapter.
 const Name = "native"
 
+// ErrEventsUnrecorded is returned by an observed Provider or Tool once the
+// event sink has failed.
+var ErrEventsUnrecorded = errors.New("native: events can no longer be recorded; refusing to continue")
+
 // Builder constructs the loop for a session. It must route the loop's
 // Provider through o.Provider and its Tools through o.Tools; the adapter
-// cannot see inside a Config it did not build.
+// cannot see inside a Config it did not build. Use the same Redactor for the
+// loop's Config.Redact and the Adapter's Redact, so one redactor covers both
+// the stored transcript and the emitted events.
 type Builder func(spec harness.StartSpec, o *Observer) (*agent.Loop, error)
 
 // Adapter is the native harness adapter.
 type Adapter struct {
 	Build  Builder
-	Redact harness.Redactor // nil means harness.PatternRedactor()
+	Redact harness.Redactor // required
 }
 
 func (a *Adapter) Name() string { return Name }
@@ -54,22 +63,21 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 	if a.Build == nil {
 		return nil, errors.New("native: no loop builder")
 	}
+	if a.Redact == nil {
+		return nil, errors.New("native: a redactor is required")
+	}
 	var rs resumeSpec
 	if len(spec.Extra) > 0 {
 		if err := json.Unmarshal(spec.Extra, &rs); err != nil {
 			return nil, fmt.Errorf("native: extra: %w", err)
 		}
 	}
-	red := a.Redact
-	if red == nil {
-		red = harness.PatternRedactor()
-	}
-	em, err := harness.NewEmitter(Name, spec.SessionID, sink, red)
+	em, err := harness.NewEmitter(Name, spec.SessionID, sink, a.Redact)
 	if err != nil {
 		return nil, err
 	}
 	runCtx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
-	o := &Observer{em: em, cancel: cancel, pending: map[string][]string{}}
+	o := &Observer{em: em}
 	loop, err := a.Build(spec, o)
 	if err != nil {
 		cancel(err)
@@ -106,11 +114,10 @@ func (s *session) run(ctx context.Context, l *agent.Loop, resume bool) {
 			out, err = l.Run(ctx)
 		}
 	}()
-	s.final = finalFor(out, err, context.Cause(ctx))
-	_ = s.em.Final(context.Background(), s.final)
-	if s.em.Err() != nil && s.final.Outcome == harness.OutcomeDone {
-		s.final.Outcome = harness.OutcomeFailed
-	}
+	f := finalFor(out, err, context.Cause(ctx))
+	// The emitter rewrites done to failed if events were lost; Wait reports
+	// what was emitted, so take the outcome from the emitter's return.
+	s.final, _ = s.em.FinalOutcome(context.Background(), f)
 }
 
 // finalFor maps a loop outcome to a harness Final. Only a loop that ended
@@ -172,47 +179,39 @@ func (s *session) Wait(ctx context.Context) (harness.Final, error) {
 
 // Observer turns what the loop's Provider and Tools do into harness events.
 type Observer struct {
-	em     *harness.Emitter
-	cancel context.CancelCauseFunc
-
-	mu      sync.Mutex
-	turn    int
-	pending map[string][]string // name+input digest -> tool_use ids, FIFO
+	em *harness.Emitter
 }
 
-// check ends the run if events can no longer be recorded: a run that cannot be
-// recorded must not keep acting.
-func (o *Observer) check() {
-	if err := o.em.Err(); err != nil {
-		o.cancel(fmt.Errorf("event sink failed: %w", err))
-	}
-}
-
-func key(name string, input []byte) string {
-	h := sha256.Sum256(input)
-	return name + ":" + hex.EncodeToString(h[:])
-}
+// bg detaches observer emits from the loop's context: after Interrupt or Stop
+// the last events must still be recorded.
+func bg(ctx context.Context) context.Context { return context.WithoutCancel(ctx) }
 
 // Provider wraps p.
-func (o *Observer) Provider(p agent.Provider) agent.Provider { return &obsProvider{Provider: p, o: o} }
+func (o *Observer) Provider(p agent.Provider) agent.Provider {
+	return &obsProvider{Provider: p, o: o, turn: new(int)}
+}
 
 type obsProvider struct {
 	agent.Provider
-	o *Observer
+	o    *Observer
+	turn *int
 }
 
 func (p *obsProvider) Send(ctx context.Context, req agent.Request, h agent.Hooks) (*agent.Result, error) {
 	o := p.o
-	o.mu.Lock()
-	o.turn++
-	n := o.turn
-	o.mu.Unlock()
-	_ = o.em.Turn(ctx, n)
+	if err := o.em.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrEventsUnrecorded, err)
+	}
+	*p.turn++
+	if err := o.em.Turn(bg(ctx), *p.turn); err != nil {
+		// The turn is not recorded: do not pay for a call whose result
+		// would be thrown away.
+		return nil, fmt.Errorf("%w: %v", ErrEventsUnrecorded, err)
+	}
 	res, err := p.Provider.Send(ctx, req, h)
 	if res != nil {
-		o.observe(ctx, res)
+		o.observe(bg(ctx), res)
 	}
-	o.check()
 	return res, err
 }
 
@@ -234,10 +233,6 @@ func (o *Observer) observe(ctx context.Context, res *agent.Result) {
 			_ = o.em.Message(ctx, "assistant", b.Text)
 		case "tool_use":
 			_ = o.em.ToolCall(ctx, b.ID, b.Name, b.Input, "requested")
-			o.mu.Lock()
-			k := key(b.Name, b.Input)
-			o.pending[k] = append(o.pending[k], b.ID)
-			o.mu.Unlock()
 		case "thinking", "redacted_thinking":
 			// Reasoning stays inside the harness.
 		default:
@@ -248,18 +243,6 @@ func (o *Observer) observe(ctx context.Context, res *agent.Result) {
 		Input: res.Usage.Input, Output: res.Usage.Output,
 		CacheCreate: res.Usage.CacheCreate, CacheRead: res.Usage.CacheRead,
 	})
-}
-
-func (o *Observer) take(name string, input []byte) string {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	k := key(name, input)
-	ids := o.pending[k]
-	if len(ids) == 0 {
-		return ""
-	}
-	o.pending[k] = ids[1:]
-	return ids[0]
 }
 
 // Tools wraps ts. A DurableReviewTool stays a DurableReviewTool: the loop
@@ -277,19 +260,32 @@ func (o *Observer) Tools(ts []agent.Tool) []agent.Tool {
 	return out
 }
 
+// callID is the durable id the loop attached to this call, or empty (a resumed
+// or directly invoked tool).
+func callID(ctx context.Context) string {
+	if c, ok := agent.ToolCallFromContext(ctx); ok {
+		return c.ID
+	}
+	return ""
+}
+
 type obsTool struct {
 	agent.Tool
 	o *Observer
 }
 
 func (t *obsTool) Run(ctx context.Context, in json.RawMessage) (string, bool) {
+	if err := t.o.em.Err(); err != nil {
+		// Not run, and said so: the loop records this as the call's result.
+		return "not run: " + ErrEventsUnrecorded.Error(), true
+	}
 	out, isErr := t.Tool.Run(ctx, in)
 	status := "ok"
 	if isErr {
 		status = "error"
 	}
-	_ = t.o.em.ToolCall(ctx, t.o.take(t.Name(), in), t.Name(), in, status)
-	t.o.check()
+	// No cancellation here: the result must reach the loop's checkpoint.
+	_ = t.o.em.ToolCall(bg(ctx), callID(ctx), t.Name(), in, status)
 	return out, isErr
 }
 
@@ -299,6 +295,10 @@ type obsReviewTool struct {
 }
 
 func (t *obsReviewTool) RunReviewed(ctx context.Context, in json.RawMessage) (agent.ReviewRunResult, error) {
+	if err := t.o.em.Err(); err != nil {
+		// Nothing was dispatched; the call stays pending and resumable.
+		return agent.ReviewRunResult{}, fmt.Errorf("%w: %v", ErrEventsUnrecorded, err)
+	}
 	res, err := t.rt.RunReviewed(ctx, in)
 	status := "ok"
 	switch {
@@ -311,15 +311,6 @@ func (t *obsReviewTool) RunReviewed(ctx context.Context, in json.RawMessage) (ag
 	case res.IsError:
 		status = "error"
 	}
-	id := t.o.take(t.Name(), in)
-	if status == "pending_review" {
-		// The call is not finished; the loop will resume it, so keep its id.
-		t.o.mu.Lock()
-		k := key(t.Name(), in)
-		t.o.pending[k] = append([]string{id}, t.o.pending[k]...)
-		t.o.mu.Unlock()
-	}
-	_ = t.o.em.ToolCall(ctx, id, t.Name(), in, status)
-	t.o.check()
+	_ = t.o.em.ToolCall(bg(ctx), callID(ctx), t.Name(), in, status)
 	return res, err
 }

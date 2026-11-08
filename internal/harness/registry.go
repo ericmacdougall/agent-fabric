@@ -2,6 +2,7 @@ package harness
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"sync"
@@ -26,6 +27,9 @@ func NewRegistry() *Registry { return &Registry{m: map[string]Adapter{}} }
 func (r *Registry) Register(a Adapter) error {
 	if a == nil {
 		return fmt.Errorf("harness: nil adapter")
+	}
+	if v := reflect.ValueOf(a); v.Kind() == reflect.Ptr && v.IsNil() {
+		return fmt.Errorf("harness: nil adapter (typed nil %T)", a)
 	}
 	n := a.Name()
 	if !nameRE.MatchString(n) {

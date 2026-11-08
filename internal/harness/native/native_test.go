@@ -103,6 +103,7 @@ func (e *echoTool) Run(_ context.Context, in json.RawMessage) (string, bool) {
 type loopEnv struct {
 	prov *stubProvider
 	runs *int
+	db   *agent.DB
 }
 
 // adapter builds a native adapter over a real loop and database.
@@ -119,7 +120,7 @@ func adapter(t harnesstest.T, tt *testing.T, step func(int, context.Context) (*a
 			tt.Fatalf("seed: %v", err)
 		}
 	}
-	env := &loopEnv{prov: &stubProvider{step: step}, runs: new(int)}
+	env := &loopEnv{prov: &stubProvider{step: step}, runs: new(int), db: &agent.DB{Pool: st.Pool()}}
 	a := &native.Adapter{Build: func(spec harness.StartSpec, o *native.Observer) (*agent.Loop, error) {
 		led := &agent.Ledger{St: st, Attempt: attemptID, Fence: 1, TTL: time.Hour, Caps: []agent.Cap{
 			{Resource: agent.SpendResource("month", "202611"), Total: 100_000_000},
@@ -133,7 +134,7 @@ func adapter(t harnesstest.T, tt *testing.T, step func(int, context.Context) (*a
 			MaxTokens: 1000, System: "sys", Prompt: "do the task", MaxTurns: 10, Wall: time.Hour,
 			RestartCap: 20, Prices: prices(), BillingMode: agent.BillingAPIKey,
 		})
-	}}
+	}, Redact: harness.PatternRedactor()}
 	return a, env
 }
 
@@ -206,7 +207,7 @@ func (r *reviewTool) RunReviewed(ctx context.Context, in json.RawMessage) (agent
 func TestObserverKeepsDurableReviewInterface(t *testing.T) {
 	rec := &harnesstest.Recorder{}
 	runs := 0
-	a := &native.Adapter{Build: func(spec harness.StartSpec, ob *native.Observer) (*agent.Loop, error) {
+	a := &native.Adapter{Redact: harness.PatternRedactor(), Build: func(spec harness.StartSpec, ob *native.Observer) (*agent.Loop, error) {
 		wrapped := ob.Tools([]agent.Tool{&reviewTool{echoTool{runs: &runs}}, &echoTool{runs: &runs}})
 		if _, ok := wrapped[0].(agent.DurableReviewTool); !ok {
 			t.Error("wrapping hid DurableReviewTool: the review gate would be skipped")
