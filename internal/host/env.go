@@ -1,7 +1,6 @@
 package host
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -103,9 +102,10 @@ func WriteEnvFile(path string, pairs []string, groupRead bool) error {
 // __sandbox --env-file` execs the worker with. Every entry must be
 // NAME=VALUE with an allow-listed name listed in keep, at most once, and
 // every name in keep must be present, so the file and the launcher's name
-// list agree exactly. The file is unlinked and verified gone before any value
-// is returned; a failed cleanup refuses the exec, because the secrets would
-// otherwise stay readable for the whole run (goodqa#15235 S5a).
+// list agree exactly. The file is unlinked right after it is read, before
+// validation, and the open file must then have no links left (an inode check,
+// so a rename or hard link cannot keep the secrets on disk). A failed cleanup
+// refuses the exec (goodqa#15235 S5a).
 func ReadEnvFile(path, keep string) ([]string, error) {
 	f, err := openEnvFile(path, os.O_RDONLY, 0)
 	if err != nil {
@@ -118,6 +118,15 @@ func ReadEnvFile(path, keep string) ([]string, error) {
 	b, err := io.ReadAll(io.LimitReader(f, maxEnvFile+1))
 	if err != nil {
 		return nil, fmt.Errorf("--env-file: %w", err)
+	}
+	if err := os.Remove(path); err != nil {
+		return nil, fmt.Errorf("--env-file unlink before exec: %w", err)
+	}
+	if n, err := envFileLinks(f); err != nil || n != 0 {
+		if err == nil {
+			err = fmt.Errorf("%d links remain after unlink", n)
+		}
+		return nil, fmt.Errorf("--env-file verify removal before exec: %w", err)
 	}
 	want := map[string]bool{}
 	for _, n := range strings.Split(keep, ",") {
@@ -140,18 +149,6 @@ func ReadEnvFile(path, keep string) ([]string, error) {
 	}
 	if len(seen) != len(want) {
 		return nil, fmt.Errorf("--env-file: %d entries, want the %d names of --env-keep", len(seen), len(want))
-	}
-	if err := f.Close(); err != nil {
-		return nil, fmt.Errorf("--env-file close before cleanup: %w", err)
-	}
-	if err := os.Remove(path); err != nil {
-		return nil, fmt.Errorf("--env-file unlink before exec: %w", err)
-	}
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		if err == nil {
-			err = errors.New("path remains after unlink")
-		}
-		return nil, fmt.Errorf("--env-file verify removal before exec: %w", err)
 	}
 	return out, nil
 }

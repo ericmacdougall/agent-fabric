@@ -74,3 +74,34 @@ func TestEnvFileRefusesSymlink(t *testing.T) {
 		t.Fatal("ReadEnvFile read through a symlink")
 	}
 }
+
+// Red-team L1/L2: a hard link keeps the secrets on disk after the path is
+// removed; the inode check refuses the exec.
+func TestReadEnvFileRefusesSurvivingHardLink(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".fab-env-r_s5a_link")
+	if err := WriteEnvFile(p, []string{"HOME=/h", "PATH=/bin"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(p, filepath.Join(dir, "kept")); err != nil {
+		t.Fatal(err)
+	}
+	env, err := ReadEnvFile(p, "HOME,PATH")
+	if err == nil || !strings.Contains(err.Error(), "links remain") || env != nil {
+		t.Fatalf("env %q err %v; want a refusal because a hard link survives", env, err)
+	}
+}
+
+// Red-team L4b: a file that fails validation is still removed at once.
+func TestReadEnvFileRemovesRejectedFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), ".fab-env-r_s5a_bad")
+	if err := WriteEnvFile(p, []string{"HOME=/h"}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadEnvFile(p, "HOME,PATH"); err == nil {
+		t.Fatal("a file missing PATH was accepted")
+	}
+	if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected environment file remains: %v", err)
+	}
+}
