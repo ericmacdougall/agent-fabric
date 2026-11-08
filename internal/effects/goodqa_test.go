@@ -37,7 +37,8 @@ func filterArchiveState(comments []map[string]any, state any) ([]map[string]any,
 	}
 	out := []map[string]any{}
 	for _, c := range comments {
-		_, archived := c["archivedAt"]
+		// The server sends "archivedAt": null for an active comment.
+		archived := c["archivedAt"] != nil
 		switch state {
 		case "active":
 			if !archived {

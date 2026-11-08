@@ -53,8 +53,8 @@ func TestGoodQAReadbackAsksForAllArchiveStates(t *testing.T) {
 
 // The fake must hide archived rows by default, or the tests above are vacuous.
 func TestFakeGoodQAHidesArchivedByDefault(t *testing.T) {
-	rows := []map[string]any{{"id": "a", "body": "x"}, {"id": "b", "body": "y", "archivedAt": "t"}}
-	for state, want := range map[any]int{nil: 1, "active": 1, "archived": 1, "all": 2} {
+	rows := []map[string]any{{"id": "a", "body": "x"}, {"id": "b", "body": "y", "archivedAt": "t"}, {"id": "c", "body": "z", "archivedAt": nil}}
+	for state, want := range map[any]int{nil: 2, "active": 2, "archived": 1, "all": 3} {
 		got, ok := filterArchiveState(rows, state)
 		if !ok || len(got) != want {
 			t.Fatalf("archiveState %v: %d rows ok=%v, want %d", state, len(got), ok, want)

@@ -314,6 +314,16 @@ at all. An operator-only role for these commands is follow-up work.
   expired=<n> quarantined=<n>`, and adds one to
   `fabric_sched_counter_total{name="reconcile_operator_passes_total"}`. A
   refused or failed pass writes no such line and does not count.
+- **GoodQA comment readback.** `fab effect reconcile` reads a ticket's
+  comments in every archive state (goodqa#15260). COMMITTED means the comment
+  was posted at least once; it may since have been archived by retention or
+  undone in Commander (an undo also archives it), and it is never reposted
+  on its own. To post the same text again on purpose, submit a new effect
+  with a new `--key`. The readback reads at most 5 pages of 200 comments
+  (1,000), archived ones included. A longer thread reads UNKNOWN ("comment
+  history exceeded the page budget") and stays UNKNOWN on every later
+  reconcile: `fab effect resolve` settles only QUARANTINED effects, so
+  there is no operator exit for it yet (goodqa#15260).
 - **Final admission.** Every launch, gated or not, rechecks the attempt's
   fence, lease and intent revision against the database clock just before
   the runner starts. A database error at that moment abandons the attempt
