@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"bufio"
 	"context"
 	"os"
 	"strconv"
@@ -54,6 +55,18 @@ func init() {
 		}
 		emit(assistant(text("three")))
 		emit(result("success", false))
+		os.Exit(0)
+	case "merge":
+		// real claude folds inputs queued during a turn into that turn: read
+		// one line, wait, take everything already queued, answer once
+		sc := bufio.NewScanner(os.Stdin)
+		sc.Buffer(make([]byte, 1<<20), 8<<20)
+		sc.Scan()
+		time.Sleep(400 * time.Millisecond)
+		emit(assistant(text("merged-answer")))
+		emit(result("success", false))
+		for sc.Scan() { // the rest are consumed silently, as merged
+		}
 		os.Exit(0)
 	case "deaf":
 		time.Sleep(time.Hour) // never reads stdin
@@ -201,5 +214,30 @@ func TestGracefulStopClosesStdin(t *testing.T) {
 	f, _ := s.Wait(ctx)
 	if f.ExitCode != 0 || time.Since(t0) > 5*time.Second {
 		t.Fatalf("not a graceful exit: %+v after %v", f, time.Since(t0))
+	}
+}
+
+// Inputs queued while a turn runs are merged by real claude into that turn:
+// one result answers them all, so none is reported undelivered.
+func TestMergedInputsAreNotReportedUndelivered(t *testing.T) {
+	a := adapter("merge", false, nil).(*Adapter)
+	rec := &harnesstest.Recorder{}
+	s, err := a.Start(context.Background(), harness.StartSpec{SessionID: "ses_mg", Prompt: "one", Dir: t.TempDir()}, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = s.Input(ctx, "two")
+	_ = s.Input(ctx, "three")
+	if !rec.WaitFor(5*time.Second, func(e []harness.Event) bool { return contains(harnesstest.Texts(e), "merged-answer") }) {
+		t.Fatal("no answer")
+	}
+	if err := s.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := s.Wait(ctx)
+	if f.Outcome != harness.OutcomeStopped || f.Reason != "" {
+		t.Fatalf("merged inputs reported as undelivered: %+v", f)
 	}
 }

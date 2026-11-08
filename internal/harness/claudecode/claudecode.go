@@ -106,7 +106,7 @@ type session struct {
 	// sections; never across a write, a queue operation or an emit.
 	mu       sync.Mutex
 	turn     int
-	sent     int
+	sent     int // inputs queued since the last result arrived
 	results  int
 	lastOK   bool
 	lastSub  string
@@ -423,7 +423,7 @@ func (s *session) read() {
 	code, werr := s.proc.Wait()
 	s.mu.Lock()
 	s.settling = true
-	pending := s.sent - s.results
+	pending := s.sent
 	results, lastOK, lastSub := s.results, s.lastOK, s.lastSub
 	s.mu.Unlock()
 	f := s.settle(code, werr, s.stopping.Load(), pending, results, lastOK, lastSub, panicked.Load())
@@ -546,6 +546,7 @@ func (s *session) handle(line []byte) {
 		ok := w.Subtype == "success" && !w.IsError
 		s.mu.Lock()
 		s.results++
+		s.sent = 0 // real claude merges queued inputs into one turn, so a result answers every input sent before it
 		s.lastOK = ok
 		s.lastSub = w.Subtype
 		s.mu.Unlock()
