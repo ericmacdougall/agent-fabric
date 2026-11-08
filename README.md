@@ -6,6 +6,23 @@ host-owned jobs, and event-driven relaunch instead of polling. One daemon
 over Postgres is the only writer; workers are `claude -p` (or a recorded
 fake) processes launched by a host profile that confines them.
 
+## What it is
+
+Agent Fabric is a control plane for running coding-agent work that has to be bounded, auditable and recoverable. It is for engineers who run long unattended agent jobs and cannot accept a worker that double-posts a comment, outlives its lease, spends past a cap or marks work done on its own say-so.
+
+The problem: agent runs fail halfway, retry, and touch outside systems. Without a durable record, nobody can tell whether an action happened.
+
+What it does:
+
+- Keeps every mission in PostgreSQL as an event log, driven by a pure state machine with property tests and a separate invariant oracle.
+- Gives each attempt a fence and a database-time lease, so a stale worker cannot write.
+- Routes outside-world actions through an effect broker that records intent, dispatches once, and settles unknown outcomes by reading the target back; conflicts are quarantined for an operator.
+- Confines workers with Landlock (Linux) or Seatbelt (macOS) profiles that must pass negative controls first, and builds worker environments from an allow-list.
+- Caps native-API spend before each send, and can require durable human review of every native tool call.
+- Refuses to mark a mission done without a live-test receipt for the deployed commit.
+
+What is different: models propose and deterministic code decides, and [docs/review-gates.md](docs/review-gates.md) lists each refusal with the test that fails if it breaks. It is early and shadow-only; see [docs/status-and-roadmap.md](docs/status-and-roadmap.md) for what is verified, what is open (17-dimension capability matrix: 2 has, 10 partial, 5 missing), and what comes next. Design and data flow: [docs/architecture.md](docs/architecture.md).
+
 **Status: early, shadow-only, under review.** Nothing here drives a live
 system yet. The code is being built against a design document and an
 independent code inspection; findings are fixed in commits that cite the
@@ -456,14 +473,24 @@ FABRIC_TEST_DSN=postgres://... go test ./...     # disposable database only
 python3 -I tools/mutants/run.py --repo . --out mutants.tsv
 ```
 
-Go 1.22, `pgx/v5` and `x/sys` only.
+Dependencies: `pgx/v5` and `x/sys` (plus what they pull in).
+
+Toolchain: `go.mod` needs Go 1.26.0 or later, and pins `toolchain
+go1.26.10`, which is what release binaries are built with (goodqa#15299).
+Run the go command with `GOTOOLCHAIN=local` so an older go fails with
+"requires go >= 1.26.0" instead of silently downloading a toolchain; the
+in-repo scripts that build (`internal/host/linux_manager_runtime_controls.sh`,
+`tools/native-mutants/mutants.py`) set it and take the go binary from
+`FAB_GO`.
 
 ## Deploying
 
 1. Back up the database first (`pg_dump -Fc`), check the dump with
    `pg_restore --list`, and keep the previous `fab` binary for rollback.
 2. Build from a fresh `git clone` checked out at the release commit, with
-   `CGO_ENABLED=0 go build -buildvcs=true -o <path> ./cmd/fab`. Check that
+   the pinned Go 1.26.10 and `GOTOOLCHAIN=local CGO_ENABLED=0 go build
+   -trimpath -buildvcs=true -o <path> ./cmd/fab`. Check that `go version -m
+   <path>` names go1.26.10, and that
    `git status --porcelain` is empty, that `go version -m <path>` shows
    `build CGO_ENABLED=0` (a worker is a static fab, so it loads no shared
    library a worker-user environment could redirect), and that `<path>

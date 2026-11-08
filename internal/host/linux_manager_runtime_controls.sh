@@ -17,6 +17,12 @@ if ! command -v setfacl >/dev/null 2>&1; then
     exit 2
 fi
 
+# goodqa#15299: build and test with the pinned toolchain only. FAB_GO names
+# the go binary (default: the go on PATH); GOTOOLCHAIN=local stops a
+# go.mod toolchain line from downloading a different Go.
+GO=${FAB_GO:-go}
+export GOTOOLCHAIN=local
+
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/fab-linux-runtime.XXXXXX")
@@ -30,7 +36,7 @@ trap 'rm -rf "$scratch" "$bindir" "$workerroot"' EXIT HUP INT TERM
 chmod 0755 "$bindir"
 chmod 0700 "$workerroot"
 setfacl -m "u:${FABRIC_WORKER_USER}:--x" -m "d:u:${FABRIC_WORKER_USER}:rwx" "$workerroot"
-go build -o "$bindir/fab" ./cmd/fab
+"$GO" build -o "$bindir/fab" ./cmd/fab
 chmod 0755 "$bindir/fab"
 export FABRIC_FAB_BIN="$bindir/fab"
 export FABRIC_WORKER_ROOT="$workerroot"
@@ -41,6 +47,6 @@ export FABRIC_EXPECT_CONTAINMENT=1
 # launcher reaping, fast commands, same-UID ptrace/memory/FD/signal attacks,
 # abstract buses, UDP/DNS, lock replacement, dedicated-worker traversal,
 # mediator cleanup, concurrent Stop and verified failover.
-go test ./internal/host \
+"$GO" test ./internal/host \
     -run '^(TestNegativeControls|TestLinuxManagerNegativeControls|TestLinuxRuntimeSerializationCleanupFailover|TestLinuxRuntimeDelayedManagerReadiness|TestLinuxRuntimeDelayedSubmissionCannotEscapeCleanup|TestLinuxRuntimeBlockedManagerReturnsRetryableHandle|TestLinuxRuntimeFastSuccessfulCommand|TestLinuxRuntimeSameUIDProcessAttacksDenied|TestLinuxRuntimeDedicatedWorkerTraversal|TestLinuxRuntimeWorkerCannotReplaceManagerLock)$' \
     -count=1 -v
