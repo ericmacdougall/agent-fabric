@@ -275,19 +275,61 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			backoff = s.cfg.Backoff
 			continue // something changed; rescan before blocking (E6 pattern)
 		}
-		wctx, cancel := context.WithTimeout(ctx, backoff)
-		_, nerr := conn.Conn().WaitForNotification(wctx)
-		cancel()
-		if nerr == nil {
+		notified, err := waitForWake(ctx, func(wctx context.Context) error {
+			_, err := conn.Conn().WaitForNotification(wctx)
+			return err
+		}, backoff, sleepContext)
+		if err != nil {
+			return err
+		}
+		if notified {
 			backoff = s.cfg.Backoff
 			continue
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		backoff = nextBackoff(backoff, s.cfg.MaxBackoff)
+	}
+}
+
+// nextBackoff doubles cur up to max, never past it.
+func nextBackoff(cur, max time.Duration) time.Duration {
+	if cur >= max {
+		return max
+	}
+	return min(cur*2, max)
+}
+
+// waitForWake waits once for a LISTEN notification for up to delay. An
+// expired wait already spent delay; an error while the wait context is
+// still live (a broken LISTEN connection returns at once) gets its own
+// bounded sleep, so Run never spins Tick in a hot loop.
+func waitForWake(ctx context.Context, wait func(context.Context) error, delay time.Duration, sleep func(context.Context, time.Duration) error) (bool, error) {
+	wctx, cancel := context.WithTimeout(ctx, delay)
+	err := wait(wctx)
+	expired := wctx.Err() != nil // read before cancel: cancel is not expiry
+	cancel()
+	if err == nil {
+		return true, nil
+	}
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if !expired {
+		fmt.Fprintln(os.Stderr, "fabd: LISTEN wait failed, backing off:", err)
+		if err := sleep(ctx, delay); err != nil {
+			return false, err
 		}
-		if backoff < s.cfg.MaxBackoff {
-			backoff *= 2
-		}
+	}
+	return false, nil
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	t := time.NewTimer(delay)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
 	}
 }
 
