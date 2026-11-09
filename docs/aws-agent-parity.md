@@ -469,6 +469,7 @@ The AWS matrix above stays the row-level reference. The table below is the same 
 | Knowledge and retrieval (`knowledge`) | GAP: F14 | Knowledge Bases (KB-1 to KB-8) | Foundry IQ (permission-aware retrieval), file search, AI Search, Bing grounding | RAG Engine, Vector Search, grounding |
 | Multi-agent and A2A (`agents`) | GAP: F9, F12 | Multi-agent (RT-18, AG-3, GW-8) | Agent Framework workflows, A2A v1.0 endpoint and tool, connected agents (unverified) | ADK multi-agent and graph workflows, A2A v1.0 |
 | Registry and catalog (`registry`) | GAP: F8, F16 | Registry (GW-11, GW-12) | Entra Agent Registry, Foundry portal | Agent Registry, Agent Garden, Agent Studio |
+| Voice and channels (`voice`) | GAP: F18 | none | Voice-based prompt agents (Voice Live, Teams Phone, Twilio), voice evaluation | ADK live and voice streaming |
 | Cost and payments (`cost`, `payments`) | PARTIAL: native spend caps; F10, F8 | Cost, Payments (CO-1 to CO-5, PY-1, PY-2) | quota panes, per-agent cost view; no payments | gateway token budgets (announced), AP2 payment mandates |
 
 ### Rows only Microsoft or Google offers
@@ -484,7 +485,7 @@ Same status vocabulary and row format as the AWS matrix. A capability that an AW
 | MS-5 | Sensitive trace content routed to a separate, access-restricted store | GAP | secret and literal redaction only | F11 AC-XP5 |
 | MS-6 | Retrieval under the caller's identity with source ACLs honoured | GAP | none | F14 AC-XP6 |
 | MS-7 | Multi-agent trace conventions: spans named `invoke_agent`, `invoke_workflow`, `plan`, `execute_tool` | GAP | none | F11 AC-XP7 |
-| MS-8 | Voice agents and telephone channels | GAP | none | none: owner decision 6 below |
+| MS-8 | Voice agents and telephone channels (real-time speech in and out, phone and web audio channels) | GAP | none | F18 AC-VO1, AC-VO2 |
 | MS-9 | Workflow with durable checkpoints, human-in-the-loop, fan-out and fan-in (Agent Framework) | PARTIAL | reducer and fences are durable; no declarative workflow | F16 AC-FL1, F12 AC-MA1 |
 | GO-1 | One ingress and egress enforcement plane, default-deny, routing only to registered agents and tools | GAP | none | F8 AC-XP8 |
 | GO-2 | Semantic governance: a natural-language constraint checked against a tool call's intent at run time | GAP | none | F7 AC-XP9 |
@@ -492,7 +493,7 @@ Same status vocabulary and row format as the AWS matrix. A capability that an AW
 | GO-4 | Memory with immutable revisions, a rollback window and schema-filled profiles | GAP | none | F14 AC-XP11 |
 | GO-5 | A gallery of sample agents that run unchanged | GAP | none | F16 AC-XP12 |
 | GO-6 | Visual agent builder (Agent Studio, Agent Designer) | GAP | none | out of Fabric: the UI belongs to GoodQA; Fabric exposes the agent definition API (F16 AC-AD1) |
-| GO-7 | Managed store of few-shot examples (Example Store; source details unread, low confidence) | GAP | none | none: confirm need before any AC |
+| GO-7 | Managed store of few-shot examples (Example Store; source details unread, low confidence) | GAP | none | F14 AC-XP13 |
 
 ### Cross-provider additions (new acceptance criteria)
 
@@ -508,6 +509,9 @@ Same status vocabulary and row format as the AWS matrix. A capability that an AW
 - AC-XP10 (F4): an agent credential is short-lived and bound to a key the agent holds; a token used from a different key is refused. Verify by: a test with a stolen token replayed from another key, and an expired certificate. NEG: a revoked identity's still-unexpired token is refused at the broker.
 - AC-XP11 (F14): every memory write creates an immutable revision; a deleted or overwritten record can be restored within a stated window; a profile schema constrains the fields an extraction may fill. Verify by: write, overwrite, delete, restore tests and a schema-violating extraction. NEG: a restore cannot cross tenants.
 - AC-XP12 (F16): a gallery of sample agent definitions ships in the repository and each runs under `fab smoke --parity` with first-party providers only. Verify by: the smoke run. NEG: a sample that needs a network service other than the configured model provider fails the check.
+- AC-XP13 (F14): a managed example store holds few-shot examples scoped to a tenant and an agent definition, versioned, retrievable by similarity for prompt assembly. Verify by: store, version and retrieve tests with a fixed embedding fixture. NEG: another tenant's examples are never retrieved, and an example that contains a secret shape is rejected by the redactor.
+- AC-VO1 (F18): a voice session bridges a bidirectional audio stream to a harness session through the `voice` provider kind (speech to text and text to speech behind one contract); the transcript and the spoken reply are events. Verify by: a loopback audio fixture session with fake speech providers yields transcript and reply events and a conformance run for the kind. NEG: audio is not stored unless the tenant's policy allows it, and recording needs a consent record.
+- AC-VO2 (F18): a telephony or web-audio channel gateway maps an inbound caller to a principal (or to an anonymous principal with no tool grants), supports barge-in, and enforces a concurrent-call cap. Verify by: a fake telephony fixture: a known caller maps to its principal, barge-in interrupts the spoken reply, the cap refuses the extra call. NEG: an unknown caller number never receives a tool grant, and a caller-supplied number is not trusted as identity without the channel's verification.
 
 ## Provider interfaces (epic constraint)
 
@@ -557,7 +561,7 @@ AC-OOTB (F13): on a fresh personal install (one binary plus the bundled or manag
 3. Guardrail provider: the built-in local provider is rule and classifier based and model-agnostic. Confirm that a model-backed classifier through the gateway is acceptable for prompt-attack and grounding checks, and which model class (a local small model or any configured provider).
 4. Knowledge-base store: Postgres vector extension by default for the personal install. Confirm.
 5. Provider adapters (AC-PI8): confirm that a live AWS or Microsoft adapter needs a recorded decision for spend (tenant administrator for a tenant's own account, Fabric owner otherwise) before it is enabled, that a Google adapter stays interface plus fake only (Fabric never calls Vertex or `aiplatform`), and whether any Google model provider through the Gemini Developer API is wanted at all.
-6. Voice agents and telephone channels (MS-8) and a managed example store (GO-7): add them to scope or leave them out. Recommendation: leave both out until a product need is stated.
+6. Closed: voice agents and telephone channels (MS-8) and a managed example store (GO-7) are in scope, because the owner asked for Fabric's "own flavor of everything" (Source: user:baab765b-d85c-46b4-b7b9-588eb912c770/c40c28dc-7b95-4e43-b062-14c81db05e2b). They land in F18 (AC-VO1, AC-VO2) and F14 (AC-XP13).
 7. Order: F4 (identity) and F7 (policy and guardrails) first because everything else is gated by them; F14 to F16 after F1 to F3 settle the envelope, streams and tenancy. F17 (provider contracts) is drafted with F6 and F8, before the other slices ship their first-party implementations, and its contracts are reviewed with F7 and F11.
 
 ## Check
