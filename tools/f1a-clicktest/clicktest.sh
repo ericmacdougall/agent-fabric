@@ -154,4 +154,28 @@ SQL
 wait_for "both holds are released within a few ticks" held_sql 0 20
 [[ "$("$FAB" streams held --scan | tail -1)" == "held streams: 0" ]] && echo "ok: fab streams held --scan reports 0"
 [[ "$(metric)" == 0 ]] && echo "ok: fabric_held_streams 0"
+
+# 5 (optional, NEG-6 mixed binaries): OLD_FAB_BIN is the binary built BEFORE
+# F1a (the previous live one). A hold row exists on the healthy mission; the
+# old binary has no hold check and must keep ticking against it, the data it
+# leaves must still be read by the new binary, and the new binary then
+# releases the hold.
+if [[ -n "${OLD_FAB_BIN:-}" ]]; then
+  [[ -x "$OLD_FAB_BIN" ]] || die "OLD_FAB_BIN must be executable"
+  wait "$DAEMON_PID" 2>/dev/null || true; DAEMON_PID=""
+  ownerq -c "INSERT INTO outbox_cursors (consumer, last_id) VALUES ('sched.hold.m_ct_healthy', COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer = 'sched'), 0))"
+  [[ "$(held_sql)" == 1 ]] && echo "ok: a hold row exists on the healthy mission"
+  OLD_VER=$("$OLD_FAB_BIN" version | head -1)
+  printf '{"rungs":{"R0":{"effort":"n/a","models":{"claude":"fake-model"}}}}\n' > "$WORK/tiers.json"
+  FABRIC_DSN="$APP_DSN" FABRIC_RUNNER_DSN="$RUNNER_DSN" timeout 40 "$OLD_FAB_BIN" daemon --provider "$FAKE" --trust-provider \
+    --work-root "$WORK/wr" --tier-table "$WORK/tiers.json" --rung R0 --host h_fabtest >>"${DAEMON_LOG:-/dev/null}" 2>&1 &
+  DAEMON_PID=$!
+  sleep 25
+  [[ -d "/proc/$DAEMON_PID" ]] && echo "ok: the old binary ($OLD_VER) is still ticking after 25 seconds with a hold row present"
+  wait "$DAEMON_PID" 2>/dev/null || true; DAEMON_PID=""
+  [[ "$(held_sql)" == 1 ]] && echo "ok: the old binary left the hold row alone"
+  start_daemon 60
+  wait_for "the new binary releases the hold the old binary left" held_sql 0 30
+  [[ "$("$FAB" streams held --scan | tail -1)" == "held streams: 0" ]] && echo "ok: nothing held after the mixed run"
+fi
 echo "clicktest: done"
