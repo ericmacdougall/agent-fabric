@@ -217,19 +217,50 @@ func runClaudeCode(sctx context.Context, bin, model, prompt, input string, extra
 			failure = fmt.Errorf("an Input with a cancelled context was not refused: %v", err)
 		}
 	}
-	if input != "" {
-		if err := s.Input(ctx, input); err != nil {
-			failure = errors.Join(failure, fmt.Errorf("input: %w", err))
-		}
-	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	waited := make(chan struct{})
 	go func() { _, _ = s.Wait(context.Background()); close(waited) }()
-	select {
-	case <-timer.C:
-	case <-sctx.Done():
-	case <-waited: // the child ended on its own
+	rs, _ := s.(interface{ Results() int })
+	// waitResults blocks until the session has produced n results, the wait
+	// timer or a signal fires, or the child ends on its own.
+	waitResults := func(n int) bool {
+		tk := time.NewTicker(50 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			if rs != nil && rs.Results() >= n {
+				return true
+			}
+			select {
+			case <-timer.C:
+				return false
+			case <-sctx.Done():
+				return false
+			case <-waited:
+				return rs != nil && rs.Results() >= n
+			case <-tk.C:
+			}
+		}
+	}
+	want := 1 // the prompt
+	if !waitResults(1) {
+		failure = errors.Join(failure, errors.New("the first prompt got no result before the wait ended"))
+	} else if input != "" {
+		// The input goes in only after the first turn has finished, so a
+		// result can only be the answer to it: a merged input cannot hide a
+		// lost one.
+		if err := s.Input(ctx, input); err != nil {
+			failure = errors.Join(failure, fmt.Errorf("input: %w", err))
+		} else {
+			want = 2
+			if !waitResults(2) {
+				failure = errors.Join(failure, errors.New("the second input got no result: it was lost or unanswered"))
+			}
+		}
+	}
+	_ = want
+	if sctx.Err() != nil {
+		failure = errors.Join(failure, errors.New("interrupted by a signal: the scripted session did not complete"))
 	}
 	if err := s.Interrupt(ctx); err != nil {
 		failure = errors.Join(failure, fmt.Errorf("interrupt: %w", err))

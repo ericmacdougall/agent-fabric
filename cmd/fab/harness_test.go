@@ -114,6 +114,16 @@ func TestHarnessRunExitCodes(t *testing.T) {
 	if err := runHarness(t, "--adapter", "claude-code", "--unconfined", "--claude-bin", crash, "--prompt", "hi", "--wait", "1s"); err == nil {
 		t.Fatal("a crashing child exited 0")
 	}
+	// answers once, reads the second input, never answers it, stays up until Stop
+	lost := writeFakeClaude(t, `echo '{"type":"system","subtype":"init"}'
+read l
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"first"}]}}'
+echo '{"type":"result","subtype":"success","is_error":false}'
+cat >/dev/null
+`)
+	if err := runHarness(t, "--adapter", "claude-code", "--unconfined", "--claude-bin", lost, "--prompt", "hi", "--input", "SECOND", "--wait", "3s"); err == nil {
+		t.Fatal("a live child that lost the second input exited 0")
+	}
 	silent := writeFakeClaude(t, "cat >/dev/null\n")
 	if err := runHarness(t, "--adapter", "claude-code", "--unconfined", "--claude-bin", silent, "--prompt", "hi", "--wait", "1s"); err == nil {
 		t.Fatal("a child that never answers exited 0")

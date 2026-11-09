@@ -173,6 +173,15 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 
 func (s *session) ID() string { return s.id }
 
+// Results is how many results the child has produced so far. A caller that
+// sends one input at a time and waits for the matching result can tell a lost
+// input from a merged one, which a stream of queued inputs cannot.
+func (s *session) Results() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.results
+}
+
 // write is the only goroutine that writes stdin. On close it flushes what is
 // queued, then closes stdin. A write error ends writing; the child exiting
 // settles the session.
