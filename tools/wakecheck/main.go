@@ -1,14 +1,15 @@
 // Command wakecheck measures how fast a running fabd reacts to a committed
-// command (goodqa#15586 F19a-0): it executes an accepted command (admit, then
-// release, alternately), then polls the scheduler cursor every 2 ms until fabd
+// command (goodqa#15586 F19a-0): it executes an accepted command (a revise-intent
+// on its own mission, one per round), then polls the scheduler cursor every 2 ms until fabd
 // has consumed the command's outbox row, and reports the latency. With the
 // post-commit wake hint the first reaction after an idle second is a few
 // milliseconds; without it fabd only reacts on its backoff timer.
 //
-// It writes: it creates one mission and runs admit and release on it, so it
-// refuses to run unless the database name starts with fabric_r15299_ (a
-// rehearsal copy); it never runs against fabric_live. FABRIC_DSN names the copy
-// (an app-role DSN). Nothing secret is printed.
+// It writes: it creates one mission and runs commands on it, so it refuses to
+// run unless the database name starts with fabric_r15299_ (a rehearsal copy) or
+// fabtest_ (a scratch database made by wakecheck.sh); it never runs against
+// fabric_live. FABRIC_DSN names that database (an app-role DSN). Nothing secret
+// is printed.
 package main
 
 import (
@@ -46,8 +47,8 @@ func run() error {
 	if err := st.Pool().QueryRow(ctx, "SELECT current_database()").Scan(&db); err != nil {
 		return err
 	}
-	if !strings.HasPrefix(db, "fabric_r15299_") {
-		return fmt.Errorf("refusing to run against database %q: only a fabric_r15299_ rehearsal copy", db)
+	if !strings.HasPrefix(db, "fabric_r15299_") && !strings.HasPrefix(db, "fabtest_") {
+		return fmt.Errorf("refusing to run against database %q: only a fabric_r15299_ rehearsal copy or a fabtest_ scratch database", db)
 	}
 	id := domain.MissionID(fmt.Sprintf("m_wake_%d", time.Now().Unix()))
 	if err := st.CreateMission(ctx, id, domain.ProviderClaudeCode, "GoodQA goodqa#15586", "fabric", "main"); err != nil {
@@ -56,12 +57,9 @@ func run() error {
 	const rounds = 10
 	var lats []time.Duration
 	for i := 0; i < rounds; i++ {
-		kind := domain.CmdAdmitMission
-		if i%2 == 1 {
-			kind = domain.CmdRelease
-		}
-		if _, err := st.Execute(ctx, "wakecheck", domain.CommandID(fmt.Sprintf("wake-%s-%d", id, i)), domain.Command{Kind: kind, Mission: id}); err != nil {
-			return fmt.Errorf("round %d %s: %w", i, kind, err)
+		cmd := domain.Command{Kind: domain.CmdReviseIntent, Mission: id, Reason: fmt.Sprintf("wakecheck round %d", i)}
+		if _, err := st.Execute(ctx, "wakecheck", domain.CommandID(fmt.Sprintf("wake-%s-%d", id, i)), cmd); err != nil {
+			return fmt.Errorf("round %d %s: %w", i, cmd.Kind, err)
 		}
 		t0 := time.Now()
 		var target int64
