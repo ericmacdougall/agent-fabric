@@ -467,6 +467,19 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		return Response{}, err
 	}
 
+	// F1a: a held mission (a stored event this build cannot decode) is not
+	// written to. The refusal is a plain sentinel and nothing is stored, so
+	// the same command id succeeds once a decoder that reads the row is
+	// deployed. The abandon of an attempt is exempt (a start that finds the
+	// hold must not leave a live attempt); the exemption bypasses only this
+	// check, every other check on the command still runs. The stored-command
+	// replay lookup above ran first, so a stored command still replays.
+	if held, err := isHeld(ctx, tx, cmd.Mission); err != nil {
+		return Response{}, err
+	} else if held && !(cmd.Kind == domain.CmdFinishAttempt && cmd.Outcome == "abandoned") {
+		return Response{}, fmt.Errorf("%w: mission %s", domain.ErrStreamHeld, cmd.Mission)
+	}
+
 	// goodqa#15324 S1b, after the lock and the replay lookup: row identity,
 	// receipt-sha dedupe and the cap, all against the locked state.
 	if isLadder {
@@ -752,6 +765,7 @@ func (s *Store) ExpireLeasesOnHost(ctx context.Context, host domain.HostID, limi
 func (s *Store) expireLeases(ctx context.Context, host domain.HostID, limit int) ([]ExpiredLease, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, mission_id, fence, (extract(epoch FROM lease_until) * 1000)::bigint FROM attempts
 		WHERE state IN ('LEASED', 'PREPARING', 'RUNNING') AND lease_until < now() AND ($2::text = '' OR host = $2::text)
+		AND NOT EXISTS (SELECT 1 FROM outbox_cursors hc WHERE hc.consumer = 'sched.hold.' || attempts.mission_id)
 		ORDER BY lease_until LIMIT $1`, limit, string(host))
 	if err != nil {
 		return nil, err
@@ -905,43 +919,32 @@ type OutboxRow struct {
 	Event   domain.Event
 	// View is the v2 envelope of the same event (F1a).
 	View envelope.View
+	// Err is why the row could not be decoded; the consumer holds the mission.
+	Err error
 }
 
-// OutboxPage returns up to limit rows after the consumer's cursor.
+// OutboxPage returns up to limit rows after the consumer's cursor. A row
+// this build cannot decode is an error here (the poster-style consumers stop
+// on it); the scheduler uses ConsumeOutbox, which holds the mission instead.
 func (s *Store) OutboxPage(ctx context.Context, consumer string, limit int) ([]OutboxRow, error) {
 	// Rows whose transaction is still in progress (or newer than one that is)
 	// are not visible yet, so an id that commits late can never be skipped
 	// (review H5 / RV-3).
-	// The view is built from the events row the outbox row joins on
-	// (mission_id, seq), so the consumer and replay paths see the same view;
-	// an outbox row with no events row yields an empty payload, which fails
-	// the decode like any other poison.
-	rows, err := s.pool.Query(ctx, `SELECT o.id, o.mission_id, o.seq, COALESCE(e.kind, ''), COALESCE(e.actor, ''), COALESCE(e.at, o.at), COALESCE(e.payload::text, '')
-		FROM outbox o LEFT JOIN events e ON e.mission_id = o.mission_id AND e.seq = o.seq
-		WHERE o.id > COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer = $1), 0)
-		  AND o.xid < pg_snapshot_xmin(pg_current_snapshot())
-		ORDER BY o.id LIMIT $2`, consumer, limit)
+	var after int64
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer = $1), 0)`, consumer).Scan(&after)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []OutboxRow
-	for rows.Next() {
-		var r OutboxRow
-		er := envelope.Row{}
-		var payload string
-		if err := rows.Scan(&r.ID, &r.Mission, &r.Seq, &er.Kind, &er.Actor, &er.At, &payload); err != nil {
-			return nil, err
-		}
-		er.Mission, er.Seq, er.Payload = string(r.Mission), r.Seq, []byte(payload)
-		v, err := envelope.Upcast(er)
-		if err != nil {
-			return nil, fmt.Errorf("outbox %d mission %s seq %d: %w", r.ID, r.Mission, r.Seq, err)
-		}
-		r.View, r.Event = v, v.Event
-		out = append(out, r)
+	rows, err := pageFrom(ctx, s.pool, after, -1, "", limit)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	for _, r := range rows {
+		if r.Err != nil {
+			return nil, r.Err
+		}
+	}
+	return rows, nil
 }
 
 // AckOutbox advances the consumer's cursor; it never moves backwards, so a

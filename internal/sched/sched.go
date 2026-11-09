@@ -360,33 +360,50 @@ func Notify(ctx context.Context, st *store.Store) {
 	st.Pool().Exec(ctx, "NOTIFY "+WakeChannel) //nolint:errcheck
 }
 
-// consumeOutbox maintains the waits projection from the mission events.
+// consumeOutbox maintains the waits projection from the mission events. A
+// mission whose stored event this build cannot decode is held (docs/
+// envelope.md): the cursor still advances, the other missions keep flowing,
+// and the held mission's rows are drained in order once they decode. Each row
+// is applied in the same transaction as the cursor ack (store.ConsumeOutbox),
+// so a crash can only redeliver. It returns the rows applied: skipped and
+// newly held rows are not work, so a tick over only held rows is idle.
 func (s *Scheduler) consumeOutbox(ctx context.Context) (int, error) {
-	rows, err := s.st.OutboxPage(ctx, "sched", 200)
-	if err != nil || len(rows) == 0 {
-		return 0, err
-	}
-	for _, r := range rows {
+	resumed := 0
+	apply := func(ctx context.Context, tx pgx.Tx, r store.OutboxRow) error {
 		switch r.Event.Kind {
 		case domain.EvAttemptFinished:
 			if r.Event.Outcome == "wait" {
-				if _, err := s.st.Pool().Exec(ctx, `INSERT INTO waits (mission_id, kind, key) VALUES ($1, $2, $3)
+				if _, err := tx.Exec(ctx, `INSERT INTO waits (mission_id, kind, key) VALUES ($1, $2, $3)
 					ON CONFLICT (mission_id) DO UPDATE SET kind = EXCLUDED.kind, key = EXCLUDED.key, since = now()`,
 					string(r.Mission), waitKind(r.Event.WaitKey), r.Event.WaitKey); err != nil {
-					return 0, err
+					return err
 				}
 			}
 		case domain.EvMissionResumed, domain.EvMissionReleased:
-			if _, err := s.st.Pool().Exec(ctx, "DELETE FROM waits WHERE mission_id = $1", string(r.Mission)); err != nil {
-				return 0, err
+			if _, err := tx.Exec(ctx, "DELETE FROM waits WHERE mission_id = $1", string(r.Mission)); err != nil {
+				return err
 			}
 			if r.Event.Kind == domain.EvMissionResumed {
-				s.WaitsResumed++
-				s.bump(ctx, "waits_resumed_total")
+				resumed++
+				if _, err := tx.Exec(ctx, `INSERT INTO sched_counters (name, value) VALUES ('waits_resumed_total', 1) ON CONFLICT (name) DO UPDATE SET value = sched_counters.value + 1`); err != nil {
+					return err
+				}
 			}
 		}
+		return nil
 	}
-	return len(rows), s.st.AckOutbox(ctx, "sched", rows[len(rows)-1].ID)
+	n, err := s.st.ConsumeOutbox(ctx, "sched", 200, apply)
+	if err != nil {
+		return 0, err
+	}
+	s.WaitsResumed += resumed
+	resumed = 0
+	d, err := s.st.DrainHolds(ctx, "sched", 200, apply)
+	s.WaitsResumed += resumed
+	if err != nil {
+		return n, err
+	}
+	return n + d, nil
 }
 
 func waitKind(key string) string {
@@ -404,7 +421,7 @@ func (s *Scheduler) bump(ctx context.Context, name string) {
 // deterministic key, so a repeated sweep replays instead of waking twice.
 func (s *Scheduler) wakeExitedJobs(ctx context.Context) (int, error) {
 	rows, err := s.st.Pool().Query(ctx, `SELECT id, mission_id FROM jobs WHERE state = 'EXITED' AND NOT woken
-		AND NOT (mission_id = ANY($1)) ORDER BY ended_at LIMIT 50`, s.parkedIDs())
+		AND NOT (mission_id = ANY($1)) AND NOT EXISTS (SELECT 1 FROM outbox_cursors hc WHERE hc.consumer = 'sched.hold.' || jobs.mission_id) ORDER BY ended_at LIMIT 50`, s.parkedIDs())
 	if err != nil {
 		return 0, err
 	}
@@ -459,6 +476,7 @@ func (s *Scheduler) dispatch(ctx context.Context) (int, error) {
 		  AND NOT EXISTS (SELECT 1 FROM waits w WHERE w.mission_id = m.id)
 		  AND (m.not_before IS NULL OR m.not_before <= now())
 		  AND NOT (m.id = ANY($1))
+		  AND NOT EXISTS (SELECT 1 FROM outbox_cursors hc WHERE hc.consumer = 'sched.hold.' || m.id)
 		  AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = m.id
 		                  AND a.state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING'))
 		ORDER BY m.priority, m.id LIMIT 10`, s.parkedIDs())
@@ -865,7 +883,8 @@ func (s *Scheduler) reconcileUnknown(ctx context.Context) int {
 		return 0
 	}
 	rows, err := s.st.Pool().Query(ctx, `SELECT id, mission_id, fence, COALESCE(path, ''), COALESCE(lock_path, '') FROM attempts
-		WHERE state = 'UNKNOWN' AND host = $1 ORDER BY started_at LIMIT 20`, string(s.cfg.Host))
+		WHERE state = 'UNKNOWN' AND host = $1
+		AND NOT EXISTS (SELECT 1 FROM outbox_cursors hc WHERE hc.consumer = 'sched.hold.' || attempts.mission_id) ORDER BY started_at LIMIT 20`, string(s.cfg.Host))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fabd: unknown sweep:", err)
 		return 0

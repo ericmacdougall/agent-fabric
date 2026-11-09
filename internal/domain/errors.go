@@ -22,6 +22,10 @@ var (
 	ErrLiveTestMissing = errors.New("done needs a live_test receipt for the deployed commit")
 	// ErrUnsupportedEvent: the log holds an event kind this build cannot interpret.
 	ErrUnsupportedEvent = errors.New("unsupported event kind")
+	// ErrStreamHeld (F1a): the mission is held because a stored event of it
+	// cannot be decoded by this build. It is a plain sentinel, never stored
+	// and never a *store.Refusal, so the same command succeeds after the fix.
+	ErrStreamHeld = errors.New("stream held: a stored event of this mission cannot be decoded by this build")
 	// goodqa#15324 S1b ladder refusals.
 	ErrInvalidReceipt   = errors.New("invalid ladder record")
 	ErrNotLadderMission = errors.New("ladder records go only on a ladder mission")
