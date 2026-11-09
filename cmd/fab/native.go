@@ -31,44 +31,9 @@ func nativeRunMain(args []string) error {
 	if *prov != g.Provider {
 		return fmt.Errorf("--provider %q does not match the grant (%q)", *prov, g.Provider)
 	}
-	// The review DSN is always taken out of the environment before any worker
-	// can be constructed, flag on or off. Only FABRIC_REVIEW_GATE=1 uses it.
-	reviewDSN, err := takeReviewDSN()
+	opts, err := nativeOptions(g, *fake)
 	if err != nil {
 		return err
-	}
-	opts := native.Options{ReviewGate: reviewGateEnabled(), ReviewDSN: reviewDSN, ToolExitCleanup: toolExitCleanupEnabled()}
-	if *fake {
-		if os.Getenv("FABRIC_ALLOW_FAKE_HOST") != "1" {
-			return errors.New("--unconfined-fake-host is refused: it runs tools with no containment")
-		}
-		fmt.Fprintln(os.Stderr, "WARNING: running tools with NO containment (fake host); this is not a native-boundary run")
-		opts.Starter = fakehost.New()
-		opts.Boundary = tools.Boundary{Host: "fake-unconfined", Contained: true}
-	} else {
-		p, err := profileForThisHost()
-		if err != nil {
-			return err
-		}
-		w, ok := p.(interface {
-			Wait(host.Handle) (int, error)
-		})
-		if !ok {
-			return errors.New("host profile cannot wait on children")
-		}
-		opts.Starter = waitStarter{p, w}
-		if err := os.MkdirAll(g.RunDir, 0o700); err != nil {
-			return err
-		}
-		scratch, err := os.MkdirTemp(g.RunDir, "controls-")
-		if err != nil {
-			return err
-		}
-		results, err := p.NegativeControls(scratch)
-		if err != nil {
-			return err
-		}
-		opts.Boundary = tools.BoundaryFromControlsRequired(p.Name(), results, g.RequiredControls)
 	}
 	return withStore(func(_ context.Context, st *store.Store) error {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(g.WallSeconds+120)*time.Second)
@@ -80,6 +45,51 @@ func nativeRunMain(args []string) error {
 		}
 		return err
 	})
+}
+
+// nativeOptions resolves the host boundary, tools and review settings for a
+// native run. `fab mission run` and `fab harness run` share it.
+func nativeOptions(g native.Grant, fake bool) (native.Options, error) {
+	// The review DSN is always taken out of the environment before any worker
+	// can be constructed, flag on or off. Only FABRIC_REVIEW_GATE=1 uses it.
+	reviewDSN, err := takeReviewDSN()
+	if err != nil {
+		return native.Options{}, err
+	}
+	opts := native.Options{ReviewGate: reviewGateEnabled(), ReviewDSN: reviewDSN, ToolExitCleanup: toolExitCleanupEnabled()}
+	if fake {
+		if os.Getenv("FABRIC_ALLOW_FAKE_HOST") != "1" {
+			return native.Options{}, errors.New("--unconfined-fake-host is refused: it runs tools with no containment")
+		}
+		fmt.Fprintln(os.Stderr, "WARNING: running tools with NO containment (fake host); this is not a native-boundary run")
+		opts.Starter = fakehost.New()
+		opts.Boundary = tools.Boundary{Host: "fake-unconfined", Contained: true}
+	} else {
+		p, err := profileForThisHost()
+		if err != nil {
+			return native.Options{}, err
+		}
+		w, ok := p.(interface {
+			Wait(host.Handle) (int, error)
+		})
+		if !ok {
+			return native.Options{}, errors.New("host profile cannot wait on children")
+		}
+		opts.Starter = waitStarter{p, w}
+		if err := os.MkdirAll(g.RunDir, 0o700); err != nil {
+			return native.Options{}, err
+		}
+		scratch, err := os.MkdirTemp(g.RunDir, "controls-")
+		if err != nil {
+			return native.Options{}, err
+		}
+		results, err := p.NegativeControls(scratch)
+		if err != nil {
+			return native.Options{}, err
+		}
+		opts.Boundary = tools.BoundaryFromControlsRequired(p.Name(), results, g.RequiredControls)
+	}
+	return opts, nil
 }
 
 // reviewGateFlag turns on the durable tool review gate for native runs.

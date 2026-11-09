@@ -131,7 +131,12 @@ func finalFor(out agent.Outcome, err error, cause error) harness.Final {
 	case errors.Is(cause, errInterrupted):
 		return harness.Final{Outcome: harness.OutcomeInterrupted, ExitCode: -1}
 	case errors.Is(cause, errStopped):
-		return harness.Final{Outcome: harness.OutcomeStopped, ExitCode: -1}
+		f := harness.Final{Outcome: harness.OutcomeStopped, ExitCode: -1}
+		// A real failure that raced with the stop must not vanish.
+		if err != nil && !errors.Is(err, context.Canceled) {
+			f.Reason = err.Error()
+		}
+		return f
 	}
 	if err == nil && out.Kind == agent.OutcomeApprovalRequired {
 		return harness.Final{Outcome: harness.OutcomeStopped, Reason: agent.OutcomeApprovalRequired, ExitCode: -1}
@@ -180,6 +185,24 @@ func (s *session) Wait(ctx context.Context) (harness.Final, error) {
 // Observer turns what the loop's Provider and Tools do into harness events.
 type Observer struct {
 	em *harness.Emitter
+}
+
+// NewObserver builds an Observer that reports to em. Callers that run the loop
+// themselves (internal/native, `fab harness run`) use it instead of the
+// Adapter, and call Finish when the loop ends.
+func NewObserver(em *harness.Emitter) *Observer { return &Observer{em: em} }
+
+// Finish emits the session's Final for a loop outcome and returns it as
+// recorded. A run is only done if the loop ended done and every event was
+// recorded. stopped says the caller ended the run by cancelling its context
+// (Stop), which settles as stopped rather than failed.
+func (o *Observer) Finish(ctx context.Context, out agent.Outcome, err error, stopped bool) harness.Final {
+	var cause error
+	if stopped {
+		cause = errStopped
+	}
+	f, _ := o.em.FinalOutcome(ctx, finalFor(out, err, cause))
+	return f
 }
 
 // bg detaches observer emits from the loop's context: after Interrupt or Stop
