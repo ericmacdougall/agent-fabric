@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 
@@ -23,7 +24,13 @@ func streamsMain(args []string) error {
 	limit := fs.Int("limit", 100, "page size (missions)")
 	after := fs.String("after", "", "list missions after this id")
 	if err := fs.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil // --help printed the usage; that is not a failure
+		}
 		return err
+	}
+	if fs.NArg() != 0 {
+		return usageError{fmt.Errorf("usage: fab streams held [--scan] [--limit N] [--after MISSION] (unexpected argument)")}
 	}
 	if *limit < 1 || *limit > 10000 {
 		return usageError{fmt.Errorf("--limit must be between 1 and 10000")}
