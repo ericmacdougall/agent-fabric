@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"fabric/internal/domain"
+	"fabric/internal/envelope"
 	"fabric/internal/host"
 	"fabric/internal/projection"
 	"fabric/internal/provider/claude"
@@ -638,7 +639,20 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	// Nothing is launched yet, so an unverifiable snapshot abandons cleanly.
 	cur, events, err := s.st.VerifiedSnapshot(ctx, mission)
 	if err != nil {
-		return s.abandonPrelaunch(ctx, mission, attempt, fence, "snapshot not verified: "+err.Error())
+		aerr := s.abandonPrelaunch(ctx, mission, attempt, fence, "snapshot not verified: "+err.Error())
+		// F1a: a log this build cannot decode holds the mission, at the
+		// current scheduler cursor so rows already applied are never
+		// redelivered. The abandon comes first, so a crash between the two
+		// cannot leave a live attempt on a held mission (the next tick
+		// starts, fails and abandons again).
+		if envelope.Undecodable(err) {
+			if herr := s.st.HoldMission(ctx, s.st.Pool(), mission); herr != nil {
+				fmt.Fprintln(os.Stderr, "fabd: hold:", herr)
+			} else {
+				fmt.Fprintf(os.Stderr, "fabd: held %s: its log cannot be decoded by this build\n", mission)
+			}
+		}
+		return aerr
 	}
 	proj, err := projection.Build(cur, events, projection.DefaultCapTokens, "continue the mission; end with the checkpoint schema")
 	if err != nil {

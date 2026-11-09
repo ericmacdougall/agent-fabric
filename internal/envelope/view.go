@@ -25,6 +25,12 @@ var (
 	ErrRowMismatch = errors.New("envelope: row and payload disagree on kind, mission or seq")
 )
 
+// Undecodable reports whether err says a stored event cannot be decoded by
+// this build (as opposed to a canonicalisation failure or a store fault).
+func Undecodable(err error) bool {
+	return errors.Is(err, ErrUnknownKind) || errors.Is(err, ErrPayload) || errors.Is(err, ErrRowMismatch) || errors.Is(err, domain.ErrUnsupportedEvent)
+}
+
 // PersonalTenant is the tenant every pre-F3 event belongs to (ADR 0001
 // choice 3). It is a literal, fixed here and in the ADR.
 const PersonalTenant = "t_personal"

@@ -32,11 +32,16 @@ func heldSetup(t *testing.T) (*store.Store, *Scheduler, domain.MissionID, domain
 // plant appends one event to a mission's log and outbox, as a writer would.
 func plant(t *testing.T, st *store.Store, mission domain.MissionID, kind, payloadFmt string) int64 {
 	t.Helper()
-	ctx := context.Background()
 	var seq int64
-	if err := st.Pool().QueryRow(ctx, `SELECT COALESCE(max(seq), 0) + 1 FROM events WHERE mission_id = $1`, string(mission)).Scan(&seq); err != nil {
+	if err := st.Pool().QueryRow(context.Background(), `SELECT COALESCE(max(seq), 0) + 1 FROM events WHERE mission_id = $1`, string(mission)).Scan(&seq); err != nil {
 		t.Fatal(err)
 	}
+	return plantAt(t, st, mission, seq, kind, payloadFmt)
+}
+
+func plantAt(t *testing.T, st *store.Store, mission domain.MissionID, seq int64, kind, payloadFmt string) int64 {
+	t.Helper()
+	ctx := context.Background()
 	payload := fmt.Sprintf(payloadFmt, string(mission), seq)
 	tx, err := st.Pool().Begin(ctx)
 	if err != nil {
@@ -204,5 +209,44 @@ func TestHeldMissionRestart(t *testing.T) {
 	}
 	if !hasHold(t, st, b) || counter(t, st) != 1 {
 		t.Fatalf("after restart: held=%v counter=%d", hasHold(t, st, b), counter(t, st))
+	}
+}
+
+// A hold found after START_ATTEMPT (the replay of the log fails) leaves no
+// live attempt, and is written at the scheduler cursor, so rows already
+// applied are never redelivered.
+func TestHoldFoundAfterStart(t *testing.T) {
+	ctx := context.Background()
+	st, ln, cfg := ownerSetup(t, "m_after")
+	s := New(st, cfg, ln)
+	if _, err := s.consumeOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var cursor int64
+	if err := st.Pool().QueryRow(ctx, `SELECT last_id FROM outbox_cursors WHERE consumer = 'sched'`).Scan(&cursor); err != nil {
+		t.Fatal(err)
+	}
+	s.afterRead = func() { plantAt(t, st, "m_after", 1000, "ATTEMPT_STARTED", badType) }
+	if err := s.runOnce(ctx, "m_after"); err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if n := countWhere(t, st, `SELECT count(*) FROM attempts WHERE mission_id = 'm_after' AND state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING')`); n != 0 {
+		t.Fatalf("%d non-terminal attempts on a held mission", n)
+	}
+	var holdAt int64
+	if err := st.Pool().QueryRow(ctx, `SELECT last_id FROM outbox_cursors WHERE consumer = 'sched.hold.m_after'`).Scan(&holdAt); err != nil {
+		t.Fatalf("no hold row: %v", err)
+	}
+	if holdAt != cursor {
+		t.Fatalf("hold written at %d, want the scheduler cursor %d (a lower id redelivers applied rows)", holdAt, cursor)
+	}
+	before := counter(t, st)
+	for i := 0; i < 3; i++ {
+		if _, err := s.consumeOutbox(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if counter(t, st) != before {
+		t.Fatal("rows already applied were redelivered")
 	}
 }
