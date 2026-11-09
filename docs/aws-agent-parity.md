@@ -362,6 +362,64 @@ Conventions: every AC below carries `Verify by:`; a negative case follows where 
 - AC-FL2: asynchronous executions with status, cancellation and multi-turn conversation with a workflow. Verify by: start, poll, cancel and resume tests; a cancelled execution leaves no running attempt.
 - AC-PM1: prompt management: templates with variables, variants, versions and aliases, with a diff and an evaluator hook. Verify by: a variable missing at render time is an error; a version is immutable.
 
+## Design inputs from internal prototypes
+
+The owner mined earlier internal agent prototypes for designs worth reusing. They are folded into the criteria above as design constraints, not as new tickets and not as copied code. Names of the source repositories, evidence trees and production addresses stay out of this repository.
+
+| Pattern | Folded into | Constraint it adds |
+|---|---|---|
+| Governed-action laws: one closed path from request to effect, intent recorded before the effect, an explicit unknown outcome settled by readback, single-use grants | F4 AC-ID6, F7 AC-PL1, F8 AC-GW1 | a grant is consumed once; a replay is refused; an effect whose outcome is unknown is never retried blind |
+| Per-subject hash-chained record with closed event kinds, an allow-list sanitiser, a golden vector, and appends in the caller's transaction | F1, F11 AC-TR2 | the chain covers digests and references, never content; the sanitiser is an allow-list; a node keeps a durable local outbox so records are not lost while the control plane is down |
+| Signed checkpoints with an independent minimum-sequence floor, plus a Merkle anchor | F11 AC-TR2 | a verifier fails when the stored head is below the signed floor (truncation), not only on edited rows |
+| Three-layer authorisation: default-deny policy, approval bound to a request fingerprint, signed allow-list | F4 AC-ID6, F7 AC-PL1 | each layer can deny alone; approval is useless for a different fingerprint |
+| Signed policy releases with separation of duties and case evidence; one-time-nonce, doubly signed pause | F7 AC-PL5, F4 | a policy bundle activates only with a second principal's signature and passing synthetic cases; a pause token is single use |
+| Staged model pipeline: typed stages, a post stage that cannot deny, circuit-breaker rules, budget admission separate from accounting, atomic reserve, settle and reconcile | F10 AC-GA1, AC-CO1 | admission and accounting are separate steps; settle never exceeds the hold; reconcile fixes drift against the provider |
+| Capability tokens: scoped signed tokens, instant revocation, argument-digest audit, a frozen tool list | F8 AC-GW1, AC-GW5, F4 AC-ID3 | revocation takes effect on the next call; audit records a digest of arguments, not the arguments |
+| Attested node profile: capability schema with a fingerprint, fail-closed tool isolation by OS principal, reconnect state machine, health-gated two-slot update, resource watchdog | F5 AC-RT1, AC-RT8 | a node advertises only what it attested; an update that fails its health gate rolls back |
+| Hook plus service-backstop probe matrix and tri-state receipts (PASS, FAIL, UNVERIFIED), with an evidence verifier that cannot pass vacuously | F6, F7, every Verify by | an enforcement claim without a backstop probe is UNVERIFIED, not PASS |
+| Identifier taxonomy: a trace id is never authority; trace context accepted only from an explicit opt-in header | F1 AC-1, F11 AC-TR3 | no authorisation decision reads a trace id or a propagated header |
+| Event envelope with a mandatory tenant, gap detection, explicit drops, monotonic versus wall time; a never-blocking bus and write-ahead log; a bundle checked with canary secrets and a hash manifest | F1, F11 | an explicit drop event for any loss; a canary-secret scan over every exported bundle |
+| Effect broker with one-subject signed receipts, a hash-chained ledger and one-use operations | F8, F4, F11 | a receipt names one request hash and cannot be reused for another |
+| Epoch-fenced leases and a signed acceptance that takes priority over database state | F5, F12 | a stale epoch cannot write; acceptance evidence outranks a mutable status column |
+| Credential broker: origin taken from the live target, approval gating, read-back refusal, redaction | F4 AC-ID4, F8 AC-GW5 | a credential is only released for the origin the tool is really talking to; it cannot be read back |
+| Adapter run loop: enrol, approve, poll, dispatch to an adapter, reply, acknowledge after the effect, dead-letter on restart | F6, F9 | acknowledgement follows the effect; a restart dead-letters unfinished work instead of replaying it blind |
+| Per-session model proxy: billed cost of record, model allow-list; per-task cgroup reaping; a worker user | F10 AC-GA1, F5 AC-RT1 | the cost of record is the provider's billed figure; the model list is enforced at the proxy |
+| Granted, expiring kill switches and an enforcement matrix per adapter | F4, F6, F7 | the presence of a kill switch proves nothing; an adapter declares what it can enforce |
+| Fail-closed egress proxy, disposable execution cell, command filtering on the browser protocol | F8 AC-BR1, AC-CI2 | a browser or code session reaches only allow-listed hosts and commands |
+| Hub with content-addressed storage, signed hub events and a restore drill | F3, F5, F9, F11 | Postgres row-level security instead of a file hub; a restore drill is part of the Verify by for any stored state |
+| Envelope with canonical JSON, typed actor, causation parents and a two-layer reader that parks events of unknown kinds | F1 | tenant and trace ids added; the reader parks, never crashes (as F1a) |
+| Approval permit field set (subject, scope, expiry, nonce, issuer), asymmetric signatures | F4 AC-ID6 | the permit names one request hash; single use |
+| Identity chain: machine-nested agent principals, local attestation, revocation epochs | F4 AC-ID1, F5 | revoking a machine epoch invalidates its agents' tokens at once |
+| Browser capability contract: session capability, control epoch, ownership modes, sensitive-session taint | F8 AC-BR1, AC-BR2 | a human takeover bumps the control epoch and fences the agent |
+| Route matrix, effect gateway that rechecks at execution time, Rule-of-Two | F7, F8 | see AC-PL6 |
+| Lease with fencing as one concept for election, device exclusivity and worktrees | F5, F8, F12 | one fence primitive, one test suite |
+| Two-level Merkle ledger with crypto-shredding | F11 AC-TR2, F14 AC-ME6 | per-tenant erasure keeps the chain verifiable |
+| Resident-engine adapter contract with capability negotiation and a quirk table | F6 | fail fast on a capability mismatch; one enforcement tier declared per adapter (see AC-PL7) |
+| Epoch-fenced reconciler with a prepared-then-read-postcondition crash protocol and agent words as hints | F5, F12 | a crash between prepare and commit is settled by reading the postcondition |
+| Effector boundary: typed request, parse and confine, default-deny gate, a broker that holds all credentials, safe errors | F7, F8, F4 | justification text is never policy input |
+| Reserve, provision, refund with idempotency and a TTL | F10 AC-CO1, F8 leases | the budget primitive for 429s and leases; replaces check-then-act caps |
+| Desired-versus-observed reconciliation with SKIP LOCKED claims, fencing generation and atomic reservation | F5 | leaderless placement and lost-node handling |
+| Per-tenant signed, hash-chained trace with an offline verification bundle and quarantine | F11 | an unkeyed chain over payload hashes is not enough: the chain is keyed or anchored |
+| Event envelope with a per-stream sequence, durable timers, no unbounded in-memory index | F1, F9 | schema version and tenant mandatory |
+| Admission pipeline gate, transform, observe, with a side-effect-free `Evaluate` and a recorded rationale; three enforcement tiers per adapter | F7 | the decision records what could really be enforced (an allow-list flag in a harness is advisory, not enforcement) |
+| Lifecycle state machines with mandatory evidence, owned by the kernel | F2 | per-stream-kind transition tables; evidence is a digest-stamped artifact |
+| Execution-environment interface: provision, exec, copy in, copy out, teardown, cost, optional snapshot | F8 AC-CI1, F5 | one sandbox provider contract for code, browser and desktop |
+| Digest-pinned, versioned skill discovery with progressive disclosure | F16 AC-AD3, F8 registry | archive safety, skip-unknown semantics, signed approval and per-tenant allow-lists |
+| Anti-hollowness process: every slice's Verify by must be able to fail | all slices | already the rule here (failing control first) |
+| Scrubbed-environment launcher for harness adapters | F6 | adapters never inherit the caller's environment (already enforced in the merged adapters) |
+
+Not carried over: rotating pools of subscription accounts (terms-of-service risk); legacy supervision and release scripts; private evidence trees; hard-coded hosts.
+
+Gaps in the first draft that the mining surfaced, now acceptance criteria:
+
+- AC-PL6 (F7): taint tracking and a Rule-of-Two: a session that has read untrusted content and holds sensitive data cannot also take an outward effect without human approval; data read from a sensitive session taints later effects. Verify by: a scripted session in which untrusted tool output plus a secret read blocks the next outward effect; clearing requires a recorded approval. NEG: a taint label cannot be dropped by a tool the model controls.
+- AC-PL7 (F7): fail-closed rollout practice: a new rule runs in a degrade log (decisions recorded, nothing blocked) before enforcement, and enforcement requires the log to show the expected decisions; each adapter declares one enforcement tier (advisory, hook, or sandbox-backed) and the decision record names it. Verify by: a bundle in log-only mode records decisions and blocks nothing; promoting it to enforce without log evidence is refused; a claim of enforcement without a backstop probe is UNVERIFIED.
+- AC-BR4 (F8): human presence and override: a human can pause, take over and return control of a browser or desktop session; the agent cannot act during takeover; each change bumps the control epoch. Verify by: an epoch test with a stale agent write refused.
+- AC-CO5 (F10): honest kill-switch reporting: a kill switch stops new work immediately and reports a running command as still running until it has really ended; it never reports a running command as stopped. Verify by: a long-running command, kill, status shows running until the process group is gone.
+- AC-KB8 (F14): the knowledge base answers "unknown" when retrieval has no supporting source rather than generating one. Verify by: a question with no matching source returns unknown with no citation.
+
+Cautions carried with these inputs: a posture of "consent once, then full power, no prompts" is not adopted, only its mechanisms (signed manifests, revocation, audit), because Fabric's policy is configurable (F7); a trace may store content, so stored records use digest-and-reference; a known gap of receipts lost when control is down means the F1 stream needs a durable local outbox on the node; private evidence trees and hard-coded production addresses are not imported.
+
 ## Out of the box on a fresh personal install
 
 AC-OOTB (F13): on a fresh personal install (one binary plus the bundled or managed Postgres, local issuer, no cloud account and no network access beyond the model provider the user configures), `fab init` followed by `fab smoke --parity` runs one check per row group above and every check must pass or fail visibly; none may be skipped silently. Verify by: a scripted install on a disposable host in CI. Specifically:
