@@ -1,6 +1,6 @@
-# AWS agent-stack parity matrix
+# Agent-stack parity matrix (AWS, Microsoft, Google) and provider interfaces
 
-Requirement (goodqa#15361): anything the AWS agent stack can do, Fabric can do out of the box, model-agnostic, with no dependency on any one cloud. This page maps the capabilities of Amazon Bedrock AgentCore, Bedrock Guardrails, Bedrock Agents (classic), Knowledge Bases, Flows and Prompt Management, Bedrock evaluations and cost controls onto Fabric's 12 dimensions and the slices F0 to F16 in [status-and-roadmap.md](status-and-roadmap.md) and [slices.md](slices.md). Every GAP and PARTIAL has an acceptance criterion with a `Verify by:` below.
+Requirement (goodqa#15361): anything the AWS agent stack can do, Fabric can do out of the box, model-agnostic, with no dependency on any one cloud. This page maps the capabilities of Amazon Bedrock AgentCore, Bedrock Guardrails, Bedrock Agents (classic), Knowledge Bases, Flows and Prompt Management, Bedrock evaluations and cost controls onto Fabric's 12 dimensions and the slices F0 to F16 in [status-and-roadmap.md](status-and-roadmap.md) and [slices.md](slices.md). Every GAP and PARTIAL has an acceptance criterion with a `Verify by:` below. A later section maps Microsoft (Agent Framework, Azure AI Foundry Agent Service) and Google (Agent Runtime, ADK, A2A) the same way and defines the provider interfaces that let a tenant swap or mix providers per component (slice F17).
 
 Two constraints from the owner apply to everything here: Fabric stays model-agnostic, and no capability may depend on Google Vertex AI.
 
@@ -28,6 +28,32 @@ Read on 2026-11-09. The pages were read through a summarising fetcher, so featur
 | Knowledge Bases | https://docs.aws.amazon.com/bedrock/latest/userguide/kb-how-it-works.html | ingestion, chunking, embeddings, vector index, retrieval |
 | Flows | https://docs.aws.amazon.com/bedrock/latest/userguide/flows.html | nodes, versions, aliases, guardrails, async executions |
 | Evaluations | https://docs.aws.amazon.com/bedrock/latest/userguide/evaluation.html | model and RAG evaluation, LLM-as-a-judge, human review |
+
+### Microsoft and Google sources
+
+Read on 2026-11-08 from the current official documentation. "Read" means the page body was fetched; "search" means only a search-result excerpt was seen, which lowers confidence. Naming has drifted: Google renamed Vertex AI and Agent Engine to Gemini Enterprise Agent Platform (Agent Runtime) in April 2026 and moved the ADK docs to adk.dev; Microsoft renamed the Foundry RBAC roles. The old names are used only where a page still does.
+
+| Area | URL | Confidence |
+|---|---|---|
+| Agent Framework overview and workflows | https://learn.microsoft.com/en-us/agent-framework/overview/agent-framework-overview, .../concepts/workflows/ | high (read) |
+| Foundry Agent Service: overview, hosted agents, toolbox | https://learn.microsoft.com/en-us/azure/foundry/agents/overview, .../agents/concepts/hosted-agents, .../agents/concepts/toolbox-overview | high (read) |
+| Foundry identity (Entra Agent ID) | https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/agent-identity | high (read) |
+| Foundry IQ (knowledge) and own-resource setup | https://learn.microsoft.com/en-us/azure/foundry/agents/concepts/what-is-foundry-iq, .../agents/how-to/use-your-own-resources | high (read) |
+| Foundry browser automation | https://learn.microsoft.com/en-us/azure/foundry/agents/how-to/tools/browser-automation | high (read) |
+| Foundry guardrails, AI red teaming agent, tracing | https://learn.microsoft.com/en-us/azure/foundry/guardrails/guardrails-overview, .../concepts/ai-red-teaming-agent, .../observability/concepts/trace-agent-concept | high (read) |
+| Foundry memory, model router, control plane, evaluators | .../agents/concepts/what-is-memory, .../openai/concepts/model-router, .../control-plane/overview, .../concepts/built-in-evaluators | medium (search) |
+| Foundry runtime components, connected agents, computer use | .../agents/concepts/runtime-components | low (unread or unverified) |
+| Gemini Enterprise Agent Platform: overview, runtime, agents | https://docs.cloud.google.com/gemini-enterprise-agent-platform/overview, .../build/runtime, .../agents | high (read) |
+| Agent Gateway, governance policies, Agent Registry | https://docs.cloud.google.com/gemini-enterprise-agent-platform/govern/gateways/agent-gateway-overview, .../govern/policies/overview, https://docs.cloud.google.com/agent-registry/overview | high (read) |
+| Code execution sandbox, RAG Engine, Agent Studio | .../scale/sandbox/code-execution-overview, .../build/rag-engine/rag-overview, .../agent-studio | high (read) |
+| Memory Bank, agent identity, evaluation (agents, simulation, online), computer-use sandbox, Model Armor, Agent Garden | .../scale/memory-bank, .../govern/agent-identity-overview, .../optimize/evaluation/evaluate-agents, .../scale/sandbox/computer-use, https://docs.cloud.google.com/model-armor/model-armor-vertex-integration, .../build/agent-garden | medium (search) |
+| Agent Engine overview (earlier name of the runtime) | https://docs.cloud.google.com/vertex-ai/generative-ai/docs/agent-engine/overview | high (read) |
+| ADK | https://adk.dev/ | high (read) |
+| A2A protocol v1.0 | https://a2a-protocol.org/latest/specification/ | high (first 100k of 256k characters read) |
+| AP2 v0.2 (agent payments) | https://ap2-protocol.org/ap2/specification/ | high (read) |
+| Gemini Enterprise and Agentspace, Example Store, Foundry connected agents | https://cloud.google.com/blog/products/ai-machine-learning/introducing-gemini-enterprise-agent-platform | low (blog or name only; details unread) |
+
+Not covered: Google pricing, Agentspace details, Example Store details, Foundry connected agents and computer use details. Nothing here calls a Microsoft or Google service: it is a documentation read only, and no Vertex or aiplatform access exists in this repository's deployments, CI or tests.
 
 ## Baseline: what Fabric has today
 
@@ -234,9 +260,9 @@ Counts are taken from the tables above (see the check at the end of this page).
 | Status | Rows |
 |---|---|
 | HAVE | 0 |
-| PARTIAL | 37 |
-| GAP | 82 |
-| Total | 119 |
+| PARTIAL | 39 |
+| GAP | 100 |
+| Total | 139 |
 
 Read this as the honest state: Fabric has the durable kernel and a few control points (spend caps, a review gate, sandbox controls, an event trace). It lacks the surrounding platform: identity, guardrails, a tool gateway, memory and knowledge, evaluation, browser and code services, versions and aliases, and OpenTelemetry.
 
@@ -420,6 +446,101 @@ Gaps in the first draft that the mining surfaced, now acceptance criteria:
 
 Cautions carried with these inputs: a posture of "consent once, then full power, no prompts" is not adopted, only its mechanisms (signed manifests, revocation, audit), because Fabric's policy is configurable (F7); a trace may store content, so stored records use digest-and-reference; a known gap of receipts lost when control is down means the F1 stream needs a durable local outbox on the node; private evidence trees and hard-coded production addresses are not imported.
 
+## Microsoft and Google crosswalk
+
+Requirement (goodqa#15361, owner message of 2026-11-08): map the Microsoft agent stack (Agent Framework, Azure AI Foundry Agent Service, Foundry evaluations, tracing, content safety and guardrails, Entra Agent ID, A2A and MCP support) and the Google agent stack (Agent Runtime, formerly Vertex AI Agent Engine, with Sessions, Memory Bank, code execution, evaluation and tracing; ADK; Agent Builder and Agent Garden; A2A; Gemini Enterprise) onto Fabric, add what is missing, give Fabric its own first-party implementation of every component, and let a tenant or user replace or mix providers per component through versioned interfaces.
+
+The AWS matrix above stays the row-level reference. The table below is the same map one level up: each Fabric component against the three providers, so a reader sees where Microsoft and Google differ from AWS. Row ids refer to the AWS matrix; MS-n and GO-n rows (next section) hold what only Microsoft or Google offers. Status is Fabric's own: HAVE, PARTIAL or GAP, the worst status of the AWS rows it covers unless a row says otherwise. Sources are in the Microsoft and Google table under Sources.
+
+| Component (provider interface) | Fabric first-party and slice | AWS AgentCore (rows) | Microsoft | Google |
+|---|---|---|---|---|
+| Runtime (`runtime`) | PARTIAL: native, claude-code adapters, per-run sandbox; F5, F6, F16 | Runtime, Harness (RT-1 to RT-18) | Prompt agents, hosted agents (VM-isolated session, persistent home, scale to zero, Responses and A2A protocols), Agent Framework | Agent Runtime (container, ADK and framework templates, VPC-SC, streaming), ADK, Managed Agents API (preview) |
+| Sessions and memory (`memory`) | GAP: event log only; F14 | Memory (ME-1 to ME-7) | Foundry conversations, per-user durable state store, Foundry Memory (preview), Agent Framework context providers | Sessions, Memory Bank (profiles, revisions), ADK sessions |
+| Tools and gateway (`tools`) | GAP: F8, F10 | Gateway, Registry (GW-1 to GW-12) | Toolbox (one MCP endpoint, tool search, skills), tool catalog, MCP and OpenAPI tools, API Management AI Gateway | Agent Gateway (ingress and egress, default-deny), Agent Registry, ADK tools, Google MCP servers |
+| Code sandbox (`sandbox`) | PARTIAL: Landlock, cgroup, Seatbelt controls; F8, F5 | Code Interpreter (CI-1 to CI-4) | Code interpreter tool, hosted-agent sandbox | Code execution sandbox (Python, no network), shell and custom-container sandboxes |
+| Browser and desktop (`computer`) | GAP: F8 | Browser (BR-1 to BR-4) | Browser automation (live view, take control, recording), computer use | Computer Use sandbox (CDP, live view) |
+| Identity (`identity`) | GAP: actors are self-asserted; F4 | Identity (ID-1 to ID-8) | Entra Agent ID (blueprint and instance, on-behalf-of, conditional access, sponsors) | Agent Identity (SPIFFE, certificate-bound tokens), context-aware access |
+| Policy (`policy`) | PARTIAL: review gate in shadow, evaluate and enforce modes; F7 | Policy (PO-1 to PO-5) | Guardrail intervention points, egress controls | Governance policies (IAM, natural-language constraints), Agent Gateway enforcement |
+| Guardrails (`guardrail`) | PARTIAL: PII redaction only; F7, F10 | Guardrails (GR-1 to GR-12) | Foundry guardrails (content, prompt attacks, protected material, PII, task adherence, groundedness) | Model Armor (prompt injection, harmful content, sensitive data, malware) |
+| Evaluation (`eval`) | GAP: verification before success only; F15 | Evaluations, Optimization (EV-1 to EV-4, OP-1 to OP-3, BE-1 to BE-5) | Built-in agent evaluators, AI Red Teaming Agent, continuous evaluation, agent optimizer | Agent evaluation, user simulation, online monitors, Optimizer, ADK eval |
+| Observability and trace (`trace`) | PARTIAL: harness JSONL trace, metrics; F11 | Observability (OB-1 to OB-6) | OpenTelemetry tracing with multi-agent conventions, sensitive-content table | Cloud Trace, Logging and Monitoring via OpenTelemetry |
+| Model gateway (`model`) | PARTIAL: native loop speaks Anthropic only; F10 | Gateway model routing (GW-6, RT-9) | Model catalog, model router, AI Gateway quotas | Model Garden, ADK model routing |
+| Knowledge and retrieval (`knowledge`) | GAP: F14 | Knowledge Bases (KB-1 to KB-8) | Foundry IQ (permission-aware retrieval), file search, AI Search, Bing grounding | RAG Engine, Vector Search, grounding |
+| Multi-agent and A2A (`agents`) | GAP: F9, F12 | Multi-agent (RT-18, AG-3, GW-8) | Agent Framework workflows, A2A v1.0 endpoint and tool, connected agents (unverified) | ADK multi-agent and graph workflows, A2A v1.0 |
+| Registry and catalog (`registry`) | GAP: F8, F16 | Registry (GW-11, GW-12) | Entra Agent Registry, Foundry portal | Agent Registry, Agent Garden, Agent Studio |
+| Cost and payments (`cost`, `payments`) | PARTIAL: native spend caps; F10, F8 | Cost, Payments (CO-1 to CO-5, PY-1, PY-2) | quota panes, per-agent cost view; no payments | gateway token budgets (announced), AP2 payment mandates |
+
+### Rows only Microsoft or Google offers
+
+Same status vocabulary and row format as the AWS matrix. A capability that an AWS row already covers is not repeated: for example live view and human takeover (BR-2), guardrails on tool calls (GR-9), memory namespaces (ME-5) and online evaluation (EV-3) cover the Microsoft and Google equivalents. A new `AC-XPn` is added only where the capability is genuinely absent.
+
+| ID | Provider capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| MS-1 | Toolbox: a versioned tool bundle behind one MCP endpoint, promote-to-default, tool search, skills as versioned resources, usable by runtimes outside the platform | GAP | none | F8 AC-XP1 |
+| MS-2 | Agent identity governance: a human sponsor, expiry and conditional-access context on every agent identity | GAP | none | F4 AC-XP2 |
+| MS-3 | Per-destination egress allow-list for a hosted agent | PARTIAL | host control `tcp_connect_limited_to_allowed_ports`; ports, not destinations | F7 AC-XP3 |
+| MS-4 | Automated agent red teaming (prohibited actions, data leakage, task adherence, indirect prompt injection) reporting an attack success rate | GAP | none | F15 AC-XP4 |
+| MS-5 | Sensitive trace content routed to a separate, access-restricted store | GAP | PII redaction only | F11 AC-XP5 |
+| MS-6 | Retrieval under the caller's identity with source ACLs honoured | GAP | none | F14 AC-XP6 |
+| MS-7 | Multi-agent trace conventions: spans named `invoke_agent`, `invoke_workflow`, `plan`, `execute_tool` | GAP | none | F11 AC-XP7 |
+| MS-8 | Voice agents and telephone channels | GAP | none | none: owner decision 6 below |
+| MS-9 | A2A v1.0 endpoint and A2A tool | GAP | none | F9 AC-MB4 (see GO-7) |
+| MS-10 | Workflow with durable checkpoints, human-in-the-loop, fan-out and fan-in (Agent Framework) | PARTIAL | reducer and fences are durable; no declarative workflow | F16 AC-FL1, F12 AC-MA1 |
+| GO-1 | One ingress and egress enforcement plane, default-deny, routing only to registered agents and tools | GAP | none | F8 AC-XP8 |
+| GO-2 | Semantic governance: a natural-language constraint checked against a tool call's intent at run time | GAP | none | F7 AC-XP9 |
+| GO-3 | Sender-constrained agent credentials: a short-lived workload certificate and tokens bound to the agent's key | GAP | none | F4 AC-XP10 |
+| GO-4 | Memory with immutable revisions, a rollback window and schema-filled profiles | GAP | none | F14 AC-XP11 |
+| GO-5 | AP2 agent payment mandates as a payments protocol | GAP | none | F8 AC-PY1 (gated) |
+| GO-6 | A gallery of sample agents that run unchanged | GAP | none | F16 AC-XP12 |
+| GO-7 | A2A v1.0: agent card, task states, streaming, push notification | GAP | none | F9 AC-MB4 |
+| GO-8 | Visual agent builder (Agent Studio, Agent Designer) | GAP | none | out of Fabric: the UI belongs to GoodQA; Fabric exposes the agent definition API (F16 AC-AD1) |
+| GO-9 | Computer-use sandbox driven through CDP with live view | GAP | none | F8 AC-BR1, AC-BR2 |
+| GO-10 | Managed store of few-shot examples (Example Store; source details unread, low confidence) | GAP | none | none: confirm need before any AC |
+
+### Cross-provider additions (new acceptance criteria)
+
+- AC-XP1 (F8): a tool bundle has immutable versions and a promoted default; one MCP endpoint serves the default (or a pinned version) of a bundle, with auth and guardrails applied at the endpoint; skills are served as versioned resources. Verify by: `go test ./internal/tools/bundle`: publish v1 and v2, promote v2, a client pinned to v1 keeps v1, rollback restores v1. NEG: a client cannot list a bundle version it has no grant for.
+- AC-XP2 (F4): every agent identity has a human sponsor and an expiry; an expired or sponsorless identity is refused on its next command; context conditions (node, network zone, time) can deny. Verify by: identity tests with an expired identity, a removed sponsor and a denied context. NEG: extending an expiry needs a principal other than the agent.
+- AC-XP3 (F7): a run's network egress is an allow-list of destinations (host and port), enforced by the broker and the host sandbox; anything else is refused and traced. Verify by: a sandbox test that reaches the allowed destination and fails to reach another host on the same port. NEG: a DNS name that resolves to an allowed address is not itself allowed.
+- AC-XP4 (F15): an automated red-team run replays attack categories (prohibited action, data leakage, task adherence, indirect prompt injection) against an agent definition in a disposable environment and reports the attack success rate per category. Verify by: a run against a deliberately vulnerable fixture agent reports a non-zero rate, and against a hardened fixture a zero rate; the run uses only the provider named in the grant. NEG: the run cannot write outside its disposable environment.
+- AC-XP5 (F11): fields classed sensitive are written to a separate store with its own role; the shared trace carries a reference and a digest. Verify by: a test that the shared trace role cannot read the sensitive store and a dump of the shared trace contains no sensitive value. NEG: removing the class tag does not move existing records back into the shared trace.
+- AC-XP6 (F14): a retrieval carries the caller's identity and returns only chunks whose source ACL allows that identity; an ACL change takes effect on the next query. Verify by: two principals, one document, one allowed; revoke and query again. NEG: an agent's own identity never widens the user's access.
+- AC-XP7 (F11): spans use the names `invoke_agent`, `invoke_workflow`, `plan` and `execute_tool` with the OpenTelemetry generative-AI attributes, and a child agent's span links to the parent. Verify by: a two-agent run exported to a fixture collector, checked against fixed vectors. NEG: a span without a trace id is not exported.
+- AC-XP8 (F8): the gateway routes a request only to a registered tool or agent, and its default is deny for ingress and egress; an unregistered target is refused and traced. Verify by: a registered and an unregistered MCP server and A2A peer. NEG: a registry entry that is withdrawn stops routing on the next request.
+- AC-XP9 (F7): a policy may carry a natural-language constraint that a model-backed judge checks against each tool call's stated intent; it starts in shadow mode, and a judge outage never turns an allow into a deny silently or a deny into an allow. Verify by: fixtures of intent-matching and intent-violating calls, a judge outage, and mode transitions recorded. NEG: the judge's output never contains or is allowed to alter the policy bundle.
+- AC-XP10 (F4): an agent credential is short-lived and bound to a key the agent holds; a token used from a different key is refused. Verify by: a test with a stolen token replayed from another key, and an expired certificate. NEG: a revoked identity's still-unexpired token is refused at the broker.
+- AC-XP11 (F14): every memory write creates an immutable revision; a deleted or overwritten record can be restored within a stated window; a profile schema constrains the fields an extraction may fill. Verify by: write, overwrite, delete, restore tests and a schema-violating extraction. NEG: a restore cannot cross tenants.
+- AC-XP12 (F16): a gallery of sample agent definitions ships in the repository and each runs under `fab smoke --parity` with first-party providers only. Verify by: the smoke run. NEG: a sample that needs a network service other than the configured model provider fails the check.
+
+## Provider interfaces (epic constraint)
+
+This is a design constraint on every slice and an acceptance criterion for the program. The decision is recorded in [ADR 0002](adr/0002-provider-interfaces.md).
+
+1. **First party.** Fabric ships its own implementation of every component in the crosswalk: runtime, sessions and memory, tools and gateway, code sandbox, browser and desktop, identity, policy, guardrails, evaluation, trace, model gateway, knowledge and retrieval, multi-agent and A2A, registry, cost. A fresh install uses only these (AC-OOTB).
+2. **A versioned interface per component.** Each kind has a contract named `fabric.provider/<kind>/v1` (the table above gives the kinds), written as Go interfaces plus a wire form for out-of-process providers, with a golden descriptor and a conformance suite.
+3. **A descriptor.** Each adapter declares: kind, name, contract version, capabilities, enforcement tier (`fabric_enforced`: Fabric decides and the provider only executes; `provider_enforced`: the provider decides and Fabric verifies by readback; `advisory`: the provider's own checks, Fabric only records), data residency, network need and spend class.
+4. **Per-tenant and per-stream binding.** A tenant chooses a provider per kind; a stream may override where the kind allows it. A run pins its bindings at start, so a binding change never applies mid-run.
+5. **One policy, one trace.** The F7 policy decision and the F11 trace record are made by Fabric around every provider call, whichever provider is bound, so a provider cannot skip them.
+6. **Mixing.** Providers combine freely across kinds, for example Bedrock models with Foundry evaluations and Fabric memory.
+7. **Vendor adapters.** AWS, Microsoft and Google adapters are interface plus contract tests against a fake first. A live AWS or Microsoft adapter needs a recorded owner decision for spend before it can be enabled. A Google adapter is never run live: Fabric's deployments, CI and tests never call Vertex or `aiplatform`, hold no `aiplatform` IAM grant and run no live Vertex adapter.
+
+New acceptance criteria (slice F17, below):
+
+- AC-PI1 (F17): every kind has a versioned contract with a golden descriptor; an unknown kind, version or capability name is refused at registration. Verify by: `go test ./internal/provider/registry`. NEG: a descriptor that claims a capability its conformance run did not exercise is refused.
+- AC-PI2 (F17): every kind has a first-party implementation and `fab smoke --parity` passes with only first-party providers. Verify by: the smoke run on a fresh install. NEG: unbinding the first-party implementation of a kind without a replacement fails startup.
+- AC-PI3 (F17): each kind has a conformance suite that a provider runs against itself and that can run as a probe against a live adapter. Verify by: the suite passes for the first-party provider and for the fake third-party provider, and fails for a mutated provider (a mutant per kind). NEG: a suite that passes for a provider returning empty results is rejected.
+- AC-PI4 (F17): enforcement tiers are real. A capability class that policy marks as must-enforce cannot be served by an `advisory` provider. Verify by: a policy that requires `fabric_enforced` for `shell` and a provider declaring `advisory`: the binding is refused. NEG: a provider that upgrades its declared tier at run time is refused.
+- AC-PI5 (F17): bindings are per tenant and per stream, pinned per run. Verify by: tenant A binds a fake provider, tenant B sees the first-party one; a binding changed during a run applies only to the next run. NEG: tenant B cannot read tenant A's binding or credentials.
+- AC-PI6 (F17): policy and trace are provider-independent. Verify by: the same mission run once with first-party providers and once with fake third-party providers yields the same policy decisions and the same trace event kinds. NEG: a provider that returns without Fabric having written the intent and result events fails the call.
+- AC-PI7 (F17): providers can be mixed across kinds in one mission. Verify by: a mission with model, evaluation and memory each bound to a different fake provider completes with one trace. NEG: a provider bound for one kind cannot be called for another.
+- AC-PI8 (F17): vendor adapters exist only as interface plus a contract test against a fake until an owner decision is recorded; a live adapter that spends money needs that decision, and a Google adapter has no live path. Verify by: a registry test that refuses to enable a live adapter without a decision record, and a CI test that fails on any `aiplatform` hostname, Vertex client library or IAM grant in the repository and its workflows. NEG: setting the decision record by hand in a tenant's configuration does not enable it.
+- AC-PI9 (F17): a third-party or user adapter runs out of process over a documented transport with least privilege and credentials from the credential provider. Verify by: an adapter that crashes, hangs or returns malformed data fails closed within a bound and the run reports the provider by name. NEG: an adapter process cannot read another adapter's credentials.
+- AC-PI10 (F17): data a provider holds can be exported in a neutral, versioned form (memory records, evaluation datasets and results, traces) so a tenant can leave a provider. Verify by: export from one fake provider and import into another, byte-compared on the neutral form. NEG: an export never contains another tenant's records.
+
+## Slice addition: F17 Provider interfaces
+
+Dimensions: multi-harness, multi-machine, configurable policy, traceable, multi-tenant. Fixes one irreversible choice, the provider contract names and descriptor fields (ADR 0002). It depends on F3 (tenant binding) and F7 and F11 (policy and trace around every call), and its contracts are drafted early so that F6, F8, F10, F14, F15 and F9 build their first-party implementations behind them. Its acceptance criteria are AC-PI1 to AC-PI10 above.
+
 ## Out of the box on a fresh personal install
 
 AC-OOTB (F13): on a fresh personal install (one binary plus the bundled or managed Postgres, local issuer, no cloud account and no network access beyond the model provider the user configures), `fab init` followed by `fab smoke --parity` runs one check per row group above and every check must pass or fail visibly; none may be skipped silently. Verify by: a scripted install on a disposable host in CI. Specifically:
@@ -427,6 +548,7 @@ AC-OOTB (F13): on a fresh personal install (one binary plus the bundled or manag
 - policy defaults are on (deny by default for unknown capability classes), the guardrail local provider runs with default content, PII and prompt-attack settings, and traces and metrics are recorded without configuration;
 - identity works through the local issuer; the token vault, memory store, knowledge base and registry are created by `fab init` in the same database;
 - a local tool gateway and a local MCP fixture are registered, and the code capability and the browser capability run, and on the reference CI host every group must PASS (on a host missing a prerequisite the smoke test reports that group as FAILED with the exact prerequisite, never as passed);
+- every provider kind has a first-party implementation bound by default (AC-PI2), and the smoke run lists the bound provider for each kind;
 - no group requires a hosted AWS, GCP or other cloud service; a smoke run with all outbound network except the configured model provider blocked still passes;
 - NEG: a smoke run with the guardrail provider disabled by configuration fails the smoke test (the default is not allowed to be silently off).
 
@@ -436,7 +558,9 @@ AC-OOTB (F13): on a fresh personal install (one binary plus the bundled or manag
 2. Policy language (AC-PL2): Fabric JSON bundles first with a Cedar importer later, or Cedar from the start.
 3. Guardrail provider: the built-in local provider is rule and classifier based and model-agnostic. Confirm that a model-backed classifier through the gateway is acceptable for prompt-attack and grounding checks, and which model class (a local small model or any configured provider).
 4. Knowledge-base store: Postgres vector extension by default for the personal install. Confirm.
-5. Order: F4 (identity) and F7 (policy and guardrails) first because everything else is gated by them; F14 to F16 after F1 to F3 settle the envelope, streams and tenancy.
+5. Provider adapters (AC-PI8): confirm that a live AWS or Microsoft adapter needs a recorded owner decision for spend before it is enabled, and that a Google adapter stays interface plus fake only (Fabric never calls Vertex or `aiplatform`).
+6. Voice agents and telephone channels (MS-8) and a managed example store (GO-10): add them to scope or leave them out. Recommendation: leave both out until a product need is stated.
+7. Order: F4 (identity) and F7 (policy and guardrails) first because everything else is gated by them; F14 to F16 after F1 to F3 settle the envelope, streams and tenancy.
 
 ## Check
 
