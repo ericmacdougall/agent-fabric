@@ -60,7 +60,7 @@ func init() {
 		line(map[string]any{"role": "assistant", "content": "Stop hook\n\nran a hook"})
 		os.Exit(0)
 	case "slowdrain":
-		for i := 0; i < 150; i++ {
+		for i := 0; i < 420; i++ { // ~110 KB: fits in the pipe plus the read buffer, so the child exits while the sink is still working
 			line(map[string]any{"role": "assistant", "content": strings.Repeat("p", 240)})
 		}
 		line(map[string]any{"role": "assistant", "content": "last-line"})
@@ -277,7 +277,7 @@ func (s *slowSink) Emit(ctx context.Context, e harness.Event) error {
 func TestSlowSinkDoesNotLoseTheLastReply(t *testing.T) {
 	a := exec2("slowdrain", nil)
 	a.DrainGrace = 100 * time.Millisecond
-	sink := &slowSink{delay: 15 * time.Millisecond}
+	sink := &slowSink{delay: 5 * time.Millisecond}
 	s, err := a.Start(context.Background(), harness.StartSpec{SessionID: "ses_slow", Prompt: "go", Dir: t.TempDir()}, sink)
 	if err != nil {
 		t.Fatal(err)
