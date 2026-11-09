@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -29,8 +30,9 @@ import (
 )
 
 // WakeChannel is the NOTIFY channel every writer pings after a commit that
-// may unblock the scheduler.
-const WakeChannel = "fabric_wake"
+// may unblock the scheduler (store.Execute pings it after every accepted
+// command: goodqa#15586 F19a-0).
+const WakeChannel = store.WakeChannel
 
 // Launcher is how the scheduler starts and waits for one worker process.
 type Launcher interface {
@@ -77,6 +79,8 @@ type Config struct {
 	NoDispatch bool
 	Backoff    time.Duration // backstop timer; doubles up to MaxBackoff
 	MaxBackoff time.Duration
+	// HintMinGap is the least spacing of hint-triggered ticks (default 100 ms).
+	HintMinGap time.Duration
 	// Holds turns on the C5 dispatch gate (0012). Empty (the default) keeps
 	// today's behaviour: no reservation, no grant. When set, each attempt
 	// holds these items after START, and the runner starts only on a stored
@@ -145,6 +149,8 @@ type Scheduler struct {
 	afterFinishExec func(resp store.Response, err error) error
 	// dispatchQueries counts dispatch selections (AC-3: one per tick).
 	dispatchQueries int
+	// ticks counts Tick calls (atomic: tests read it while Run is live).
+	ticks atomic.Int64
 
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired, CapacityWaits int
@@ -239,6 +245,7 @@ func (s *Scheduler) gated() bool { return len(s.cfg.Holds) > 0 }
 
 // Tick runs one pass of every sweep and reports whether it did any work.
 func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
+	s.ticks.Add(1)
 	if err := s.ensureRunnerRole(ctx); err != nil {
 		return false, err // a configuration or role fault is global: stop before any write
 	}
@@ -297,7 +304,12 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		return err
 	}
 	backoff := s.cfg.Backoff
+	gap := s.cfg.HintMinGap
+	if gap <= 0 {
+		gap = 100 * time.Millisecond
+	}
 	for {
+		tickStart := time.Now()
 		worked, err := s.Tick(ctx)
 		if err != nil {
 			return err
@@ -315,6 +327,25 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 		if notified {
 			backoff = s.cfg.Backoff
+			// Coalesce a burst (goodqa#15586 NEG-19): every accepted Execute
+			// now pings this channel, so ticks are spaced at least gap apart
+			// and one tick covers every hint queued meanwhile (a tick rescans
+			// everything). The wake latency this adds is at most gap.
+			if wait := gap - time.Since(tickStart); wait > 0 {
+				if err := sleepContext(ctx, wait); err != nil {
+					return err
+				}
+			}
+			// The drain is bounded by gap so a stream of hints cannot starve Tick.
+			drainEnd := time.Now().Add(gap)
+			for time.Now().Before(drainEnd) {
+				dctx, dcancel := context.WithTimeout(ctx, time.Millisecond)
+				_, derr := conn.Conn().WaitForNotification(dctx)
+				dcancel()
+				if derr != nil {
+					break
+				}
+			}
 			continue
 		}
 		backoff = nextBackoff(backoff, s.cfg.MaxBackoff)
