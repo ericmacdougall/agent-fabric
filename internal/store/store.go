@@ -156,6 +156,18 @@ const migrationLock = 7_431_902_001 // arbitrary, fixed advisory lock key for mi
 // commit (goodqa#15577); a different key from migrationLock.
 const outboxOrderLock = 7_431_902_002
 
+// WakeChannel is the NOTIFY channel that carries a content-free wake hint after
+// a commit that may unblock a scheduler or a dashboard (goodqa#15586 F19a-0).
+// Execute pings it after every command that stored events; a hint is only a
+// hint (a reader catches up from its own cursor), so a failed ping is ignored.
+const WakeChannel = "fabric_wake"
+
+func (s *Store) hint() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	s.pool.Exec(ctx, "SELECT pg_notify($1, '')", WakeChannel) //nolint:errcheck // a hint, never an error
+}
+
 // Migrate applies embedded migrations in name order under an advisory lock.
 // It is idempotent and roll-forward only.
 func (s *Store) Migrate(ctx context.Context) error { return s.migrateUpTo(ctx, "") }
@@ -705,6 +717,9 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	}
 	if s.hooks.afterCommit != nil {
 		s.hooks.afterCommit(cmd)
+	}
+	if derr == nil {
+		s.hint() // post-commit and only for an accepted command (a refusal stored no event)
 	}
 	resp.Raw = respJSON
 	if derr != nil {
