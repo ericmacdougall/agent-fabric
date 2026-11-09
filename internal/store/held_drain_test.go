@@ -88,6 +88,7 @@ func TestDrainHoldCrashAndRace(t *testing.T) {
 	}
 
 	// 2. a drain with a row written for the mission while it runs.
+	plantGood(t, st, ctx, "m_dr", 999) // above the cursor before the drain starts: the drain's bound must exclude it
 	planted := false
 	racing := func(ctx context.Context, tx pgx.Tx, r OutboxRow) error {
 		if !planted {
@@ -120,8 +121,8 @@ func TestDrainHoldCrashAndRace(t *testing.T) {
 	if dup != 0 {
 		t.Fatalf("%d rows were applied twice", dup)
 	}
-	if mainRows != 1 {
-		t.Fatalf("the late row was delivered %d times by the main consumer, want once", mainRows)
+	if mainRows != 2 {
+		t.Fatalf("the two late rows were delivered %d times by the main consumer, want once each", mainRows)
 	}
 }
 
