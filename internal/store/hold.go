@@ -229,6 +229,7 @@ func (s *Store) drainOne(ctx context.Context, consumer string, m domain.MissionI
 	if err != nil {
 		return 0, err
 	}
+	orig := last
 	page, err := pageFrom(ctx, tx, last, schedLast, m, limit)
 	if err != nil {
 		return 0, err
@@ -247,7 +248,23 @@ func (s *Store) drainOne(ctx context.Context, consumer string, m domain.MissionI
 		last = r.ID
 	}
 	released := false
-	if stuck || len(page) >= limit {
+	caughtUp := !stuck && len(page) < limit
+	if caughtUp {
+		// A hold found by replay or by a start sits behind the cursor, so
+		// there may be nothing left to drain while the log still does not
+		// decode. Release only when the whole log reads through the v2
+		// reader; otherwise stay held at the cursor.
+		if _, err := readViews(ctx, tx, m); err != nil {
+			if !envelope.Undecodable(err) {
+				return 0, err
+			}
+			caughtUp = false
+			last = schedLast
+		}
+	}
+	if !caughtUp && last == orig {
+		// Nothing moved: leave the hold row (and its age) untouched.
+	} else if !caughtUp {
 		// Stay held at the last applied row (stuck), or resume after a full page.
 		if _, err := tx.Exec(ctx, `UPDATE outbox_cursors SET last_id = $2, updated_at = now() WHERE consumer = $1`, holdConsumer(m), last); err != nil {
 			return 0, err
