@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"fabric/internal/harness"
 	"fabric/internal/harness/harnesstest"
@@ -123,6 +125,8 @@ cat >/dev/null
 `)
 	if err := runHarness(t, "--adapter", "claude-code", "--unconfined", "--claude-bin", lost, "--prompt", "hi", "--input", "SECOND", "--wait", "3s"); err == nil {
 		t.Fatal("a live child that lost the second input exited 0")
+	} else {
+		t.Logf("lost: %v", err)
 	}
 	silent := writeFakeClaude(t, "cat >/dev/null\n")
 	if err := runHarness(t, "--adapter", "claude-code", "--unconfined", "--claude-bin", silent, "--prompt", "hi", "--wait", "1s"); err == nil {
@@ -179,5 +183,23 @@ cat >/dev/null
 	}
 	if !strings.Contains(string(b), "[REDACTED]") {
 		t.Fatal("the child never echoed the credential, so the test proves nothing")
+	}
+}
+
+// A signal during the scripted session is a Stop, and the run must not read as
+// success: a run cut short by `timeout` is not a completed test.
+func TestHarnessRunSignalFailsTheRun(t *testing.T) {
+	quiet := writeFakeClaude(t, "cat >/dev/null\n")
+	go func() {
+		time.Sleep(700 * time.Millisecond)
+		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+	}()
+	start := time.Now()
+	err := runHarness(t, "--adapter", "claude-code", "--unconfined", "--claude-bin", quiet, "--prompt", "hi", "--wait", "60s")
+	if err == nil {
+		t.Fatal("a run cut short by a signal exited 0")
+	}
+	if d := time.Since(start); d > 30*time.Second {
+		t.Fatalf("the signal did not stop the session promptly (%v)", d)
 	}
 }
