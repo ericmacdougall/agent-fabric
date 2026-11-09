@@ -1,4 +1,4 @@
-# Slice spec outlines (F0 to F13)
+# Slice spec outlines (F0 to F17)
 
 These are outlines, not final specs. Each slice gets its own ticket and a full spec (outcome, scope, `AC-n` each with `Verify by:`, `NEG-n (AC-n)` cases, risks) before code. Specs for data, auth and migration slices need two reviews from different models or agents. The decision record is [adr/0001-kernel-scope.md](adr/0001-kernel-scope.md); the order is in [status-and-roadmap.md](status-and-roadmap.md).
 
@@ -20,7 +20,7 @@ Cross-lane contract: the first feature PRs are pure packages behind an event-sin
 ## F0 Scope ADR
 
 - Outcome: the target, the role split and the irreversible choices are written down; README and roadmap describe the multi-tenant kernel.
-- AC-1: ADR 0001 exists and names the seven irreversible choices. Verify by: review of `docs/adr/0001-kernel-scope.md`.
+- AC-1: ADR 0001 exists and names the seven irreversible choices (an eighth, the provider contract names, is added by ADR 0002). Verify by: review of `docs/adr/0001-kernel-scope.md`.
 - AC-2: README scope statement no longer says "small control plane" and lists the 12 dimensions. Verify by: `grep -n "small control plane" README.md` returns nothing.
 - AC-3: Roadmap lists F0 to F13 with dependencies. Verify by: review of `docs/status-and-roadmap.md`.
 - NEG-1 (AC-2): no claim that a not-yet-built dimension is shipped. Verify by: every dimension row in the roadmap names its state and slice; review.
@@ -181,3 +181,7 @@ Cross-lane contract: the first feature PRs are pure packages behind an event-sin
 Added by the AWS agent-stack parity map ([aws-agent-parity.md](aws-agent-parity.md)). Their acceptance criteria, each with `Verify by:`, are defined there (AC-ME1 to AC-ME6 and AC-KB1 to AC-KB7 for F14; AC-EV1 to AC-EV6, AC-OP1 and AC-OP2 for F15; AC-AD1 to AC-AD4, AC-AG1, AC-AG2, AC-FL1, AC-FL2 and AC-PM1 for F16). The same page adds criteria to F1, F4, F5, F6, F7, F8, F9, F10, F11, F12 and F13, including the out-of-the-box criterion AC-OOTB on F13: a fresh personal install passes a parity smoke test with no extra wiring.
 
 Each new slice follows the interim rules in the ADR (tenant and stream scope on every new table, typed versioned payloads, no fake-mission aggregates) and waits for F1 to F3 only where it needs the envelope, streams or tenancy.
+
+## F17 Provider interfaces (cross-cutting, new)
+
+Added by the Microsoft and Google parity map and [ADR 0002](adr/0002-provider-interfaces.md). Every component of Fabric has a first-party implementation behind a versioned provider contract (`fabric.provider/<kind>/v1`) with a conformance suite; a tenant binds a provider per kind (ours, AWS, Microsoft, Google or its own), and F7 policy and F11 trace wrap every provider call the same way. Fixes the provider contract names and descriptor fields (ADR 0001 choice 8). Its acceptance criteria, each with `Verify by:`, are AC-PI1 to AC-PI11 in [aws-agent-parity.md](aws-agent-parity.md). It is also a design constraint on every slice that owns a kind (F4 to F12, F14 to F16): each builds its first-party implementation behind the contract for its kind. A Google adapter has no live path: nothing in our deployments, CI or tests calls Vertex or aiplatform.

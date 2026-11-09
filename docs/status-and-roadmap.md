@@ -46,6 +46,7 @@ Each slice has one owner, its own ticket when it starts, and `Verify by:` checks
 | **F14** Memory and knowledge | session and long-term memory, knowledge-base ingestion and retrieval | 5, 6, 11 | none | retrieval quality set and tenant isolation pass; see [aws-agent-parity.md](aws-agent-parity.md) |
 | **F15** Evaluation and optimisation | evaluators, online and batch evaluation, LLM-as-judge, recommendations, A/B tests | 4, 5 | none | labelled fixture agreement thresholds met |
 | **F16** Agent definitions, prompts and flows | declarative agent definition, immutable versions and aliases, prompt management, workflows | 1, 3 | none | one definition runs on two adapters with conforming traces |
+| **F17** Provider interfaces | a versioned provider contract and conformance suite per component, descriptors with enforcement tiers, per-tenant bindings | 1, 3, 4, 5 | provider contract names (ADR 0001 choice 8) | the same mission yields the same policy decisions and trace kinds with first-party and fake third-party providers; see [ADR 0002](adr/0002-provider-interfaces.md) |
 
 ### Execution plan: two parallel lanes
 
@@ -62,7 +63,7 @@ Retiring the old per-host runners and rewiring the existing interactive console 
 
 ## AWS agent-stack parity
 
-The requirement that anything the AWS agent stack can do, Fabric does out of the box is mapped capability by capability, with HAVE, PARTIAL and GAP status and acceptance criteria for every gap, in [aws-agent-parity.md](aws-agent-parity.md). Current count: 0 HAVE, 37 PARTIAL, 82 GAP of 119 capability rows.
+The requirement that anything the AWS agent stack can do, Fabric does out of the box is mapped capability by capability, with HAVE, PARTIAL and GAP status and acceptance criteria for every gap, in [aws-agent-parity.md](aws-agent-parity.md). Current count: 0 HAVE, 39 PARTIAL, 96 GAP of 135 capability rows (the AWS matrix plus the Microsoft and Google rows). The same page maps Microsoft Agent Framework and Foundry and Google's Agent Runtime and ADK, and defines the provider interfaces: every component has a first-party implementation behind a versioned, swappable contract ([ADR 0002](adr/0002-provider-interfaces.md), slice F17).
 
 ## Shipped (tested in the ways stated)
 
