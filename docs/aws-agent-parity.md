@@ -18,7 +18,7 @@ Read on 2026-11-09. The pages were read through a summarising fetcher, so featur
 | Code Interpreter | .../devguide/code-interpreter-tool.html | Python, JavaScript, TypeScript; 15 min default up to 8 hours; 100 MB inline, 5 GB via S3 |
 | Browser | .../devguide/browser-tool.html | isolated sessions, live view, recording, 15 min default up to 8 hours |
 | Observability | .../devguide/observability.html | OpenTelemetry traces, metrics, audit logging |
-| Policy | .../devguide/policy.html | Cedar and Dogwood, natural-language authoring, temporal policies, guardrail signals |
+| Policy | .../devguide/policy.html | Cedar policies, natural-language authoring, temporal policies, guardrail signals |
 | Evaluations, Optimization | .../devguide/evaluations.html, optimization.html | built-in, custom, online, on-demand, batch, dataset, simulation; recommendations, configuration bundles, A/B tests |
 | Registry | .../devguide/registry.html | catalog, approval workflow, hybrid search, MCP endpoint |
 | Payments | .../devguide/payments.html | x402 and MPP, wallet providers, payment limits |
@@ -164,7 +164,7 @@ Status: HAVE (works today, with the evidence named), PARTIAL (a real piece exist
 
 | ID | AWS capability | Status | Fabric evidence | Slice and AC |
 |---|---|---|---|---|
-| OB-1 | OpenTelemetry traces and spans | GAP | none; no trace ids | F1 AC-1, F11 AC-TR3 |
+| OB-1 | OpenTelemetry traces and spans | GAP | none; no trace ids | F1 AC-5, F11 AC-TR3 |
 | OB-2 | Metrics: sessions, latency, tokens, errors | PARTIAL | `fab metrics`, `fab serve-metrics` (`internal/metrics`) | F11 AC-TR4 |
 | OB-3 | Dashboards and session views | PARTIAL | `fab tui`, `fab status` | F11 AC-TR4 |
 | OB-4 | Audit log of API activity, tamper evidence | PARTIAL | append-only tables; no hash chain, no export | F11 AC-TR2 |
@@ -221,7 +221,7 @@ Note: AWS has put Agents classic into maintenance mode; the AgentCore Harness is
 | BE-3 | RAG evaluation (retrieval only, retrieve and generate, ground truth) | GAP | none | F15 AC-EV5 |
 | BE-4 | Human evaluation workflow | GAP | none | F15 AC-EV6 |
 | BE-5 | Bring-your-own inference | PARTIAL | adapters give traces from any harness | F15 AC-EV3 |
-| CO-1 | Per-job, per-run, per-month spend controls | HAVE | USD 20 month, 5 job, 1 live test, enforced hold-before-send, three scopes (`internal/native/native.go`, `internal/agent/ledger.go`, tests `TestBudgetHeldBeforeSend`) | extend F10 AC-CO1 |
+| CO-1 | Per-job, per-run, per-month spend controls | PARTIAL | USD 20 month, 5 job, 1 live test, hold-before-send in the native loop only (`internal/native/native.go`, `internal/agent/ledger.go`, test `TestBudgetHeldBeforeSend`); caps are bypassable while goodqa#15123 and #15124 are open, and the `claude -p` path is unmetered | extend F10 AC-CO1 |
 | CO-2 | Cost allocation by tenant, project, agent; usage reports | GAP | spend is per attempt, mission, month only | F10 AC-CO1, F3 |
 | CO-3 | Quotas and rate limits per tenant | GAP | none | F10 AC-CO3, F3 |
 | CO-4 | Prompt caching, batch, tier selection, cost-aware routing | PARTIAL | cache tokens priced in the ledger; ladder routes by rung, not cost | F10 AC-CO2 |
@@ -233,8 +233,8 @@ Counts are taken from the tables above (see the check at the end of this page).
 
 | Status | Rows |
 |---|---|
-| HAVE | 1 |
-| PARTIAL | 36 |
+| HAVE | 0 |
+| PARTIAL | 37 |
 | GAP | 82 |
 | Total | 119 |
 
@@ -254,7 +254,7 @@ Conventions: every AC below carries `Verify by:`; a negative case follows where 
 
 ### F4 Principals and identity
 
-- AC-ID1: an agent has a workload identity (issuer, subject, tenant) that is not a free-text actor; a command from an unknown identity is refused. Verify by: `go test ./internal/identity -run TestWorkloadIdentity` and a forged `FABRIC_ACTOR` negative. NEG: a revoked identity keeps working until its token expires.
+- AC-ID1: an agent has a workload identity (issuer, subject, tenant) that is not a free-text actor; a command from an unknown identity is refused. Verify by: `go test ./internal/identity -run TestWorkloadIdentity` and a forged `FABRIC_ACTOR` negative. NEG: a revoked identity is refused on its next command even though its token has not expired.
 - AC-ID2: inbound auth accepts a signed OIDC or JWT from a configured issuer (JWKS fetch, audience, expiry, clock skew) and from the `local` issuer. Verify by: tests with a local JWKS server: valid, expired, wrong audience, wrong issuer, `alg` none, key rollover. NEG: an unreachable JWKS fails closed.
 - AC-ID3: outbound credential providers for OAuth client credentials (2LO), OAuth authorization code (3LO) and API keys, per tool, resolved by the gateway, never placed in the sandbox environment or the trace. Verify by: a fake OAuth server; a canary secret never appears in the trace, the events or the child environment. NEG: a tool for tenant A cannot resolve tenant B's provider.
 - AC-ID4: a token vault: credentials encrypted at rest, refreshed before expiry, readable only by the broker role, access recorded. Verify by: a refresh test with a short-lived token; a database dump contains no plaintext; the app role cannot read the table. NEG: a stolen sandbox cannot call the vault.
@@ -299,8 +299,8 @@ Conventions: every AC below carries `Verify by:`; a negative case follows where 
 - AC-CI1: a code-execution capability for Python, JavaScript and TypeScript in the host sandbox with per-session isolation. Verify by: language fixtures; a session cannot read another session's files.
 - AC-CI2: session timeouts (default and extended) and network modes (none, allow-list). Verify by: a timeout kills the whole process group; a network call outside the allow-list fails.
 - AC-CI3: an interactive shell session capability with the same isolation. Verify by: a scripted terminal session; Stop ends all descendants.
-- AC-BR1: a browser capability with isolated sessions, Playwright and CDP access, timeouts and concurrency limits, provider-backed (agentbrowser). Verify by: a disposable page; a session cannot read another session's cookies.
-- AC-BR2: live view and human takeover through the existing remote-session route with a recorded handoff. Verify by: a takeover test records who took control and when; the agent is paused during takeover.
+- AC-BR1: a browser capability with isolated sessions, Playwright and CDP access, timeouts and concurrency limits, an external GoodQA browser provider. Verify by: a disposable page; a session cannot read another session's cookies.
+- AC-BR2: live view and human takeover through an external GoodQA remote-session route with a recorded handoff. Verify by: a takeover test records who took control and when; the agent is paused during takeover.
 - AC-BR3: session recording and replay stored as artifacts with digests. Verify by: replay reproduces the action log; tamper fails the digest.
 - AC-PY1 (gated, owner decision first): payment capability classes with per-session spend limits and wallet providers behind the credential vault. This is the money domain: it needs the owner's explicit product decision and its own spec, with the money checklist (idempotency, double submit, reversal, reconciliation) before any code. Verify by: defined in that spec.
 
@@ -321,7 +321,7 @@ Conventions: every AC below carries `Verify by:`; a negative case follows where 
 - AC-TR4 (F11): metrics for sessions, latency, token usage and error rates per tenant and agent, and a session view. Verify by: counters match the event log for a scripted run.
 - AC-TR5 (F11 with F3): cross-tenant administrator views for an organisation, never across organisations. Verify by: two-organisation API test.
 - AC-MA1, AC-MA2 (F12): more than two live attempts under a role policy, and a supervisor agent that routes a task to collaborator agents (route to one, or fan out). Verify by: an oracle property test with seeded traces; a supervisor whose collaborator is cancelled settles deterministically.
-- AC-1 (F1): events carry W3C trace and span ids (as in the F1 spec).
+- AC-5 (F1): every event carries a W3C `trace_id` and `span_id`. Verify by: a store test that rejects an envelope without them, plus a round-trip against fixed vectors.
 
 ### F14 Memory and knowledge (new)
 
@@ -408,7 +408,7 @@ The owner mined earlier internal agent prototypes for designs worth reusing. The
 | Anti-hollowness process: every slice's Verify by must be able to fail | all slices | already the rule here (failing control first) |
 | Scrubbed-environment launcher for harness adapters | F6 | adapters never inherit the caller's environment (already enforced in the merged adapters) |
 
-Not carried over: rotating pools of subscription accounts (terms-of-service risk); legacy supervision and release scripts; private evidence trees; hard-coded hosts.
+Not carried over: pooled third-party accounts; legacy supervision and release scripts; private evidence trees; hard-coded hosts.
 
 Gaps in the first draft that the mining surfaced, now acceptance criteria:
 
@@ -426,7 +426,7 @@ AC-OOTB (F13): on a fresh personal install (one binary plus the bundled or manag
 
 - policy defaults are on (deny by default for unknown capability classes), the guardrail local provider runs with default content, PII and prompt-attack settings, and traces and metrics are recorded without configuration;
 - identity works through the local issuer; the token vault, memory store, knowledge base and registry are created by `fab init` in the same database;
-- a local tool gateway and a local MCP fixture are registered, and the code capability and the browser capability either run (the browser provider is auto-provisioned or the check fails with the exact missing prerequisite) or the smoke test reports the group as FAILED, never as passed;
+- a local tool gateway and a local MCP fixture are registered, and the code capability and the browser capability run, and on the reference CI host every group must PASS (on a host missing a prerequisite the smoke test reports that group as FAILED with the exact prerequisite, never as passed);
 - no group requires a hosted AWS, GCP or other cloud service; a smoke run with all outbound network except the configured model provider blocked still passes;
 - NEG: a smoke run with the guardrail provider disabled by configuration fails the smoke test (the default is not allowed to be silently off).
 

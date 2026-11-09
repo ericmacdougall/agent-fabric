@@ -62,7 +62,7 @@ Retiring the old per-host runners and rewiring the existing interactive console 
 
 ## AWS agent-stack parity
 
-The requirement that anything the AWS agent stack can do, Fabric does out of the box is mapped capability by capability, with HAVE, PARTIAL and GAP status and acceptance criteria for every gap, in [aws-agent-parity.md](aws-agent-parity.md). Current count: 1 HAVE, 36 PARTIAL, 82 GAP of 119 capability rows.
+The requirement that anything the AWS agent stack can do, Fabric does out of the box is mapped capability by capability, with HAVE, PARTIAL and GAP status and acceptance criteria for every gap, in [aws-agent-parity.md](aws-agent-parity.md). Current count: 0 HAVE, 37 PARTIAL, 82 GAP of 119 capability rows.
 
 ## Shipped (tested in the ways stated)
 

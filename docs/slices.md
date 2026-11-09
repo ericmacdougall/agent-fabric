@@ -33,6 +33,7 @@ Cross-lane contract: the first feature PRs are pure packages behind an event-sin
 - AC-1: every stored v1 event rebuilds to byte-identical mission state through the upcaster. Verify by: replay test over a recorded v1 corpus, comparing state digests.
 - AC-2: the canonical byte form is independent of Go field order. Verify by: test that shuffles struct field order and map insertion order and compares digests against fixed vectors.
 - AC-3: an unknown kind parks that stream and fabd keeps running. Verify by: inject an unknown kind; the daemon keeps serving other streams and reports the parked stream.
+- AC-5: every event carries a W3C `trace_id` and `span_id`. Verify by: a store test that rejects an envelope without them, plus a round-trip against fixed vectors.
 - AC-4: an older binary refuses a newer envelope version rather than misreading it. Verify by: store test that raises the minimum reader version and starts the previous binary build.
 - NEG-1 (AC-1): a mutant that drops the upcaster fails the replay test.
 - NEG-2 (AC-3): a malformed payload for a known kind parks the stream with a reason; it does not partially apply.
