@@ -502,7 +502,7 @@ func (l *Linux) runControl(g Grant, script string) (string, int, error) {
 	if err != nil {
 		return "", -1, err
 	}
-	h, err := l.Start(g, []string{"sh", "-c", script}, nil, out, out)
+	h, err := l.Start(freshRun(g), []string{"sh", "-c", script}, nil, out, out)
 	if err != nil {
 		out.Close()
 		return "", -1, err
@@ -544,7 +544,7 @@ func (l *Linux) NegativeControls(scratch string) ([]ControlResult, error) {
 	add("group_signal_misses_setsid_grandchild", survived, fmt.Sprintf("escapee pid=%d survived=%v (expected true: a group is not containment)", escapee, survived))
 
 	// 2. the same shape inside a unit is reaped by cgroup emptiness.
-	h, err := l.Start(g, []string{"sh", "-c", escapeScript}, nil, devnull, devnull)
+	h, err := l.Start(freshRun(g), []string{"sh", "-c", escapeScript}, nil, devnull, devnull)
 	if err != nil {
 		return out, err
 	}
@@ -572,7 +572,7 @@ func (l *Linux) NegativeControls(scratch string) ([]ControlResult, error) {
 
 	// 4. MemoryMax ends a 300 MiB allocation.
 	small := &Linux{Self: l.Self, MemoryMax: "64M", ReadOnly: l.ReadOnly}
-	h, err = small.Start(g, []string{"python3", "-c", "x = bytearray(300 * 1024 * 1024); print(len(x))"}, nil, devnull, devnull)
+	h, err = small.Start(freshRun(g), []string{"python3", "-c", "x = bytearray(300 * 1024 * 1024); print(len(x))"}, nil, devnull, devnull)
 	if err != nil {
 		return out, err
 	}
