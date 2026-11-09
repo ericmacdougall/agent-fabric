@@ -174,3 +174,9 @@ Cross-lane contract: the first feature PRs are pure packages behind an event-sin
 - AC-2: the personal edition has no network dependency on GoodQA. Verify by: smoke test with the GoodQA host blocked.
 - NEG-1: the personal local issuer is not reachable off loopback.
 - NEG-2: org mode refuses to start with the local issuer enabled.
+
+## F14 Memory and knowledge, F15 Evaluation and optimisation, F16 Agent definitions, prompts and flows
+
+Added by the AWS agent-stack parity map ([aws-agent-parity.md](aws-agent-parity.md)). Their acceptance criteria, each with `Verify by:`, are defined there (AC-ME1 to AC-ME6 and AC-KB1 to AC-KB7 for F14; AC-EV1 to AC-EV6, AC-OP1 and AC-OP2 for F15; AC-AD1 to AC-AD4, AC-AG1, AC-AG2, AC-FL1, AC-FL2 and AC-PM1 for F16). The same page adds criteria to F1, F4, F5, F6, F7, F8, F9, F10, F11, F12 and F13, including the out-of-the-box criterion AC-OOTB on F13: a fresh personal install passes a parity smoke test with no extra wiring.
+
+Each new slice follows the interim rules in the ADR (tenant and stream scope on every new table, typed versioned payloads, no fake-mission aggregates) and waits for F1 to F3 only where it needs the envelope, streams or tenancy.

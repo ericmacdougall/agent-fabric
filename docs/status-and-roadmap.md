@@ -43,6 +43,9 @@ Each slice has one owner, its own ticket when it starts, and `Verify by:` checks
 | **F11** Trace API and hash chain | read HTTP API, OTel export, per-stream hash chain; TUI and console become clients | 5, 10 | hash chain | one tampered row breaks chain verification; API returns only the caller's tenant |
 | **F12** Multi-agent orchestration | child streams, fan-out, fan-in, role limits as policy | 3 | none | a parent with N children and one cancelled settles deterministically under the oracle |
 | **F13** Editions | personal (one binary plus Postgres, local issuer) and org (GoodQA-connected) | 12 | none | a fresh install of each passes the same smoke test |
+| **F14** Memory and knowledge | session and long-term memory, knowledge-base ingestion and retrieval | 5, 6, 11 | none | retrieval quality set and tenant isolation pass; see [aws-agent-parity.md](aws-agent-parity.md) |
+| **F15** Evaluation and optimisation | evaluators, online and batch evaluation, LLM-as-judge, recommendations, A/B tests | 4, 5 | none | labelled fixture agreement thresholds met |
+| **F16** Agent definitions, prompts and flows | declarative agent definition, immutable versions and aliases, prompt management, workflows | 1, 3 | none | one definition runs on two adapters with conforming traces |
 
 ### Execution plan: two parallel lanes
 
@@ -56,6 +59,10 @@ Features run in parallel with the foundation (decision recorded in the ADR). Nei
 ### What is out of scope for this repository
 
 Retiring the old per-host runners and rewiring the existing interactive console to the Fabric API are tracked under F5, F6 and F11 but are done in their own repositories. GoodQA's side (org and user management, ticket UI, token issuing) stays in GoodQA.
+
+## AWS agent-stack parity
+
+The requirement that anything the AWS agent stack can do, Fabric does out of the box is mapped capability by capability, with HAVE, PARTIAL and GAP status and acceptance criteria for every gap, in [aws-agent-parity.md](aws-agent-parity.md). Current count: 1 HAVE, 36 PARTIAL, 82 GAP of 119 capability rows.
 
 ## Shipped (tested in the ways stated)
 

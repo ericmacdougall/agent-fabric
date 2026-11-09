@@ -1,0 +1,385 @@
+# AWS agent-stack parity matrix
+
+Requirement (goodqa#15361): anything the AWS agent stack can do, Fabric can do out of the box, model-agnostic, with no dependency on any one cloud. This page maps the capabilities of Amazon Bedrock AgentCore, Bedrock Guardrails, Bedrock Agents (classic), Knowledge Bases, Flows and Prompt Management, Bedrock evaluations and cost controls onto Fabric's 12 dimensions and the slices F0 to F16 in [status-and-roadmap.md](status-and-roadmap.md) and [slices.md](slices.md). Every GAP and PARTIAL has an acceptance criterion with a `Verify by:` below.
+
+Two constraints from the owner apply to everything here: Fabric stays model-agnostic, and no capability may depend on Google Vertex AI.
+
+## Sources
+
+Read on 2026-11-09. The pages were read through a summarising fetcher, so feature lists come from the page text and numeric limits are quoted as the pages state them. Confidence is medium-high for AgentCore (13 service pages read) and medium for the classic Bedrock items, where the sub-feature lists (for example the guardrail policy types beyond the page's own list) also draw on general product knowledge and should be re-checked against the console before a slice is built.
+
+| Area | URL | Notes |
+|---|---|---|
+| AgentCore overview | https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html | Lists 13 services: Harness, Runtime, Memory, Gateway, Identity, Code Interpreter, Browser, Observability, Payments, Evaluations, Optimization, Policy, Registry |
+| Runtime | .../devguide/agents-tools-runtime.html | microVM per session; 8 hours (microVM) or 14 days (Instances); 100 MB payloads; HTTP and WebSocket; MCP, A2A, AG-UI; versions and endpoints |
+| Memory | .../devguide/memory.html, memory-types.html | short-term events, long-term extraction and consolidation, semantic retrieval, event metadata |
+| Gateway | .../devguide/gateway.html, gateway-features.html | OpenAPI, Smithy, Lambda to MCP; semantic tool search; sessions, streaming, elicitation, sampling, tasks; model routing |
+| Identity | .../devguide/identity.html | workload identities, inbound JWT, outbound credential providers, consent portal |
+| Code Interpreter | .../devguide/code-interpreter-tool.html | Python, JavaScript, TypeScript; 15 min default up to 8 hours; 100 MB inline, 5 GB via S3 |
+| Browser | .../devguide/browser-tool.html | isolated sessions, live view, recording, 15 min default up to 8 hours |
+| Observability | .../devguide/observability.html | OpenTelemetry traces, metrics, audit logging |
+| Policy | .../devguide/policy.html | Cedar and Dogwood, natural-language authoring, temporal policies, guardrail signals |
+| Evaluations, Optimization | .../devguide/evaluations.html, optimization.html | built-in, custom, online, on-demand, batch, dataset, simulation; recommendations, configuration bundles, A/B tests |
+| Registry | .../devguide/registry.html | catalog, approval workflow, hybrid search, MCP endpoint |
+| Payments | .../devguide/payments.html | x402 and MPP, wallet providers, payment limits |
+| Harness | .../devguide/harness.html | managed agent loop, any model, skills, versions and endpoints, export to code |
+| Guardrails | https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-how.html | input and output evaluation; content, denied topics, sensitive information, word, image filters |
+| Agents classic | https://docs.aws.amazon.com/bedrock/latest/userguide/agents.html | in maintenance mode, no new sign-ups; action groups, knowledge bases, versions and aliases |
+| Knowledge Bases | https://docs.aws.amazon.com/bedrock/latest/userguide/kb-how-it-works.html | ingestion, chunking, embeddings, vector index, retrieval |
+| Flows | https://docs.aws.amazon.com/bedrock/latest/userguide/flows.html | nodes, versions, aliases, guardrails, async executions |
+| Evaluations | https://docs.aws.amazon.com/bedrock/latest/userguide/evaluation.html | model and RAG evaluation, LLM-as-a-judge, human review |
+
+## Baseline: what Fabric has today
+
+Evidence below is `main` at `e409553` plus the open PRs named in the rows (PR 23 codex adapter, PR 25 kimi adapter, PR 26 worker-account controls).
+
+- Durable core: pure reducer, append-only events, outbox, fences and database-time leases (`internal/reducer`, `internal/store`).
+- Effect broker with readback and quarantine (`internal/effects`).
+- Host sandboxes with negative controls: Landlock and cgroups on Linux, Seatbelt on macOS (`internal/host`).
+- Native loop with hold-before-send spend caps and an optional durable tool-call review gate with `shadow`, `evaluate` and `enforce` modes (`internal/agent`, `internal/native`, `internal/reviewgate`).
+- Harness adapter seam with native and claude-code adapters merged, codex and kimi in review (`internal/harness`, PRs 20, 22, 23, 25), a JSONL event trace checked by a conformance function, and `fab harness run` deployed (PR 24).
+- Model ladder (`internal/ladder`), metrics in Prometheus text, a read-only TUI, RFC 8785 canonical bytes (PR 21).
+
+It is single-host, single-operator and shadow-only. Almost nothing below is HAVE.
+
+## Matrix
+
+Status: HAVE (works today, with the evidence named), PARTIAL (a real piece exists, the AWS capability is not met), GAP (nothing). Slice is where the work lands; `AC` ids are defined in the next section. Slices F14 to F16 are new (below).
+
+### AgentCore Harness and Runtime
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| RT-1 | Managed agent loop defined by one declarative call (model, prompt, tools) | PARTIAL | Native grant file runs a loop (`internal/native` Grant, `fab mission run`, `fab harness run`); no single declarative agent definition across adapters | F16 AC-AD1 |
+| RT-2 | Per-session isolation in its own microVM (CPU, memory, filesystem) | PARTIAL | Per-run sandbox with Landlock, cgroup and negative controls (`internal/host`, 9 controls; same-UID Linux fails 2); no microVM | F5 AC-RT1 |
+| RT-3 | Long-running sessions (8 hours; 14 days on Instances), resumable | PARTIAL | Leases, fences, `Resume` of the native loop, interactive claude-code session; no multi-day persistent session across node restart | F5 AC-RT2 |
+| RT-4 | Persistent filesystem across stop and resume | GAP | Per-run worktrees only | F5 AC-RT3 |
+| RT-5 | Large and multimodal payloads (100 MB) | GAP | Event payloads are text; 4 MiB canonical cap | F8 AC-CP2, F6 AC-RT4 |
+| RT-6 | Response streaming and bidirectional WebSocket | PARTIAL | `Adapter.Events` and `Session.Input` in process; no network streaming API | F11 AC-TR3 |
+| RT-7 | Protocols: MCP, A2A, AG-UI | GAP | none | F8 AC-GW2, F9 AC-MB4 |
+| RT-8 | Framework agnostic (LangGraph, CrewAI, Strands, custom) | GAP | adapters wrap harnesses, not frameworks | F6 AC-RT5 |
+| RT-9 | Any model, switch provider mid-session | PARTIAL | Native loop is Anthropic only; claude-code, codex, kimi adapters; ladder picks a rung | F10 AC-GA1, F6 AC-RT6 |
+| RT-10 | Versions and named endpoints, instant rollback | GAP | binary rollback only | F16 AC-AD2 |
+| RT-11 | Skills attached to an agent | GAP | harness-native skills only (claude-code) | F16 AC-AD3 |
+| RT-12 | Bring your own container image; custom environment | GAP | none | F5 AC-RT7 |
+| RT-13 | Mount shared storage across sessions | GAP | none | F8 AC-CP3 |
+| RT-14 | Interactive shell into a session | PARTIAL | allow-listed `shell` tool; interactive adapters | F8 AC-CI3 |
+| RT-15 | Scale to zero, consumption billing | PARTIAL | admission, caps, leases; no placement or idle shutdown | F5 AC-RT8, F10 AC-CO2 |
+| RT-16 | Lifecycle hooks | PARTIAL | policy oracle and hooks dir | F7 AC-PL1 |
+| RT-17 | Export an agent to code | GAP | none | F16 AC-AD4 |
+| RT-18 | Multi-agent on one runtime | PARTIAL | 1 writer plus 1 reviewer per mission | F12 AC-MA1 |
+
+### AgentCore Memory
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| ME-1 | Short-term memory: events per session, list sessions and events | PARTIAL | native loop stores messages and tool calls durably per attempt; harness traces; no session API | F11 AC-TR1, F14 AC-ME1 |
+| ME-2 | Event metadata and filtered listing | GAP | none | F14 AC-ME1 |
+| ME-3 | Long-term memory: extraction and consolidation (semantic, summary, preference, episodic) | GAP | none | F14 AC-ME2 |
+| ME-4 | Semantic retrieval of memory records | GAP | none | F14 AC-ME3 |
+| ME-5 | Memory shared across agents, namespaces, tenant isolation | GAP | none | F14 AC-ME4, F3 |
+| ME-6 | Custom and self-managed strategies | GAP | none | F14 AC-ME5 |
+| ME-7 | Retention, deletion, encryption, no sensitive data in metadata | GAP | none | F14 AC-ME6 |
+
+### AgentCore Gateway and Registry
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| GW-1 | Convert OpenAPI, Smithy and Lambda-style functions into tools | GAP | tools are Go code (`internal/tools`: read, grep, shell) | F8 AC-GW1 |
+| GW-2 | Connect existing MCP servers as tools | GAP | none | F8 AC-GW2 |
+| GW-3 | Semantic tool search over thousands of tools | GAP | none | F8 AC-GW3 |
+| GW-4 | One-click integrations (Slack, Jira, GitHub, Salesforce-like) | GAP | GoodQA ticket comment effect only (`internal/effects`) | F8 AC-GW4 |
+| GW-5 | Inbound auth (agent identity) and outbound auth (credential exchange per tool) | GAP | provider key kept out of the sandbox, redacted (`internal/native/key.go`) | F4 AC-ID3, F8 AC-GW5 |
+| GW-6 | Model routing and inference gateway | PARTIAL | egress mediator seed (`internal/egress`), ladder (`internal/ladder`); not wired | F10 AC-GA1 |
+| GW-7 | MCP sessions, streaming, elicitation, sampling, long-running tasks | GAP | none | F8 AC-GW6 |
+| GW-8 | Agent-to-agent passthrough | GAP | none | F9 AC-MB4 |
+| GW-9 | Interceptors and response transformation | PARTIAL | policy oracle hooks | F7 AC-PL1 |
+| GW-10 | Gateway audit logging | PARTIAL | append-only events, commands, effect resolutions; no hash chain | F11 AC-TR2 |
+| GW-11 | Tool and agent registry with approval workflow, hybrid search, MCP endpoint | GAP | none | F8 AC-GW7 |
+| GW-12 | Registry notifications and cross-account sharing | GAP | none | F9 AC-MB5, F3 |
+
+### AgentCore Identity (in full) and user-delegated access
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| ID-1 | Workload identities for agents | GAP | actors are self-asserted strings (`internal/domain/ids.go`) | F4 AC-ID1 |
+| ID-2 | Inbound auth: OIDC and JWT from any IdP, Cognito-style user pools | GAP | none | F4 AC-ID2 |
+| ID-3 | Outbound credential providers: OAuth 2LO and 3LO, API keys | GAP | provider key via `key_command` only | F4 AC-ID3 |
+| ID-4 | Token vault: encrypted storage, refresh, per-agent access limits | GAP | none; secrets come from an external manager at call time | F4 AC-ID4 |
+| ID-5 | User-delegated access (on behalf of a user) with consent | PARTIAL | durable human approval of tool calls (`internal/reviewgate`); no delegation or consent flow | F4 AC-ID5 |
+| ID-6 | Consent portal and step-up | GAP | none | F4 AC-ID5, F13 |
+| ID-7 | Private IdP connectivity | GAP | none | F4 AC-ID2 |
+| ID-8 | Signed, expiring, request-bound approvals and separation of duty | GAP | approver is free text (`internal/effects/broker.go`) | F4 AC-ID6 |
+
+### Guardrails (Bedrock Guardrails), on the F7 policy engine and F10 gateway
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| GR-1 | Evaluate input and output of every model call | GAP | none; native loop redacts secrets in tool results only | F10 AC-GU1 |
+| GR-2 | Content filters (hate, insults, sexual, violence, misconduct) with strengths | GAP | none | F7 AC-GU2 |
+| GR-3 | Prompt-attack and jailbreak detection | GAP | none | F7 AC-GU3 |
+| GR-4 | Denied topics | GAP | none | F7 AC-GU2 |
+| GR-5 | Word and phrase filters | GAP | none | F7 AC-GU2 |
+| GR-6 | Sensitive information: PII detection, block or mask, custom regex | PARTIAL | secret-shaped redaction in tool results and events (`internal/harness` redactors, key ring) | F7 AC-GU4 |
+| GR-7 | Contextual grounding and relevance checks | GAP | none | F7 AC-GU5, F14 |
+| GR-8 | Automated reasoning checks | GAP | none; reducer invariants are deterministic code, not a user rule checker | F7 AC-GU6 |
+| GR-9 | Guardrails on tool calls and tool results | PARTIAL | policy oracle judges shell only; review gate covers native tool calls | F7 AC-GU7 |
+| GR-10 | Detect-only mode, blocked message, streaming evaluation | PARTIAL | review gate `shadow` and `evaluate` modes (native tool calls only) | F7 AC-GU8 |
+| GR-11 | Model-independent apply API (ApplyGuardrail) | GAP | none | F10 AC-GU1 |
+| GR-12 | Image content filters | GAP | none | F7 AC-GU2 (deferred behind F8 artifacts) |
+
+### Policy, Evaluations, Optimization (AgentCore)
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| PO-1 | Deterministic policy evaluated outside the agent at every tool call | PARTIAL | policy oracle (shell only), review gate, sandbox; constants for caps | F7 AC-PL1 |
+| PO-2 | Policy language with validation (Cedar) and natural-language authoring | GAP | none | F7 AC-PL2 |
+| PO-3 | Fine-grained by principal and tool input | GAP | none | F7 AC-PL3 |
+| PO-4 | Temporal, session-aware rules (counts, budgets, approval before action) | PARTIAL | spend caps, approval for effects | F7 AC-PL4 |
+| PO-5 | Recorded decisions with audit | PARTIAL | review gate audit rows | F7 AC-PL5 |
+| EV-1 | Built-in evaluators on sessions, traces, spans | GAP | none | F15 AC-EV1 |
+| EV-2 | Custom evaluators (LLM judge, code) | GAP | none | F15 AC-EV2 |
+| EV-3 | Online, on-demand, batch, dataset evaluation and simulation | GAP | none | F15 AC-EV3 |
+| EV-4 | Verification before success | PARTIAL | live-test receipt gate for `done`; verification receipts planned (goodqa#15325) | F15 AC-EV4 |
+| OP-1 | Recommendations: prompt and tool-description improvement from traces | GAP | none | F15 AC-OP1 |
+| OP-2 | Versioned configuration bundles | GAP | none | F16 AC-AD2 |
+| OP-3 | A/B tests with traffic split and significance | GAP | none | F15 AC-OP2 |
+
+### Code Interpreter, Browser, Payments (AgentCore)
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| CI-1 | Sandboxed code execution (Python, JavaScript, TypeScript) | PARTIAL | allow-listed `shell` in a host sandbox | F8 AC-CI1 |
+| CI-2 | File upload and download, large files | GAP | none | F8 AC-CP2 |
+| CI-3 | Session timeouts and network modes | PARTIAL | wall caps, port-scoped egress | F8 AC-CI2 |
+| CI-4 | Custom interpreter images | GAP | none | F5 AC-RT7 |
+| BR-1 | Isolated managed browser sessions (Playwright, CDP) | GAP | none | F8 AC-BR1 |
+| BR-2 | Live view and human takeover | GAP | none | F8 AC-BR2 |
+| BR-3 | Session recording and replay | GAP | none | F8 AC-BR3 |
+| BR-4 | Timeouts, concurrency, profiles, proxies | GAP | none | F8 AC-BR1 |
+| PY-1 | Pay-per-use payments (x402, MPP) with wallets | GAP | none; money domain, needs an owner decision | F8 AC-PY1 (gated) |
+| PY-2 | Payment limits per user and agent | PARTIAL | hold-before-send model spend caps (`internal/agent/ledger.go`) | F10 AC-CO1, F8 AC-PY1 |
+
+### Observability (AgentCore)
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| OB-1 | OpenTelemetry traces and spans | GAP | none; no trace ids | F1 AC-1, F11 AC-TR3 |
+| OB-2 | Metrics: sessions, latency, tokens, errors | PARTIAL | `fab metrics`, `fab serve-metrics` (`internal/metrics`) | F11 AC-TR4 |
+| OB-3 | Dashboards and session views | PARTIAL | `fab tui`, `fab status` | F11 AC-TR4 |
+| OB-4 | Audit log of API activity, tamper evidence | PARTIAL | append-only tables; no hash chain, no export | F11 AC-TR2 |
+| OB-5 | Token and cost accounting | PARTIAL | `usage_receipts`, spend ledger for the native loop; subscription runs unmetered | F10 AC-CO1 |
+| OB-6 | Cross-account monitoring | GAP | none | F3, F11 AC-TR5 |
+
+### Bedrock Agents (classic)
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| AG-1 | Action groups (API schema or function definitions, executors) | GAP | tools are code | F8 AC-GW1, F16 AC-AD1 |
+| AG-2 | Return of control (hand an action back to the caller) | PARTIAL | pending review pause returns control to a human (`OutcomeApprovalRequired`); no caller-side action return | F16 AC-AG1 |
+| AG-3 | Multi-agent collaboration: supervisor and routing | GAP | none | F12 AC-MA2 |
+| AG-4 | Session attributes and prompt-session attributes | GAP | none | F16 AC-AG2 |
+| AG-5 | Versions and aliases | GAP | none | F16 AC-AD2 |
+| AG-6 | Orchestration prompt overrides | PARTIAL | native grant `system`, `extra` fields | F16 AC-AD1 |
+| AG-7 | Agent trace of reasoning steps | PARTIAL | harness event trace; reasoning not emitted by design | F11 AC-TR3 |
+| AG-8 | Knowledge base association | GAP | none | F14 AC-KB1 |
+| AG-9 | Inline agents (define at invoke time) | PARTIAL | `fab harness run` takes a grant at run time | F16 AC-AD1 |
+
+Note: AWS has put Agents classic into maintenance mode; the AgentCore Harness is its successor. Parity here means the capabilities, not API compatibility.
+
+### Knowledge Bases (RAG)
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| KB-1 | Data sources and ingestion sync | GAP | none | F14 AC-KB1 |
+| KB-2 | Parsing and chunking strategies (fixed, hierarchical, semantic, custom) | GAP | none | F14 AC-KB2 |
+| KB-3 | Embeddings and vector store (any model, binary or float) | GAP | none | F14 AC-KB3 |
+| KB-4 | Retrieve and retrieve-and-generate with citations | GAP | none | F14 AC-KB4 |
+| KB-5 | Metadata filters, hybrid search | GAP | none | F14 AC-KB4 |
+| KB-6 | Reranking and query reformulation | GAP | none | F14 AC-KB5 |
+| KB-7 | Structured-data retrieval (text to SQL) | GAP | none | F14 AC-KB6 |
+| KB-8 | Per-tenant isolation and deletion of sources | GAP | none | F14 AC-KB7, F3 |
+
+### Flows and Prompt Management
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| FL-1 | Workflow of nodes (prompt, agent, knowledge base, condition, iterator, function) | GAP | the reducer is a work-run state machine, not a user workflow | F16 AC-FL1 |
+| FL-2 | Immutable versions and aliases with instant rollback | GAP | none | F16 AC-AD2 |
+| FL-3 | Asynchronous flow executions with status | PARTIAL | missions run unattended and durably | F16 AC-FL2 |
+| FL-4 | Guardrails inside a flow | GAP | none | F7 AC-GU7, F16 AC-FL1 |
+| FL-5 | Prompt management: variants, versions, templates with variables | GAP | grant strings only | F16 AC-PM1 |
+| FL-6 | Prompt optimisation | GAP | none | F15 AC-OP1 |
+| FL-7 | Multi-turn conversation with a flow | GAP | none | F16 AC-FL2 |
+
+### Bedrock evaluations (model and RAG) and cost
+
+| ID | AWS capability | Status | Fabric evidence | Slice and AC |
+|---|---|---|---|---|
+| BE-1 | Automatic model evaluation with datasets and metrics | GAP | none | F15 AC-EV3 |
+| BE-2 | LLM-as-a-judge (correctness, faithfulness, harmfulness, refusal) | GAP | none | F15 AC-EV2 |
+| BE-3 | RAG evaluation (retrieval only, retrieve and generate, ground truth) | GAP | none | F15 AC-EV5 |
+| BE-4 | Human evaluation workflow | GAP | none | F15 AC-EV6 |
+| BE-5 | Bring-your-own inference | PARTIAL | adapters give traces from any harness | F15 AC-EV3 |
+| CO-1 | Per-job, per-run, per-month spend controls | HAVE | USD 20 month, 5 job, 1 live test, enforced hold-before-send, three scopes (`internal/native/native.go`, `internal/agent/ledger.go`, tests `TestBudgetHeldBeforeSend`) | extend F10 AC-CO1 |
+| CO-2 | Cost allocation by tenant, project, agent; usage reports | GAP | spend is per attempt, mission, month only | F10 AC-CO1, F3 |
+| CO-3 | Quotas and rate limits per tenant | GAP | none | F10 AC-CO3, F3 |
+| CO-4 | Prompt caching, batch, tier selection, cost-aware routing | PARTIAL | cache tokens priced in the ledger; ladder routes by rung, not cost | F10 AC-CO2 |
+| CO-5 | Budget alerts and automatic stop | PARTIAL | caps stop a run; no alerting | F10 AC-CO4 |
+
+## Summary
+
+Counts are taken from the tables above (see the check at the end of this page).
+
+| Status | Rows |
+|---|---|
+| HAVE | 1 |
+| PARTIAL | 36 |
+| GAP | 82 |
+| Total | 119 |
+
+Read this as the honest state: Fabric has the durable kernel and a few control points (spend caps, a review gate, sandbox controls, an event trace). It lacks the surrounding platform: identity, guardrails, a tool gateway, memory and knowledge, evaluation, browser and code services, versions and aliases, and OpenTelemetry.
+
+## Slice additions
+
+Existing slices keep their scope. The additions below are acceptance criteria folded into F1 to F13, plus three new slices where nothing fits.
+
+New slices:
+
+- **F14 Memory and knowledge.** Session memory, long-term memory strategies, retrieval, knowledge-base ingestion and RAG. Dimensions: traceable, long-term work tracking, multi-tenant.
+- **F15 Evaluation and optimisation.** Evaluators, online and batch evaluation, RAG and agent evaluation, LLM-as-judge, recommendations, A/B tests. Dimensions: traceable, policy.
+- **F16 Agent definitions, prompts and flows.** Declarative agent definition, immutable versions and aliases, prompt management, workflows, return of control, session attributes. Dimensions: multi-harness, multi-agent.
+
+Conventions: every AC below carries `Verify by:`; a negative case follows where one decides whether the gate is real. "Fresh install" is defined by AC-OOTB at the end.
+
+### F4 Principals and identity
+
+- AC-ID1: an agent has a workload identity (issuer, subject, tenant) that is not a free-text actor; a command from an unknown identity is refused. Verify by: `go test ./internal/identity -run TestWorkloadIdentity` and a forged `FABRIC_ACTOR` negative. NEG: a revoked identity keeps working until its token expires.
+- AC-ID2: inbound auth accepts a signed OIDC or JWT from a configured issuer (JWKS fetch, audience, expiry, clock skew) and from the `local` issuer. Verify by: tests with a local JWKS server: valid, expired, wrong audience, wrong issuer, `alg` none, key rollover. NEG: an unreachable JWKS fails closed.
+- AC-ID3: outbound credential providers for OAuth client credentials (2LO), OAuth authorization code (3LO) and API keys, per tool, resolved by the gateway, never placed in the sandbox environment or the trace. Verify by: a fake OAuth server; a canary secret never appears in the trace, the events or the child environment. NEG: a tool for tenant A cannot resolve tenant B's provider.
+- AC-ID4: a token vault: credentials encrypted at rest, refreshed before expiry, readable only by the broker role, access recorded. Verify by: a refresh test with a short-lived token; a database dump contains no plaintext; the app role cannot read the table. NEG: a stolen sandbox cannot call the vault.
+- AC-ID5: user-delegated access: an action carries `on_behalf_of`; a 3LO grant requires a recorded user consent; consent expires and is revocable; step-up consent for a named tool class. Verify by: a delegation test with consent given, expired and revoked. NEG: an agent cannot use a user's token for a tool outside the consented scope.
+- AC-ID6: approvals are signed, expiring and bound to the request hash; the requester cannot approve (separation of duty). Verify by: tests in F4's own spec (forged actor, expired approval, replay, wrong hash).
+
+### F7 Policy engine and guardrails
+
+- AC-PL1: every tool call, model call and effect passes one decision point; the harness hooks call it, and an unreachable decision point denies. Verify by: `go test ./internal/policy -run TestDecisionPoint` and a killed-service negative.
+- AC-PL2: policy bundles in a validated language. Decision: Cedar-compatible, or a Fabric JSON bundle with a Cedar importer (needs the owner's choice; default proposed: Fabric JSON bundle first, Cedar import as a later AC). Verify by: schema validation tests, a bundle with an unknown class refused at load, and natural-language authoring producing a candidate bundle that must pass validation and a safety check (overly permissive, never satisfiable) before it is accepted.
+- AC-PL3: rules on principal, capability class, tool and input parameters. Verify by: a table test of allow, deny and require-approval over input values.
+- AC-PL4: temporal rules over session history (count limits, running totals, approval before action). Verify by: a scripted session test; NEG: a count limit is not reset by starting a new attempt of the same mission.
+- AC-PL5: each decision is recorded with the bundle digest, principal, class and subject. Verify by: event assertions; NEG: a decision cannot be edited after the fact (append-only).
+- AC-GU2: a guardrail provider interface and a built-in local provider for content filters (categories with strengths), denied topics and word and phrase filters, applied to model input, model output, tool input and tool output, configurable per tenant, agent and tool. Verify by: fixture corpora per category: a blocked input never reaches the model (zero upstream requests); a blocked output is replaced by the configured message. NEG: the provider failing closed blocks, and failing open is only possible by an explicit bundle setting that is recorded.
+- AC-GU3: prompt-attack and jailbreak detection as a provider signal usable in rules, including attacks arriving through tool output (indirect injection). Verify by: a labelled fixture set with a pre-registered threshold and sample size reported with a Wilson lower bound; no claim beyond it.
+- AC-GU4: sensitive-information handling: PII entity detection (names, emails, phone, addresses, payment cards with Luhn check, government ids) and custom regex, with block or mask, on input and output and in trace and memory writes. Verify by: fixtures for each entity; masking is irreversible in the stored trace; a canary PII string never reaches the event store. NEG: PII in a tool argument is masked before an effect is dispatched when the rule says mask.
+- AC-GU5: contextual grounding and relevance checks of an answer against supplied source text, with a score and threshold. Verify by: grounded and ungrounded fixtures; the check is a provider, so any model can back it.
+- AC-GU6: rule-checking ("automated reasoning") of an agent answer against a user-supplied formal rule set, with a counterexample on failure. Verify by: a small rule set (arithmetic and enumerated constraints) with passing and failing answers. Scope note: AWS's product is a formal-methods service; Fabric's AC is the verifiable subset, labelled as such.
+- AC-GU7: guardrails apply to tool calls and tool results (including inside a workflow node). Verify by: a tool whose result carries an injection string is blocked before it reaches the model.
+- AC-GU8: modes detect-only, enforce and a blocked-message setting, and streaming evaluation (asynchronous and synchronous). Verify by: detect-only records and never blocks; enforce blocks; a streamed answer is cut at the violating chunk.
+
+### F10 Gateway, cost and routing
+
+- AC-GA1: a per-node model gateway applies the guardrail provider to every model call (input and output) whatever the model or harness, records model, request digest, usage and latency, and routes across providers. Verify by: a fake upstream sees zero requests for a blocked input; routing follows the ladder and a configured fallback; a Vertex provider cannot be registered (a negative test for the owner rule).
+- AC-GU1: an apply API: `fab guard apply --guardrail G --text T` returns the decision for any text, independent of any model. Verify by: CLI test.
+- AC-CO1: cost and usage controls per tenant, project, agent and run: hold-before-send caps (existing), allocation tags on every usage record, and a usage report. Verify by: two-tenant usage totals; caps still hold under concurrent calls (existing property test extended).
+- AC-CO2: cost-aware routing and caching: the router can choose a cheaper rung for a task class within quality limits set by an evaluator, and cache-token pricing is applied. Verify by: a routing table test; no downgrade when the evaluator floor is not met.
+- AC-CO3: per-tenant quotas and rate limits (tokens per minute, requests, concurrent runs). Verify by: a burst test returns 429 and sends nothing upstream.
+- AC-CO4: budget alerts and automatic stop at thresholds. Verify by: an alert event at 80 percent and a stop at 100 percent, recorded as events.
+
+### F8 Capability broker, tool gateway, registry, browser and code
+
+- AC-GW1: OpenAPI-described HTTP APIs and local functions become tools through the broker, with typed schemas and per-tool grants. Verify by: a fake API; a call outside its grant is refused; a mutating call goes through the effect state machine with readback.
+- AC-GW2: external MCP servers connect as tool providers (stdio and HTTP), with the MCP session, streaming and long-running task features. Verify by: a conformance run against a reference MCP server fixture; a server that hangs is cut by a lease.
+- AC-GW3: semantic tool search over the registered tools, returning the top tools for a task. Verify by: a labelled query set with recall at 5 reported with a Wilson bound; searching 1,000 synthetic tools stays under a stated latency.
+- AC-GW4: integration templates (starting set: GoodQA, GitHub, Slack, Jira) installable by configuration. Verify by: each template passes the same tool contract test against a recorded fixture.
+- AC-GW5: outbound auth per tool through F4 credential providers. Verify by: the F4 AC-ID3 tests applied through the broker.
+- AC-GW6: MCP elicitation and sampling are routed through the policy engine and the human approval path. Verify by: an elicitation request creates an inbox item and a pending state, not a tool failure.
+- AC-GW7: a registry of tools, agents and skills with an approval workflow (draft, pending, approved, deprecated), hybrid semantic and keyword search, and an MCP endpoint. Verify by: only approved records are discoverable; a deprecated record disappears from search; search honours tenant isolation.
+- AC-CP2: artifacts with digests and large-file support (streamed, resumable, bounded); a mutated artifact fails its digest. Verify by: a 1 GiB streamed round trip within a stated memory bound; tamper test.
+- AC-CP3: shared storage mounts across sessions through an artifact store with history. Verify by: two sessions see each other's committed writes; a deleted file is recoverable from history.
+- AC-CI1: a code-execution capability for Python, JavaScript and TypeScript in the host sandbox with per-session isolation. Verify by: language fixtures; a session cannot read another session's files.
+- AC-CI2: session timeouts (default and extended) and network modes (none, allow-list). Verify by: a timeout kills the whole process group; a network call outside the allow-list fails.
+- AC-CI3: an interactive shell session capability with the same isolation. Verify by: a scripted terminal session; Stop ends all descendants.
+- AC-BR1: a browser capability with isolated sessions, Playwright and CDP access, timeouts and concurrency limits, provider-backed (agentbrowser). Verify by: a disposable page; a session cannot read another session's cookies.
+- AC-BR2: live view and human takeover through the existing remote-session route with a recorded handoff. Verify by: a takeover test records who took control and when; the agent is paused during takeover.
+- AC-BR3: session recording and replay stored as artifacts with digests. Verify by: replay reproduces the action log; tamper fails the digest.
+- AC-PY1 (gated, owner decision first): payment capability classes with per-session spend limits and wallet providers behind the credential vault. This is the money domain: it needs the owner's explicit product decision and its own spec, with the money checklist (idempotency, double submit, reversal, reconciliation) before any code. Verify by: defined in that spec.
+
+### F5, F6, F9, F11, F12, F13, F1, F3 additions
+
+- AC-RT1 (F5): a sandbox driver interface with host profiles and a container driver; a per-session isolation proof (one session cannot see another's process, file or network namespace). Verify by: the negative control suite run per driver.
+- AC-RT2 (F5): a session survives a node restart: after killing the node, another node resumes the session from the event log with a new fence. Verify by: a kill-and-resume test with no double-executed side-effecting tool.
+- AC-RT3 (F5): a persistent session filesystem across stop and resume. Verify by: files written before Stop exist after resume; a different tenant cannot mount it.
+- AC-RT7 (F5): bring-your-own container image as a sandbox environment, pinned by digest. Verify by: a pinned image runs; an unpinned or mismatching digest is refused.
+- AC-RT8 (F5): idle sessions are suspended and resources released; admission counts only active sessions. Verify by: a suspend and resume test with a slot-count assertion.
+- AC-RT4 (F6): multimodal input to adapters that support it (text, image, file reference) with size caps. Verify by: an oversize input is refused before sending.
+- AC-RT5 (F6): a framework adapter contract: any process speaking the documented stream-json or HTTP agent protocol is an adapter without code in Fabric. Verify by: a sample LangGraph-style process in a fixture passes the conformance suite.
+- AC-RT6 (F6): switching the model provider mid-session without losing context for adapters that expose message history. Verify by: a session that plans with one adapter and continues with another keeps its message history.
+- AC-MB4 (F9): an A2A bridge: a Fabric agent is addressable over A2A and can call external A2A agents under policy. Verify by: an A2A conformance fixture.
+- AC-MB5 (F9): events and notifications (record submitted, approval needed) delivered through the message bus. Verify by: a subscriber receives each exactly once.
+- AC-TR1, AC-TR3 (F11): a read API listing sessions and events with filters on event metadata; streaming over server-sent events and WebSocket; OpenTelemetry export mapping trace and span ids. Verify by: an OpenTelemetry collector fixture receives spans whose ids match the stored envelope; filtered listing returns exactly the matching events.
+- AC-TR2 (F11): a hash chain over the stored canonical bytes with tamper detection and an off-system export. Verify by: tamper test and an anchored head hash.
+- AC-TR4 (F11): metrics for sessions, latency, token usage and error rates per tenant and agent, and a session view. Verify by: counters match the event log for a scripted run.
+- AC-TR5 (F11 with F3): cross-tenant administrator views for an organisation, never across organisations. Verify by: two-organisation API test.
+- AC-MA1, AC-MA2 (F12): more than two live attempts under a role policy, and a supervisor agent that routes a task to collaborator agents (route to one, or fan out). Verify by: an oracle property test with seeded traces; a supervisor whose collaborator is cancelled settles deterministically.
+- AC-1 (F1): events carry W3C trace and span ids (as in the F1 spec).
+
+### F14 Memory and knowledge (new)
+
+- AC-ME1: session memory: create events with metadata, list sessions, list events with metadata filters, get one event. Verify by: API tests; metadata is not encrypted and the doc says never store secrets in it; a secret-shaped value in metadata is refused.
+- AC-ME2: long-term memory generation as an asynchronous, restart-safe job with extraction and consolidation and strategies: semantic facts, summaries, user preferences, episodic. The extractor is any model through the F10 gateway. Verify by: a fixture conversation yields the expected records with a pre-registered scoring threshold; the job is idempotent on retry; no duplicate records.
+- AC-ME3: semantic retrieval over memory records with namespace filters. Verify by: a labelled retrieval set with recall at 5 and a Wilson bound; a query never returns another namespace's record.
+- AC-ME4: memory shared across agents within a namespace, isolated across tenants. Verify by: two agents share; two tenants never see each other's records (row-level security test).
+- AC-ME5: custom and self-managed strategies: a user-supplied extraction prompt and model, and direct ingestion of records. Verify by: a custom strategy produces records; direct ingestion bypasses extraction and is audited.
+- AC-ME6: retention and deletion: per-namespace retention, a delete that removes records and their embeddings and is verifiable, encryption at rest, a tenant export. Verify by: a deleted record is unreadable and absent from the index; a restore from backup does not resurrect it past the documented window.
+- AC-KB1: knowledge-base data sources and ingestion sync: files, web pages, GoodQA, and a custom connector, with change detection. Verify by: re-sync ingests only changes; a failed document is reported and does not stop the batch.
+- AC-KB2: parsing and chunking strategies: fixed, hierarchical, semantic and a custom function, with overlap. Verify by: golden chunk outputs per strategy.
+- AC-KB3: embeddings through any provider and a vector store behind an interface (Postgres vector extension by default, so a personal install needs no extra service). Verify by: swapping the embedding provider re-embeds and retrieval still passes the quality set.
+- AC-KB4: retrieve, and retrieve-and-generate with citations; metadata filters and hybrid (keyword and vector) search. Verify by: every cited span exists in the cited source; a filter excludes non-matching chunks.
+- AC-KB5: reranking and query reformulation as optional stages with measured effect. Verify by: a quality set shows the stage's effect; disabling it restores the baseline.
+- AC-KB6: structured-data retrieval: natural language to read-only SQL against registered schemas under policy. Verify by: a write statement is refused; a query outside the registered schema is refused.
+- AC-KB7: per-tenant isolation and source deletion that removes derived chunks and embeddings. Verify by: the F3 row-level security test on the chunk and vector tables.
+
+### F15 Evaluation and optimisation (new)
+
+- AC-EV1: built-in evaluators over sessions, traces and spans: goal success, tool-call correctness, helpfulness, harmfulness, refusal, faithfulness. Verify by: a labelled fixture set per evaluator with a pre-registered agreement threshold.
+- AC-EV2: custom evaluators: an LLM-as-judge prompt with any model through the gateway, and a code evaluator run in the sandbox. Verify by: a judge disagreement rate on a labelled set is reported; a code evaluator cannot reach the network.
+- AC-EV3: online evaluation (sampled, continuous), on-demand, batch, dataset, and simulation (scripted user). Verify by: a sampled run scores about the configured fraction of sessions; results are stored as events.
+- AC-EV4: verification before success: a work run reaches `SUCCEEDED` only with a verification receipt bound to the produced head; the verifier is not the worker (goodqa#15325). Verify by: that ticket's own spec.
+- AC-EV5: RAG evaluation: retrieval-only and retrieve-and-generate with ground truth, reporting context relevance, context coverage, correctness, faithfulness and citation precision. Verify by: a small ground-truth set with known failures is scored correctly.
+- AC-EV6: a human evaluation workflow through the inbox: assign, rate, adjudicate. Verify by: ratings are attributed to authenticated principals and cannot be edited after submission.
+- AC-OP1: recommendations: propose a changed system prompt or tool description from failing traces and a target evaluator, as a candidate version, never auto-applied. Verify by: a candidate is produced and held for approval; an applied candidate shows an evaluator delta on a held-out set.
+- AC-OP2: A/B tests: traffic split between two versions or endpoints with online evaluation and a significance report. Verify by: a simulated experiment with a known effect is detected at the stated power; no split without a recorded approval.
+
+### F16 Agent definitions, prompts and flows (new)
+
+- AC-AD1: one declarative agent definition (model or adapter, prompt, tools, skills, guardrails, memory, knowledge bases) in a file, runnable with `fab agent run` on any adapter; an inline form at invoke time. Verify by: the same definition runs on native and claude-code adapters in tests and produces conforming traces.
+- AC-AD2: immutable versions and named aliases with instant rollback and configuration bundles (prompt, model, tool descriptions) that change behaviour without a redeploy. Verify by: an alias moves between versions with no downtime in a test; an in-flight session keeps its version; a version cannot be edited.
+- AC-AD3: skills attachable by reference (git path or artifact digest). Verify by: a skill pinned by digest loads; a mismatching digest is refused.
+- AC-AD4: export of a definition to a standalone file that runs without a Fabric server (the definition and an adapter command). Verify by: the exported file reproduces a run on a fresh machine.
+- AC-AG1: return of control: a tool call can be returned to the caller as a pending action (with typed parameters) and resumed with the caller's result. Verify by: a pending action survives a restart and resumes once.
+- AC-AG2: session attributes and prompt-session attributes: key-value state set by the caller, available to tools and prompts, scoped to the session, not stored in clear when marked sensitive. Verify by: attributes are visible to tools in the session and absent from other sessions.
+- AC-FL1: workflows of nodes (prompt, agent, knowledge base, condition, iterator, function, guardrail) defined in a file, validated before run, executed as a work stream. Verify by: a branching and looping fixture runs deterministically under the oracle; a cycle without a bound is refused at validation.
+- AC-FL2: asynchronous executions with status, cancellation and multi-turn conversation with a workflow. Verify by: start, poll, cancel and resume tests; a cancelled execution leaves no running attempt.
+- AC-PM1: prompt management: templates with variables, variants, versions and aliases, with a diff and an evaluator hook. Verify by: a variable missing at render time is an error; a version is immutable.
+
+## Out of the box on a fresh personal install
+
+AC-OOTB (F13): on a fresh personal install (one binary plus the bundled or managed Postgres, local issuer, no cloud account and no network access beyond the model provider the user configures), `fab init` followed by `fab smoke --parity` runs one check per row group above and every check must pass or fail visibly; none may be skipped silently. Verify by: a scripted install on a disposable host in CI. Specifically:
+
+- policy defaults are on (deny by default for unknown capability classes), the guardrail local provider runs with default content, PII and prompt-attack settings, and traces and metrics are recorded without configuration;
+- identity works through the local issuer; the token vault, memory store, knowledge base and registry are created by `fab init` in the same database;
+- a local tool gateway and a local MCP fixture are registered, and the code capability and the browser capability either run (the browser provider is auto-provisioned or the check fails with the exact missing prerequisite) or the smoke test reports the group as FAILED, never as passed;
+- no group requires a hosted AWS, GCP or other cloud service; a smoke run with all outbound network except the configured model provider blocked still passes;
+- NEG: a smoke run with the guardrail provider disabled by configuration fails the smoke test (the default is not allowed to be silently off).
+
+## Decisions needed from the owner
+
+1. Payments (AC-PY1): real-money capability. Recommendation: spec it separately, build only after an explicit product decision; not part of out-of-the-box.
+2. Policy language (AC-PL2): Fabric JSON bundles first with a Cedar importer later, or Cedar from the start.
+3. Guardrail provider: the built-in local provider is rule and classifier based and model-agnostic. Confirm that a model-backed classifier through the gateway is acceptable for prompt-attack and grounding checks, and which model class (a local small model or any configured provider).
+4. Knowledge-base store: Postgres vector extension by default for the personal install. Confirm.
+5. Order: F4 (identity) and F7 (policy and guardrails) first because everything else is gated by them; F14 to F16 after F1 to F3 settle the envelope, streams and tenancy.
+
+## Check
+
+    for s in HAVE PARTIAL GAP; do grep -E '^\| [A-Z]{2}-[0-9]+ \|' docs/aws-agent-parity.md | grep -c "| $s |"; done
