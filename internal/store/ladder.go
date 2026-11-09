@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"fabric/internal/domain"
+	"fabric/internal/envelope"
 	"fabric/internal/ladder"
 	"fabric/internal/reducer"
 )
@@ -132,8 +133,8 @@ func ladderGuard(ctx context.Context, tx pgx.Tx, cmd domain.Command, m domain.Mi
 			AND payload->'ladder'->>($2::text) = $3::text ORDER BY seq LIMIT 1`, string(cmd.Mission), ident, identVal).Scan(&seq, &payload)
 		switch {
 		case err == nil:
-			var stored domain.Event
-			if err := json.Unmarshal(payload, &stored); err != nil {
+			stored, err := envelope.DecodeEvent(payload)
+			if err != nil {
 				return nil, err
 			}
 			a, _ := json.Marshal(stored.Ladder)
@@ -204,8 +205,8 @@ func ReadLadderEvents(ctx context.Context, tx pgx.Tx, id domain.MissionID) ([]do
 		if err := rows.Scan(&payload); err != nil {
 			return nil, err
 		}
-		var e domain.Event
-		if err := json.Unmarshal(payload, &e); err != nil {
+		e, err := envelope.DecodeEvent(payload)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, e)

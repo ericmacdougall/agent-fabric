@@ -93,7 +93,7 @@ func Upcast(r Row) (View, error) {
 		return View{}, err
 	}
 	if !domain.KnownEventKind(e.Kind) {
-		return View{}, fmt.Errorf("%w: %q", ErrUnknownKind, string(e.Kind))
+		return View{}, fmt.Errorf("%w: %w: %q", ErrUnknownKind, domain.ErrUnsupportedEvent, string(e.Kind))
 	}
 	if string(e.Kind) != r.Kind || string(e.Mission) != r.Mission || (e.Seq != 0 && e.Seq != r.Seq) {
 		return View{}, ErrRowMismatch

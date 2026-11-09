@@ -380,7 +380,7 @@ func TestTraces(t *testing.T) {
 			checks++
 		}
 		for id, m := range f.missions {
-			if r, err := Replay(id, f.logs[id]); err != nil || Digest(r) != Digest(m) {
+			if r, err := Replay(id, views(f.logs[id])); err != nil || Digest(r) != Digest(m) {
 				t.Fatalf("seed %d: replay of %s differs from live state", seed, id)
 			}
 		}

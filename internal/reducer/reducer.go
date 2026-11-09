@@ -14,6 +14,7 @@ import (
 	"fmt"
 
 	"fabric/internal/domain"
+	"fabric/internal/envelope"
 )
 
 // Env is what the reducer needs from outside the mission: the fleet cap and
@@ -894,9 +895,10 @@ func sameSubmission(f domain.Effect, cmd domain.Command) error {
 // ErrUnsupportedEvent with the known prefix, for diagnostics only. Apply
 // stays permissive for the Decide -> Apply path, which only sees kinds this
 // build emits.
-func Replay(id domain.MissionID, events []domain.Event) (domain.Mission, error) {
+func Replay(id domain.MissionID, views []envelope.View) (domain.Mission, error) {
 	m := domain.NewMission(id)
-	for i, e := range events {
+	for i, v := range views {
+		e := v.Event
 		if !domain.KnownEventKind(e.Kind) {
 			return m, fmt.Errorf("%w: mission %s event %d (seq %d) is %q", domain.ErrUnsupportedEvent, id, i, e.Seq, e.Kind)
 		}

@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"fabric/internal/domain"
+	"fabric/internal/envelope"
 	"fabric/internal/reducer"
 )
 
@@ -806,28 +807,44 @@ func (s *Store) Mission(ctx context.Context, id domain.MissionID) (domain.Missio
 
 // Events returns a mission's log in sequence order.
 func (s *Store) Events(ctx context.Context, id domain.MissionID) ([]domain.Event, error) {
-	return readEvents(ctx, s.pool, id)
+	views, err := readViews(ctx, s.pool, id)
+	if err != nil {
+		return nil, err
+	}
+	return viewEvents(views), nil
 }
 
-func readEvents(ctx context.Context, q interface {
+// viewEvents is the v1 events inside a list of views.
+func viewEvents(views []envelope.View) []domain.Event {
+	out := make([]domain.Event, 0, len(views))
+	for _, v := range views {
+		out = append(out, v.Event)
+	}
+	return out
+}
+
+// readViews reads a mission's log through the v2 reader: every event is
+// upcast from its events row (envelope.Upcast, F1a), so a row this build
+// cannot decode is an error that names the failing seq, never a skipped row.
+func readViews(ctx context.Context, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
-}, id domain.MissionID) ([]domain.Event, error) {
-	rows, err := q.Query(ctx, "SELECT payload FROM events WHERE mission_id = $1 ORDER BY seq", string(id))
+}, id domain.MissionID) ([]envelope.View, error) {
+	rows, err := q.Query(ctx, "SELECT seq, kind, actor, at, payload FROM events WHERE mission_id = $1 ORDER BY seq", string(id))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []domain.Event
+	var out []envelope.View
 	for rows.Next() {
-		var payload []byte
-		if err := rows.Scan(&payload); err != nil {
+		r := envelope.Row{Mission: string(id)}
+		if err := rows.Scan(&r.Seq, &r.Kind, &r.Actor, &r.At, &r.Payload); err != nil {
 			return nil, err
 		}
-		var e domain.Event
-		if err := json.Unmarshal(payload, &e); err != nil {
-			return nil, err
+		v, err := envelope.Upcast(r)
+		if err != nil {
+			return nil, fmt.Errorf("mission %s seq %d: %w", id, r.Seq, err)
 		}
-		out = append(out, e)
+		out = append(out, v)
 	}
 	return out, rows.Err()
 }
@@ -843,10 +860,11 @@ func (s *Store) VerifiedSnapshot(ctx context.Context, id domain.MissionID) (doma
 		return domain.Mission{}, nil, err
 	}
 	defer tx.Rollback(context.Background()) //nolint:errcheck // read-only
-	events, err := readEvents(ctx, tx, id)
+	views, err := readViews(ctx, tx, id)
 	if err != nil {
 		return domain.Mission{}, nil, err
 	}
+	events := viewEvents(views)
 	if s.hooks.afterEventsRead != nil {
 		s.hooks.afterEventsRead()
 	}
@@ -862,7 +880,7 @@ func (s *Store) VerifiedSnapshot(ctx context.Context, id domain.MissionID) (doma
 	if err := json.Unmarshal(stateJSON, &snap); err != nil {
 		return domain.Mission{}, nil, fmt.Errorf("mission %s snapshot: %w", id, err)
 	}
-	rebuilt, err := reducer.Replay(id, events)
+	rebuilt, err := reducer.Replay(id, views)
 	if err != nil {
 		// Never serve the known prefix as current state (Kimi compatibility analysis).
 		return domain.Mission{}, nil, fmt.Errorf("mission %s: %w", id, err)
@@ -885,6 +903,8 @@ type OutboxRow struct {
 	Mission domain.MissionID
 	Seq     int64
 	Event   domain.Event
+	// View is the v2 envelope of the same event (F1a).
+	View envelope.View
 }
 
 // OutboxPage returns up to limit rows after the consumer's cursor.
@@ -892,7 +912,12 @@ func (s *Store) OutboxPage(ctx context.Context, consumer string, limit int) ([]O
 	// Rows whose transaction is still in progress (or newer than one that is)
 	// are not visible yet, so an id that commits late can never be skipped
 	// (review H5 / RV-3).
-	rows, err := s.pool.Query(ctx, `SELECT o.id, o.mission_id, o.seq, o.payload FROM outbox o
+	// The view is built from the events row the outbox row joins on
+	// (mission_id, seq), so the consumer and replay paths see the same view;
+	// an outbox row with no events row yields an empty payload, which fails
+	// the decode like any other poison.
+	rows, err := s.pool.Query(ctx, `SELECT o.id, o.mission_id, o.seq, COALESCE(e.kind, ''), COALESCE(e.actor, ''), COALESCE(e.at, o.at), COALESCE(e.payload::text, '')
+		FROM outbox o LEFT JOIN events e ON e.mission_id = o.mission_id AND e.seq = o.seq
 		WHERE o.id > COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer = $1), 0)
 		  AND o.xid < pg_snapshot_xmin(pg_current_snapshot())
 		ORDER BY o.id LIMIT $2`, consumer, limit)
@@ -903,13 +928,17 @@ func (s *Store) OutboxPage(ctx context.Context, consumer string, limit int) ([]O
 	var out []OutboxRow
 	for rows.Next() {
 		var r OutboxRow
-		var payload []byte
-		if err := rows.Scan(&r.ID, &r.Mission, &r.Seq, &payload); err != nil {
+		er := envelope.Row{}
+		var payload string
+		if err := rows.Scan(&r.ID, &r.Mission, &r.Seq, &er.Kind, &er.Actor, &er.At, &payload); err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(payload, &r.Event); err != nil {
-			return nil, err
+		er.Mission, er.Seq, er.Payload = string(r.Mission), r.Seq, []byte(payload)
+		v, err := envelope.Upcast(er)
+		if err != nil {
+			return nil, fmt.Errorf("outbox %d mission %s seq %d: %w", r.ID, r.Mission, r.Seq, err)
 		}
+		r.View, r.Event = v, v.Event
 		out = append(out, r)
 	}
 	return out, rows.Err()

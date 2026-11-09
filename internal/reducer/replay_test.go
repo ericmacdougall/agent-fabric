@@ -38,17 +38,17 @@ func TestReplayStopsAtFirstUnknownEvent(t *testing.T) {
 		{Kind: "FUTURE_PUBLICATION", Mission: "m_r", Seq: 2},
 		{Kind: domain.EvWakeRecorded, Mission: "m_r", Seq: 3, Token: "after-future"},
 	}
-	m, err := Replay("m_r", log)
+	m, err := Replay("m_r", views(log))
 	if !errors.Is(err, domain.ErrUnsupportedEvent) {
 		t.Fatalf("want ErrUnsupportedEvent, got %v", err)
 	}
 	if m.Seq != 1 || m.Wakes["after-future"] || m.Execution != domain.ExecAdmitted {
 		t.Fatalf("replay went past the unknown event: seq %d, wakes %v, execution %s", m.Seq, m.Wakes, m.Execution)
 	}
-	if _, err := Replay("m_r", log[1:]); !errors.Is(err, domain.ErrUnsupportedEvent) {
+	if _, err := Replay("m_r", views(log[1:])); !errors.Is(err, domain.ErrUnsupportedEvent) {
 		t.Fatalf("unknown first event: %v", err)
 	}
-	if _, err := Replay("m_r", log[:1]); err != nil {
+	if _, err := Replay("m_r", views(log[:1])); err != nil {
 		t.Fatalf("known log: %v", err)
 	}
 }
