@@ -25,7 +25,7 @@ func SetFinishSeams(after func(store.Response, error) error, clock settle.Clock)
 // NewKeyRing exposes the native key source and its redactor (goodqa#15087
 // AC-5).
 func NewKeyRing(argv []string, ttl time.Duration) (func(context.Context) (string, error), interface{ Redact(string) string }, error) {
-	src, ring, err := newKeyRing(argv, ttl)
+	src, ring, err := newKeyRing(argv, ttl, "", nil)
 	if err != nil {
 		return nil, nil, err
 	}

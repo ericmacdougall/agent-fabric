@@ -33,6 +33,12 @@ var ErrKeyShape = errors.New("returned a value that is not an Anthropic API key 
 // accepted value (once per fetch), so the caller can redact each of them,
 // including a rotated one.
 func KeyFromCommand(argv []string, ttl time.Duration, onKey func(string)) (KeySource, error) {
+	return KeyFromCommandWith(argv, ttl, onKey, KeyOptions{})
+}
+
+// KeyFromCommandWith is KeyFromCommand with opt-in options (see KeyCheck).
+// The zero KeyOptions is exactly KeyFromCommand.
+func KeyFromCommandWith(argv []string, ttl time.Duration, onKey func(string), opts KeyOptions) (KeySource, error) {
 	if len(argv) == 0 {
 		return nil, errors.New("anthropic: key command is empty")
 	}
@@ -67,7 +73,9 @@ func KeyFromCommand(argv []string, ttl time.Duration, onKey func(string)) (KeySo
 			return "", fmt.Errorf("anthropic: key command %q returned more than one token", argv[0])
 		}
 		if !apiKeyShape.MatchString(k) {
-			return "", fmt.Errorf("anthropic: key command %q %w", argv[0], ErrKeyShape)
+			if err := authorityAccepts(ctx, argv[0], k, opts, opts.Vouched.Has(k)); err != nil {
+				return "", err
+			}
 		}
 		if onKey != nil {
 			onKey(k)

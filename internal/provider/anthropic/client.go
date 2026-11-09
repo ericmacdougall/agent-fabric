@@ -53,6 +53,9 @@ type Config struct {
 	// Capture, when set, receives every attempt's raw response for fixture
 	// recording. It never receives request headers, so the key cannot reach it.
 	Capture func(Capture)
+	// Vouched, when set, lists key values the authority check accepted
+	// (KeyOptions.Vouched); the shape guard on every send accepts those too.
+	Vouched *Vouched
 }
 
 // Capture is one attempt as it crossed the wire, minus credentials.
@@ -263,7 +266,7 @@ func (c *Client) classify(err error, n int) (time.Duration, bool, error) {
 func (c *Client) once(ctx context.Context, body []byte, n int, onEvent func(int)) (*Message, AttemptRecord, error) {
 	rec := AttemptRecord{N: n}
 	key, err := c.cfg.Key(ctx)
-	if err != nil || !apiKeyShape.MatchString(key) {
+	if err != nil || !(apiKeyShape.MatchString(key) || c.cfg.Vouched.Has(key)) {
 		rec.Outcome, rec.Err = "transport", "no valid api key available"
 		return nil, rec, errors.New("anthropic: valid api key unavailable")
 	}
