@@ -3,40 +3,66 @@
 #
 #   MODE=rehearse FAB_BIN=/path/fab-with-no-dispatch tools/fabd-install/install.sh
 #   MODE=live     FAB_BIN=/srv/fabric/bin/fab-live   tools/fabd-install/install.sh
+#   MODE=remove   FAB_BIN=/srv/fabric/bin/fab-live   tools/fabd-install/install.sh   (live removal)
 #
 # rehearse: restores a streamed dump of fabric_live into a scratch database,
 #   creates roles under the prefix fabric_svcrh (roles are cluster-wide, so a
 #   rehearsal never touches fabric_svc_*), installs a unit fabd-rh.service
-#   against the COPY, runs the same checks, then removes everything it created.
+#   against the COPY, runs the same checks, then runs the removal path and
+#   drops the copy. A trap removes everything a failed rehearsal created.
 # live: the real install (prefix fabric_svc, unit fabd.service, fabric_live).
+# remove: stops and disables fabd.service, restores fabric_settings.scheduler_role
+#   to the value saved at install, drops the fabric_svc roles; it never touches
+#   the old fabric_live_* roles or any data.
+#
+# Resume: a rerun with WORKDIR=<the earlier evidence directory> skips the phases
+# recorded in its state file; without WORKDIR a live rerun refuses (the roles
+# exist) and a rehearsal starts afresh.
+# ASSUMPTION (goodqa#15587 review M7): the administrative credential is the one
+# in ~/fabric-dev/test.env (FABRIC_TEST_DSN), which the deploy tooling's own
+# pgcall-based scripts already use against fabric_live; the spec's "owner
+# credential file the deploy scripts use" is read as that file.
 #
 # Never prints a DSN or a password: password files and the environment file are
-# written with umask 077 into a 0700 directory, DSNs reach psql and fab only as
-# environment variables of that one process.
-# Stops on the first failed check (set -e plus explicit stop rules); a rerun
-# resumes after the last recorded phase in $STATE.
+# written with umask 077 into a 0700 directory, DSNs reach psql, pg_dump,
+# pg_restore and fab only as environment variables of that one process.
 set -euo pipefail
 umask 077
 export LC_ALL=C.UTF-8
-MODE=${MODE:?MODE=rehearse|live}
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+MODE=${MODE:?MODE=rehearse|live|remove}
 FAB=${FAB_BIN:?FAB_BIN}
 D=$HOME/fabric-dev
 [[ -x "$FAB" ]] || { echo "install: FAB_BIN is not executable" >&2; exit 2; }
-case "$MODE" in
-  rehearse) PREFIX=fabric_svcrh; UNIT=fabd-rh; DB=fabric_r15299_fabdrh_$(date -u +%H%M%S); SVC=$HOME/fabd-rh;;
-  live)     PREFIX=fabric_svc;   UNIT=fabd;    DB=fabric_live;                                 SVC=$HOME/fabd;;
-  *) echo "install: MODE must be rehearse or live" >&2; exit 2;;
-esac
+# The recorded fake provider: a reviewed constant, never an environment value.
 FAKE=/srv/fabric/bin/fakeclaude-live
-FAKE_SHA=${FAKE_SHA:-$(sha256sum "$FAKE" | cut -d' ' -f1)}   # pinned below in the unit's guard
-HOSTLABEL=${HOST_LABEL:-t2-dev}
+FAKE_SHA=50d4f1d864de7b2b2ab38808d4414a3adf8a2c4b0fc0047571bdb515689d5285
+HOSTLABEL=t2-dev
+for v in FAB FAKE; do
+  [[ "${!v}" =~ ^[A-Za-z0-9/._-]+$ ]] || { echo "install: $v has characters outside [A-Za-z0-9/._-]" >&2; exit 2; }
+done
+[[ "$(sha256sum "$FAKE" | cut -d' ' -f1)" == "$FAKE_SHA" ]] || { echo "install: the provider at $FAKE is not the recorded fake" >&2; exit 2; }
 TS=$(date -u +%Y%m%dT%H%M%SZ)
+case "$MODE" in
+  rehearse) PREFIX=fabric_svcrh; UNIT=fabd-rh; SVC=$HOME/fabd-rh;;
+  live|remove) PREFIX=fabric_svc; UNIT=fabd;   SVC=$HOME/fabd;;
+  *) echo "install: MODE must be rehearse, live or remove" >&2; exit 2;;
+esac
+[[ "$SVC" =~ ^[A-Za-z0-9/._-]+$ ]] || { echo "install: SVC path has unsafe characters" >&2; exit 2; }
 W=${WORKDIR:-$HOME/fabric-dev/evidence/fabd-install-$MODE-$TS}
 mkdir -p -m 0700 "$W" "$SVC"
 LOG=$W/install.log
 exec >> "$LOG" 2>&1
 STATE=$W/state
 say() { echo "[$(date -u +%T)] $*"; }
+die() { say "STOP: $*"; echo "STOP: $*" >&2; exit 3; }
+if [[ $MODE == rehearse ]]; then
+  exec 9> "$HOME/fabd-rh.lock"
+  flock -n 9 || die "another rehearsal is running"
+  if [[ -f "$W/db" ]]; then DB=$(cat "$W/db"); else DB=fabric_r15299_fabdrh_$(date -u +%H%M%S); echo "$DB" > "$W/db"; fi
+else
+  DB=fabric_live
+fi
 say "fabd install MODE=$MODE prefix=$PREFIX db=$DB unit=$UNIT fab=$("$FAB" version)"
 
 ADMIN=$(set -a; . "$D/test.env" >/dev/null; printf '%s' "${FABRIC_TEST_DSN:-}")
@@ -55,19 +81,64 @@ pq()  { local d=$1; shift; PGOPTIONS="${PQ_OPTS:-}" PGCALL_DSN="$d" python3 -I "
 pqr() { PQ_OPTS='-c default_transaction_read_only=on' pq "$@"; }
 done_phase() { echo "$1" >> "$STATE"; say "phase $1 done"; }
 phase_done() { [[ -f "$STATE" ]] && grep -qx "$1" "$STATE"; }
-die() { say "STOP: $*"; echo "STOP: $*" >&2; exit 3; }
-
 PGADM=$(dsn_for postgres)
 TARGET=$(dsn_for "$DB")
+LIVEREAD=$TARGET
+ROLE_RE="^${PREFIX}_(app|runner|scheduler)$"
+
+# --- the shared removal path (rehearse and MODE=remove)
+do_remove() {
+  systemctl --user stop "$UNIT.service" || true
+  systemctl --user disable "$UNIT.service" || true
+  rm -f "$HOME/.config/systemd/user/$UNIT.service"
+  systemctl --user daemon-reload || true
+  local before_old; before_old=$(pq "$PGADM" -c "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'fabric\\_live\\_%'")
+  if [[ -f "$SVC/old_scheduler_role" && -n "$(pq "$PGADM" -c "SELECT 1 FROM pg_database WHERE datname = '$DB'")" ]]; then
+    local old; old=$(cat "$SVC/old_scheduler_role")
+    [[ "$old" =~ ^[a-z0-9_]+$ ]] || die "the saved scheduler_role value is not a plain role name"
+    pq "$TARGET" -c "UPDATE fabric_settings SET value = '$old' WHERE key = 'scheduler_role'" >/dev/null
+    local now; now=$(pq "$TARGET" -c "SELECT value FROM fabric_settings WHERE key = 'scheduler_role'")
+    say "removal: scheduler_role restored to $now (saved value $old)"
+    [[ "$now" == "$old" ]] || die "scheduler_role was not restored"
+    for r in app runner scheduler; do
+      [[ "${PREFIX}_$r" =~ $ROLE_RE ]] || die "refusing to drop ${PREFIX}_$r"
+      if [[ -n "$(pq "$PGADM" -c "SELECT 1 FROM pg_roles WHERE rolname = '${PREFIX}_$r'")" ]]; then
+        pq "$TARGET" -c "DROP OWNED BY ${PREFIX}_$r" >/dev/null
+      fi
+    done
+  fi
+  [[ $MODE == rehearse ]] && pq "$PGADM" -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)" >/dev/null
+  for r in app runner scheduler; do
+    [[ "${PREFIX}_$r" =~ $ROLE_RE ]] || die "refusing to drop ${PREFIX}_$r"
+    pq "$PGADM" -c "DROP ROLE IF EXISTS ${PREFIX}_$r" >/dev/null
+  done
+  local left after_old
+  left=$(pq "$PGADM" -c "SELECT count(*) FROM pg_roles WHERE rolname LIKE '${PREFIX}\\_%'")
+  after_old=$(pq "$PGADM" -c "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'fabric\\_live\\_%'")
+  say "removed: roles left with prefix $PREFIX = $left, old fabric_live_ roles $before_old -> $after_old"
+  [[ "$left" == 0 && "$before_old" == "$after_old" ]] || die "removal left roles behind or changed the old roles"
+}
+if [[ $MODE == remove ]]; then
+  [[ -f "$SVC/old_scheduler_role" ]] || die "no saved scheduler_role in $SVC: nothing to restore from"
+  do_remove
+  say "live removal complete; the dump taken at install is the restore path for data; lingering is left as it was"
+  exit 0
+fi
+cleanup_rehearse() {
+  local rc=$?
+  if [[ $MODE == rehearse && "${REMOVE:-1}" == 1 && $rc != 0 ]] && ! phase_done removed; then
+    say "rehearsal failed (rc $rc): removing what it created"
+    do_remove || true
+  fi
+}
+trap cleanup_rehearse EXIT
 
 # --- rehearse: scratch copy of live data
 if [[ $MODE == rehearse ]] && ! phase_done copy; then
   pq "$PGADM" -c "CREATE DATABASE $DB" >/dev/null
-  pgcall() { local d=$1; shift; PGCALL_DSN="$d" python3 -I "$D/pgcall.py" "$@"; }
-  pgcall "$(dsn_for fabric_live)" pg_dump -Fc | pgcall "$TARGET" pg_restore --exit-on-error --no-owner --no-acl -d "$DB"
+  PGCALL_DSN="$(dsn_for fabric_live)" python3 -I "$D/pgcall.py" pg_dump -Fc | PGCALL_DSN="$TARGET" python3 -I "$D/pgcall.py" pg_restore --exit-on-error --no-owner --no-acl -d "$DB"
   done_phase copy
 fi
-LIVEREAD=$(dsn_for "$DB")
 
 # --- snapshot and stop rule (AC-1)
 snapshot() {  # outfile
@@ -92,7 +163,7 @@ expect_zero() {  # description sql
   [[ "$n" == 0 ]] || die "precondition failed: $1 is $n, expected 0"
 }
 if ! phase_done snapshot; then
-  expect_zero "lapsed or live non-terminal attempts (any host)" "SELECT count(*) FROM attempts WHERE state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING')"
+  expect_zero "live or lapsed non-terminal attempts (any host)" "SELECT count(*) FROM attempts WHERE state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING')"
   expect_zero "UNKNOWN attempts" "SELECT count(*) FROM attempts WHERE state = 'UNKNOWN'"
   expect_zero "HELD reservations" "SELECT count(*) FROM reservations WHERE state = 'HELD'"
   expect_zero "STARTED or requested jobs" "SELECT count(*) FROM jobs WHERE state = 'STARTED'"
@@ -100,13 +171,20 @@ if ! phase_done snapshot; then
   expect_zero "ADMITTED missions" "SELECT count(*) FROM missions WHERE execution = 'ADMITTED'"
   expect_zero "dispatchable missions" "SELECT count(*) FROM missions m WHERE m.execution = 'ADMITTED' AND m.terminal = 'NONE' AND m.provider = 'claude-code' AND NOT EXISTS (SELECT 1 FROM waits w WHERE w.mission_id = m.id)"
   LS=$(pqr "$LIVEREAD" -c "SHOW log_statement"); say "log_statement = $LS"
-  [[ "$LS" == none || "$LS" == mod ]] || die "log_statement is $LS: a role password in DDL would reach the server log"
+  [[ "$LS" == none ]] || die "log_statement is $LS: mod and ddl log ALTER ROLE ... PASSWORD, so it must be none"
   say "log_min_error_statement = $(pqr "$LIVEREAD" -c 'SHOW log_min_error_statement')"
+  PSS=$(pqr "$LIVEREAD" -c "SELECT count(*) FROM pg_extension WHERE extname = 'pg_stat_statements'")
+  say "pg_stat_statements installed in this database: $PSS"
+  if [[ "$PSS" != 0 ]]; then
+    TU=$(pqr "$LIVEREAD" -c "SHOW pg_stat_statements.track_utility" 2>/dev/null || echo unknown)
+    say "pg_stat_statements.track_utility = $TU"
+    [[ "$TU" == off ]] || die "pg_stat_statements may store utility statements with the password text (track_utility $TU)"
+  fi
   snapshot "$W/snapshot-pre.txt"
   done_phase snapshot
 fi
 
-# --- backup before any change (AC-2): live only (the rehearsal copy is itself disposable)
+# --- backup before any change (AC-2): live only (the rehearsal copy is disposable)
 if [[ $MODE == live ]] && ! phase_done dump; then
   BK=$HOME/fabric-dev/backups; mkdir -p -m 0700 "$BK"
   DUMP=$BK/fabric_live-fabdinstall-$TS.dump
@@ -116,7 +194,7 @@ if [[ $MODE == live ]] && ! phase_done dump; then
   [[ -s "$DUMP.list" ]] || die "pg_restore --list is empty"
   done_phase dump
 fi
-[[ $MODE == live ]] && ! phase_done dump && die "no verified dump"
+if [[ $MODE == live ]] && ! phase_done dump; then die "no verified dump"; fi
 
 # --- roles (AC-3)
 if ! phase_done roles; then
@@ -142,16 +220,16 @@ if ! phase_done unit; then
   printf '{"rungs":{"R0":{"effort":"n/a","models":{"claude":"fake-model"}}}}\n' > "$SVC/tiers.json"
   cat > "$SVC/guard.sh" <<GUARD
 #!/bin/bash
-# ExecStartPre guard of $UNIT.service: the recorded fake provider only, no second daemon.
+# ExecStartPre guard of $UNIT.service: the recorded fake provider only, no second daemon
+# for this database. The EnvironmentFile is inherited from systemd (not sourced here).
 set -euo pipefail
 [[ "\$(sha256sum $FAKE | cut -d' ' -f1)" == "$FAKE_SHA" ]] || { echo "guard: the provider at $FAKE is not the recorded fake" >&2; exit 1; }
-set -a; . "$SVC/env"; set +a
 for i in 1 2 3 4 5; do
-  n=\$(PGCALL_DSN="\$FABRIC_DSN" python3 -I "$D/pgcall.py" psql -X -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'fabd' AND pid <> pg_backend_pid()")
+  n=\$(PGCALL_DSN="\$FABRIC_DSN" python3 -I "$D/pgcall.py" psql -X -At -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'fabd' AND datname = current_database() AND pid <> pg_backend_pid()")
   [[ "\$n" == 0 ]] && exit 0
   sleep 2
 done
-echo "guard: another session with application_name fabd exists" >&2; exit 1
+echo "guard: another session with application_name fabd exists in this database" >&2; exit 1
 GUARD
   chmod 700 "$SVC/guard.sh"
   mkdir -p "$HOME/.config/systemd/user"
@@ -174,7 +252,10 @@ TimeoutStopSec=15
 WantedBy=default.target
 UNITF
   systemctl --user daemon-reload
-  systemd-analyze --user verify "$UNIT.service" 2>&1 | head -5 || true
+  systemd-analyze --user verify "$UNIT.service" || die "systemd-analyze verify failed for $UNIT.service"
+  systemctl --user enable "$UNIT.service"
+  [[ "$(systemctl --user is-enabled "$UNIT.service")" == enabled ]] || die "the unit is not enabled"
+  say "unit enabled: $(systemctl --user is-enabled "$UNIT.service")"
   loginctl enable-linger "$(id -un)"
   say "linger: $(loginctl show-user "$(id -un)" -p Linger)"
   done_phase unit
@@ -196,22 +277,36 @@ if ! phase_done started; then
   say "snapshot diff lines: $(wc -l < "$W/snapshot.diff")"
   cut -c1-160 "$W/snapshot.diff" | head -40
   say "held streams after: $(FABRIC_DSN="$LIVEREAD" "$FAB" streams held --scan | tail -1)"
-  say "journal errors since start: $(journalctl --user -u "$UNIT.service" --since '-10min' --no-pager -p err 2>/dev/null | grep -vc '^-- ' || true)"
-  say "postgres log or password scan: the password files are $(stat -c %a "$SVC/app.pw") and the env file $(stat -c %a "$SVC/env")"
+  JOUT=$(journalctl --user -u "$UNIT.service" --no-pager -o cat --since '-15min') || die "journalctl failed"
+  ERRN=$(printf '%s\n' "$JOUT" | grep -ciE 'error|failed|parked|STOP|lost' || true)
+  say "journal lines matching error|failed|parked|STOP|lost: $ERRN"
+  [[ "$ERRN" == 0 ]] || die "the journal of $UNIT.service has error-like lines"
   [[ "$c" == "$m" ]] || die "the backlog did not drain (cursor $c, max $m)"
   done_phase started
 fi
-# --- assertions (AC-4, AC-5): the unit's command line, nothing dispatched, the guards refuse
+
+# --- secret scans and assertions (AC-3 scans, AC-4, AC-5)
 if ! phase_done asserts; then
-  export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
   EXECSTART=$(systemctl --user show "$UNIT.service" -p ExecStart --value)
-  [[ "$EXECSTART" == *"--no-dispatch"* ]] || die "the unit's command line has no --no-dispatch"
-  say "assert: the unit command line carries --no-dispatch and the fake provider $( [[ "$EXECSTART" == *"$FAKE"* ]] && echo yes || echo NO )"
-  [[ "$EXECSTART" == *"$FAKE"* ]] || die "the unit does not use the recorded fake provider"
-  PID=$(systemctl --user show "$UNIT.service" -p MainPID --value)
-  say "assert: argv of the daemon processes carries no postgres:// DSN: $(ps -eo args | grep -c '[p]ostgres://' || true) matches"
+  [[ "$EXECSTART" == *"--no-dispatch"* && "$EXECSTART" != *"--no-dispatch="* ]] || die "the unit's command line lacks a plain --no-dispatch"
+  [[ "$EXECSTART" == *"--provider $FAKE "* ]] || die "the unit does not use the recorded fake provider"
+  say "assert: the unit command line carries --no-dispatch and the recorded fake provider"
+  say "assert: argv of all processes carries no postgres:// or postgresql:// DSN: $(ps -eo args | grep -Ec '[p]ostgres(ql)?://' || true) matches"
+  [[ "$(ps -eo args | grep -Ec '[p]ostgres(ql)?://' || true)" == 0 ]] || die "a DSN is visible in a process argument"
+  for f in app runner; do
+    pw=$(cat "$SVC/$f.pw")
+    if journalctl --user -u "$UNIT.service" --no-pager -o cat | grep -qF -- "$pw"; then die "the $f password appears in the journal"; fi
+    if ps -eo args | grep -qF -- "$pw"; then die "the $f password appears in a process argument"; fi
+  done
+  say "assert: the journal and process arguments hold neither password"
+  if [[ "$(pqr "$LIVEREAD" -c "SELECT count(*) FROM pg_extension WHERE extname = 'pg_stat_statements'")" != 0 ]]; then
+    for f in app runner; do
+      hit=$(printf "SELECT count(*) FROM pg_stat_statements WHERE position('%s' in query) > 0;\n" "$(cat "$SVC/$f.pw")" | PGCALL_DSN="$LIVEREAD" python3 -I "$D/pgcall.py" psql -X -At)
+      [[ "$hit" == 0 ]] || die "the $f password appears in pg_stat_statements"
+    done
+    say "assert: pg_stat_statements holds neither password"
+  fi
   if [[ $MODE == rehearse ]]; then
-    # an admitted claude-code mission must stay at zero attempts across more than one backoff cycle
     OWN=$(dsn_for "$DB")
     FABRIC_DSN="$OWN" FABRIC_ACTOR=op:fabdinstall "$FAB" mission new --id m_rh_nd --name m_rh_nd --ticket 'GoodQA goodqa#15587' --repo fabric --branch main --provider claude-code >/dev/null
     FABRIC_DSN="$OWN" FABRIC_ACTOR=op:fabdinstall "$FAB" admit --mission m_rh_nd --key admit-m_rh_nd >/dev/null
@@ -220,7 +315,6 @@ if ! phase_done asserts; then
     e=$(pqr "$LIVEREAD" -c "SELECT execution FROM missions WHERE id = 'm_rh_nd'")
     say "assert: admitted mission after 75 s: attempts=$n execution=$e runs_launched_total=$(pqr "$LIVEREAD" -c "SELECT COALESCE((SELECT value FROM sched_counters WHERE name='runs_launched_total'),0)")"
     [[ "$n" == 0 && "$e" == ADMITTED ]] || die "an admitted mission was dispatched or changed"
-    # guards: a second instance and a swapped provider are refused
     if "$SVC/guard.sh" 2>/dev/null; then die "the guard allowed a second instance"; else say "assert: the guard refuses a second instance"; fi
     python3 -I - "$SVC/guard.sh" "$SVC/guard-swapped.sh" <<'PYG'
 import re, sys
@@ -230,22 +324,14 @@ open(sys.argv[2], "w").write(s)
 PYG
     chmod 700 "$SVC/guard-swapped.sh"
     if "$SVC/guard-swapped.sh" 2>/dev/null; then die "the guard accepted a swapped provider"; else say "assert: the guard refuses a swapped provider"; fi
-    # a manual start while the unit runs is refused by the lock
     if /usr/bin/flock -n "$SVC/fabd.lock" true 2>/dev/null; then die "the daemon does not hold its lock"; else say "assert: the daemon holds its flock"; fi
   fi
   done_phase asserts
 fi
 
-# --- removal (rehearse only; the live removal is a documented runbook step)
+# --- removal (rehearse only; MODE=remove is the live removal)
 if [[ $MODE == rehearse && "${REMOVE:-1}" == 1 ]] && ! phase_done removed; then
-  export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-  systemctl --user stop "$UNIT.service" || true
-  systemctl --user disable "$UNIT.service" || true
-  rm -f "$HOME/.config/systemd/user/$UNIT.service"
-  systemctl --user daemon-reload || true
-  pq "$PGADM" -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)" >/dev/null
-  for r in app runner scheduler; do pq "$PGADM" -c "DROP ROLE IF EXISTS ${PREFIX}_$r" >/dev/null || true; done
-  say "removed: roles left with prefix $PREFIX = $(pq "$PGADM" -c "SELECT count(*) FROM pg_roles WHERE rolname LIKE '${PREFIX}\\_%'"), databases left = $(pq "$PGADM" -c "SELECT count(*) FROM pg_database WHERE datname = '$DB'"), old roles still present = $(pq "$PGADM" -c "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'fabric\\_live\\_%'")"
+  do_remove
   done_phase removed
 fi
 say "install phases complete for MODE=$MODE; log $LOG"
