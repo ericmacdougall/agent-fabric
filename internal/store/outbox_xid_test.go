@@ -339,4 +339,13 @@ func TestOutboxNoRowLostUnderConcurrentWriters(t *testing.T) {
 	if n := advisoryHeld(t, st, ctx); n != 0 {
 		t.Fatalf("%d order locks still held after the writers finished", n)
 	}
+	// The invariant the consumer's filter relies on, read straight from the
+	// table: no pair of outbox rows has a lower id with a higher xid.
+	var inversions int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM outbox a JOIN outbox b ON a.id < b.id AND a.xid > b.xid`).Scan(&inversions); err != nil {
+		t.Fatal(err)
+	}
+	if inversions != 0 {
+		t.Fatalf("%d outbox row pairs have a lower id with a higher xid (goodqa#15577)", inversions)
+	}
 }
