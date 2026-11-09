@@ -264,6 +264,7 @@ fi
 # --- first start and verification (AC-6)
 if ! phase_done started; then
   say "starting $UNIT.service"
+  STARTED_AT=$(date -u +"%Y-%m-%d %H:%M:%S")
   systemctl --user start "$UNIT.service"
   for i in $(seq 1 40); do
     c=$(pqr "$LIVEREAD" -c "SELECT COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer='sched'),-1)")
@@ -277,7 +278,7 @@ if ! phase_done started; then
   say "snapshot diff lines: $(wc -l < "$W/snapshot.diff")"
   cut -c1-160 "$W/snapshot.diff" | head -40
   say "held streams after: $(FABRIC_DSN="$LIVEREAD" "$FAB" streams held --scan | tail -1)"
-  JOUT=$(journalctl --user -u "$UNIT.service" --no-pager -o cat --since '-15min') || die "journalctl failed"
+  JOUT=$(journalctl --user -u "$UNIT.service" --no-pager -o cat --since "$STARTED_AT UTC") || die "journalctl failed"
   ERRN=$(printf '%s\n' "$JOUT" | grep -ciE 'error|failed|parked|STOP|lost' || true)
   say "journal lines matching error|failed|parked|STOP|lost: $ERRN"
   [[ "$ERRN" == 0 ]] || die "the journal of $UNIT.service has error-like lines"
@@ -294,9 +295,9 @@ if ! phase_done asserts; then
   say "assert: argv of all processes carries no postgres:// or postgresql:// DSN: $(ps -eo args | grep -Ec '[p]ostgres(ql)?://' || true) matches"
   [[ "$(ps -eo args | grep -Ec '[p]ostgres(ql)?://' || true)" == 0 ]] || die "a DSN is visible in a process argument"
   for f in app runner; do
-    pw=$(cat "$SVC/$f.pw")
-    if journalctl --user -u "$UNIT.service" --no-pager -o cat | grep -qF -- "$pw"; then die "the $f password appears in the journal"; fi
-    if ps -eo args | grep -qF -- "$pw"; then die "the $f password appears in a process argument"; fi
+    # patterns come from the file (-f), never from an argument: a password in grep's own argv would leak and self-match
+    if journalctl --user -u "$UNIT.service" --no-pager -o cat | grep -qF -f "$SVC/$f.pw"; then die "the $f password appears in the journal"; fi
+    if ps -eo args | grep -qF -f "$SVC/$f.pw"; then die "the $f password appears in a process argument"; fi
   done
   say "assert: the journal and process arguments hold neither password"
   if [[ "$(pqr "$LIVEREAD" -c "SELECT count(*) FROM pg_extension WHERE extname = 'pg_stat_statements'")" != 0 ]]; then
