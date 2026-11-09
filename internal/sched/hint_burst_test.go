@@ -22,6 +22,7 @@ func TestExecuteHintBurstCoalesced(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.Run(rctx) }()
 	time.Sleep(500 * time.Millisecond) // let the first ticks settle
+	start := time.Now()
 	const n = 100
 	for i := 0; i < n; i++ {
 		cmd := domain.Command{Kind: domain.CmdReviseIntent, Mission: "m_burst", Reason: fmt.Sprintf("r%d", i)}
@@ -29,15 +30,25 @@ func TestExecuteHintBurstCoalesced(t *testing.T) {
 			t.Fatalf("execute %d: %v", i, err)
 		}
 	}
+	burstEnd := time.Now()
 	time.Sleep(1500 * time.Millisecond)
+	t1 := s.ticks.Load()
+	time.Sleep(2 * time.Second)
+	t2 := s.ticks.Load() // queued hints must not keep producing ticks after the burst
 	rcancel()
 	<-done
-	ticks := s.dispatchQueries // read after Run returned; includes the few settle ticks before the burst
-	t.Logf("ticks during a burst of %d accepted Executes: %d", n, ticks)
-	// Control (the gap removed): 118 to 122 ticks. With the 100 ms gap the whole
-	// 2.5 s window holds at most about 25 hint ticks plus the settle ticks.
-	if ticks > 45 {
-		t.Fatalf("%d scheduler ticks for %d commands: the hints are not coalesced", ticks, n)
+	total := s.ticks.Load()
+	elapsed := time.Since(start)
+	gap := 100 * time.Millisecond
+	t.Logf("ticks: %d in %s for a burst of %d accepted Executes (%d in the quiet 2 s after the burst); burst took %s", total, elapsed.Round(time.Millisecond), n, t2-t1, burstEnd.Sub(start).Round(time.Millisecond))
+	// Control (the spacing removed): 118 to 122 ticks inside the burst alone. A variant
+	// with the spacing but without the drain stops short in this window yet keeps ticking
+	// once per queued hint afterwards, which the quiet window below catches.
+	if limit := int(elapsed/gap) + 10; int(total) > limit {
+		t.Fatalf("%d scheduler ticks in %s for %d commands (limit %d): the hints are not coalesced", total, elapsed, n, limit)
+	}
+	if t2-t1 > 3 {
+		t.Fatalf("%d ticks in the 2 s after the burst ended: queued hints are not coalesced", t2-t1)
 	}
 	close(ln.block)
 }

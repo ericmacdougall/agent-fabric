@@ -162,10 +162,14 @@ const outboxOrderLock = 7_431_902_002
 // hint (a reader catches up from its own cursor), so a failed ping is ignored.
 const WakeChannel = "fabric_wake"
 
-func (s *Store) hint() {
+// hint pings WakeChannel on the connection Execute already holds (a second pool
+// connection could wait for one under pool pressure and delay Execute's return).
+// The caller's context is deliberately not used: the ping follows a commit and
+// must run even when the caller was cancelled; it waits at most 2 seconds.
+func hint(conn *pgxpool.Conn) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	s.pool.Exec(ctx, "SELECT pg_notify($1, '')", WakeChannel) //nolint:errcheck // a hint, never an error
+	conn.Exec(ctx, "SELECT pg_notify($1, '')", WakeChannel) //nolint:errcheck // a hint, never an error
 }
 
 // Migrate applies embedded migrations in name order under an advisory lock.
@@ -719,7 +723,7 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		s.hooks.afterCommit(cmd)
 	}
 	if derr == nil {
-		s.hint() // post-commit and only for an accepted command (a refusal stored no event)
+		hint(conn) // post-commit and only for an accepted command (a refusal stored no event)
 	}
 	resp.Raw = respJSON
 	if derr != nil {

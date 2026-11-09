@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -148,6 +149,8 @@ type Scheduler struct {
 	afterFinishExec func(resp store.Response, err error) error
 	// dispatchQueries counts dispatch selections (AC-3: one per tick).
 	dispatchQueries int
+	// ticks counts Tick calls (atomic: tests read it while Run is live).
+	ticks atomic.Int64
 
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired, CapacityWaits int
@@ -242,6 +245,7 @@ func (s *Scheduler) gated() bool { return len(s.cfg.Holds) > 0 }
 
 // Tick runs one pass of every sweep and reports whether it did any work.
 func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
+	s.ticks.Add(1)
 	if err := s.ensureRunnerRole(ctx); err != nil {
 		return false, err // a configuration or role fault is global: stop before any write
 	}
@@ -332,7 +336,9 @@ func (s *Scheduler) Run(ctx context.Context) error {
 					return err
 				}
 			}
-			for {
+			// The drain is bounded by gap so a stream of hints cannot starve Tick.
+			drainEnd := time.Now().Add(gap)
+			for time.Now().Before(drainEnd) {
 				dctx, dcancel := context.WithTimeout(ctx, time.Millisecond)
 				_, derr := conn.Conn().WaitForNotification(dctx)
 				dcancel()
