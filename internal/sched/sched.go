@@ -327,6 +327,12 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 		if notified {
 			backoff = s.cfg.Backoff
+			// One durable count per hint-triggered wake (not per timer tick), so
+			// `fab metrics` shows fabric_sched_counter_total{name="wake_hints_total"}
+			// rising when fabd is woken by a committed command (goodqa#15586).
+			bctx, bcancel := context.WithTimeout(ctx, time.Second) // a stuck counter write must not stall the wake path
+			s.bump(bctx, "wake_hints_total")
+			bcancel()
 			// Coalesce a burst (goodqa#15586 NEG-19): every accepted Execute
 			// now pings this channel, so ticks are spaced at least gap apart
 			// and one tick covers every hint queued meanwhile (a tick rescans

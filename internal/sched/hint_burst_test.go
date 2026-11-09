@@ -53,3 +53,55 @@ func TestExecuteHintBurstCoalesced(t *testing.T) {
 	}
 	close(ln.block)
 }
+
+// goodqa#15586 F19a-0: a hint-triggered wake is counted durably (shown by
+// `fab metrics`), a timer tick is not, so the counter proves the wake path.
+func TestWakeHintCounter(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	st, ln, cfg := ownerSetup(t, "m_wakectr")
+	cfg.NoDispatch = false
+	cfg.Backoff = 20 * time.Millisecond // many timer ticks fall in the idle window
+	cfg.MaxBackoff = 40 * time.Millisecond
+	if _, err := st.Pool().Exec(ctx, `DELETE FROM sched_counters WHERE name = 'wake_hints_total'`); err != nil {
+		t.Fatal(err)
+	}
+	count := func() int64 {
+		var v int64
+		err := st.Pool().QueryRow(ctx, `SELECT COALESCE((SELECT value FROM sched_counters WHERE name = 'wake_hints_total'), 0)`).Scan(&v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	s := New(st, cfg, ln)
+	rctx, rcancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- s.Run(rctx) }()
+	time.Sleep(time.Second)
+	// The first ticks may themselves commit commands (hinting); take the baseline
+	// after they settle and require it to stay put while idle (no timer count).
+	base := count()
+	tk0 := s.ticks.Load()
+	time.Sleep(time.Second)
+	if n := s.ticks.Load() - tk0; n < 10 {
+		t.Fatalf("only %d timer ticks in the idle second: the window does not exercise timer ticks", n)
+	}
+	if c := count(); c != base {
+		t.Fatalf("wake_hints_total moved %d -> %d across timer ticks while idle: only a hint may count", base, c)
+	}
+	cmd := domain.Command{Kind: domain.CmdReviseIntent, Mission: "m_wakectr", Reason: "wake"}
+	if _, err := st.Execute(ctx, "chat", "wakectr-1", cmd); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for count() == base && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if c := count(); c <= base {
+		t.Fatalf("wake_hints_total = %d (baseline %d) 2 s after an accepted command: the hint did not wake the scheduler", c, base)
+	}
+	rcancel()
+	<-done
+	close(ln.block)
+}
