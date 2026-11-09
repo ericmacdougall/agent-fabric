@@ -48,9 +48,11 @@ Cross-lane contract: the first feature PRs are pure packages behind an event-sin
 - AC-2: the old `m_ladder-*` rows migrate without losing a receipt. Verify by: migrate a copy of a populated ladder database; receipt counts and digests match.
 - AC-3: a work_run with no ticket is accepted and one with several external refs round-trips. Verify by: reducer and store tests.
 - AC-4: the oracle passes on all existing property traces. Verify by: `go test ./internal/reducer/...` and the mutant run.
+- AC-5 (ASSUMPTION: placed under F2 as the next live fabd change; main's decision names "F2"): the first fabd start on a live database consumes the unconsumed outbox backlog, and the result is verified against a read-only snapshot of the sched cursor, waits, counters and the pending outbox rows taken immediately before. Verify by: the pre-start snapshot (cursor, waits, counters, pending outbox ids) and a post-start comparison: the cursor equals the highest pending outbox id, waits rows match the event log, waits_resumed_total equals the number of MISSION_RESUMED events applied, held streams 0, no error logged. Source: decision by main on goodqa#15372 (live state, 2026-11-09): rows 21-27 of fabric_live stay pending until fabd is installed with its own roles.
 - NEG-1 (AC-2): re-running the migration changes nothing (idempotent).
 - NEG-2 (AC-1): a ladder stream refuses work_run commands and the reverse.
 - NEG-3 (AC-3): an external ref with an unknown system or malformed id is refused.
+- NEG-4 (AC-5): the first start never dispatches work as a side effect of draining: with quarantined attempts present and no ADMITTED mission, nothing is launched and the quarantined attempts are untouched. Verify by: the same snapshot comparison (attempts and jobs unchanged except as the backlog implies).
 
 ## F3 Tenancy and RLS (foundation)
 
