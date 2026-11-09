@@ -24,7 +24,9 @@ func TestFreshRunIDsAreDistinctAndValid(t *testing.T) {
 		if err := f.Validate(); err != nil {
 			t.Fatalf("grant with a fresh run id is invalid: %v", err)
 		}
-		if f.Worktree != g.Worktree || f.RunDir != g.RunDir || f.Token != g.Token {
+		same := f
+		same.Run = g.Run
+		if same != g {
 			t.Fatal("freshRun changed more than the run id")
 		}
 	}
