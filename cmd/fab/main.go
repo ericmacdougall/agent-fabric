@@ -13,9 +13,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -170,6 +172,37 @@ func withStore(f func(context.Context, *store.Store) error) error {
 	}
 	defer st.Close()
 	return f(ctx, st)
+}
+
+// withStoreService is withStore for a long-running service (fab daemon): the
+// open is bounded by 60 s but the run is not. It ends when SIGINT or SIGTERM
+// cancels the context, and that is a clean shutdown (nil), not an error
+// (goodqa#15579: a fixed 60 s deadline used to end the daemon after a minute).
+func withStoreService(f func(context.Context, *store.Store) error) error {
+	dsn := os.Getenv("FABRIC_DSN")
+	if dsn == "" {
+		return errors.New("FABRIC_DSN is not set")
+	}
+	sctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// After the first signal, stop catching signals: a second Ctrl-C or SIGTERM
+	// then takes the default action even if the shutdown is blocked.
+	go func() { <-sctx.Done(); stop() }()
+	octx, cancel := context.WithTimeout(sctx, 60*time.Second)
+	st, err := store.Open(octx, dsn)
+	cancel()
+	if err != nil {
+		if sctx.Err() != nil {
+			return nil // stopped by a signal while opening
+		}
+		return err
+	}
+	defer st.Close()
+	err = f(sctx, st)
+	if sctx.Err() != nil && (err == nil || errors.Is(err, context.Canceled)) {
+		return nil // stopped by a signal: a clean shutdown
+	}
+	return err
 }
 
 func fabricHome() string {
