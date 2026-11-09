@@ -4609,5 +4609,109 @@
     "Launch: productionLaunch(p, schemaPath, hooksDir)}"
    ]
   ]
+ },
+ {
+  "id": "F1A_1_zero_payload",
+  "invariant": "upcaster_keeps_typed_payload",
+  "pkg": "./internal/store",
+  "file": "internal/envelope/view.go",
+  "expect": "TestV1ReplayParity",
+  "edits": [
+   [
+    "Mission:   r.Mission, Seq: r.Seq, Kind: r.Kind, At: r.At.UTC(), Event: e,",
+    "Mission:   r.Mission, Seq: r.Seq, Kind: r.Kind, At: r.At.UTC(), Event: domain.Event{Kind: e.Kind, Mission: e.Mission, Seq: e.Seq},"
+   ]
+  ]
+ },
+ {
+  "id": "F1A_2_swap_revision_generation",
+  "invariant": "upcaster_does_not_swap_fields",
+  "pkg": "./internal/store",
+  "file": "internal/envelope/view.go",
+  "expect": "TestV1ReplayParity",
+  "edits": [
+   [
+    "\tif e.Seq == 0 {\n\t\te.Seq = r.Seq\n\t}\n\tid, err := EventID(",
+    "\tif e.Seq == 0 {\n\t\te.Seq = r.Seq\n\t}\n\te.Revision, e.Generation = e.Generation, e.Revision\n\tid, err := EventID("
+   ]
+  ]
+ },
+ {
+  "id": "F1A_3_outbox_payload_view",
+  "invariant": "view_is_built_from_the_events_row",
+  "pkg": "./internal/sched",
+  "file": "internal/store/hold.go",
+  "expect": "TestHeldPoisonInOneTableOnly",
+  "edits": [
+   [
+    "COALESCE(e.payload::text, '')",
+    "o.payload::text"
+   ]
+  ]
+ },
+ {
+  "id": "F1A_4_held_check_removed",
+  "invariant": "held_mission_is_not_written_to",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestHeldRefusesCommands",
+  "edits": [
+   [
+    "} else if held && !(cmd.Kind == domain.CmdFinishAttempt && cmd.Outcome == \"abandoned\") {",
+    "} else if false && held {"
+   ]
+  ]
+ },
+ {
+  "id": "F1A_5_dispatch_not_excluded",
+  "invariant": "held_mission_is_not_dispatched",
+  "pkg": "./internal/sched",
+  "file": "internal/sched/sched.go",
+  "expect": "TestHeldNoHotLoopNoLostWake",
+  "edits": [
+   [
+    "\n\t\t  AND NOT EXISTS (SELECT 1 FROM outbox_cursors hc WHERE hc.consumer = 'sched.hold.' || m.id)",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "F1A_6_lease_sweep_not_excluded",
+  "invariant": "held_mission_lease_sweep_skipped",
+  "pkg": "./internal/store",
+  "file": "internal/store/store.go",
+  "expect": "TestHeldLeaseUntouched",
+  "edits": [
+   [
+    "\n\t\tAND NOT EXISTS (SELECT 1 FROM outbox_cursors hc WHERE hc.consumer = 'sched.hold.' || attempts.mission_id)",
+    ""
+   ]
+  ]
+ },
+ {
+  "id": "F1A_7_release_without_log_check",
+  "invariant": "hold_released_only_when_log_decodes",
+  "pkg": "./internal/sched",
+  "file": "internal/store/hold.go",
+  "expect": "TestHoldFoundAfterStart",
+  "edits": [
+   [
+    "if _, err := readViews(ctx, tx, m); err != nil {",
+    "if _, err := readViews(ctx, tx, m); false && err != nil {"
+   ]
+  ]
+ },
+ {
+  "id": "F1A_8_hold_not_at_cursor",
+  "invariant": "found_hold_starts_at_the_cursor",
+  "pkg": "./internal/sched",
+  "file": "internal/store/hold.go",
+  "expect": "TestHoldFoundAfterStart",
+  "edits": [
+   [
+    "VALUES ($1, COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer = 'sched'), 0))",
+    "VALUES ($1, 0)"
+   ]
+  ]
  }
 ]

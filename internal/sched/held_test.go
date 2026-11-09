@@ -249,4 +249,7 @@ func TestHoldFoundAfterStart(t *testing.T) {
 	if counter(t, st) != before {
 		t.Fatal("rows already applied were redelivered")
 	}
+	if !hasHold(t, st, "m_after") {
+		t.Fatal("the hold was released although the log still does not decode")
+	}
 }
