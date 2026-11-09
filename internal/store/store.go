@@ -148,6 +148,10 @@ func (s *Store) DispatchSlots() chan struct{} {
 
 const migrationLock = 7_431_902_001 // arbitrary, fixed advisory lock key for migrations
 
+// outboxOrderLock orders every Execute transaction's xid, outbox ids and
+// commit (goodqa#15577); a different key from migrationLock.
+const outboxOrderLock = 7_431_902_002
+
 // Migrate applies embedded migrations in name order under an advisory lock.
 // It is idempotent and roll-forward only.
 func (s *Store) Migrate(ctx context.Context) error { return s.migrateUpTo(ctx, "") }
@@ -388,7 +392,32 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	sum := sha256.Sum256(canon)
 	hash := hex.EncodeToString(sum[:])
 
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	// goodqa#15577: the outbox consumer's visibility filter (xid below the
+	// snapshot xmin) is only safe if outbox ids are assigned in transaction-id
+	// order. The first write below (the mission row lock) assigns the xid, and
+	// the outbox insert assigns the id later, so two writers on different
+	// missions could take them in opposite orders and the consumer would skip
+	// the lower id for good. A session advisory lock taken BEFORE anything
+	// assigns an xid and released right after the last outbox insert (before
+	// the commit) makes every writer take its xid and its outbox ids in one
+	// order, while commits still overlap (the consumer's xmin filter handles
+	// commit order). The lock lives on a connection this call owns, and a
+	// deferred unlock covers every error path.
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return Response{}, err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", outboxOrderLock); err != nil {
+		return Response{}, fmt.Errorf("outbox order lock: %w", err)
+	}
+	orderLocked := true
+	defer func() {
+		if orderLocked { // runs after the transaction has ended (rollback runs first)
+			conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", outboxOrderLock) //nolint:errcheck
+		}
+	}()
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return Response{}, err
 	}
@@ -589,6 +618,12 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 				return Response{}, err
 			}
 			m = reducer.Apply(m, events[i])
+		}
+		// The last outbox id is assigned: later writers may now take their xid.
+		if orderLocked {
+			if _, err := tx.Exec(ctx, "SELECT pg_advisory_unlock($1)", outboxOrderLock); err == nil {
+				orderLocked = false
+			}
 		}
 		if len(events) > 0 {
 			resp.FirstSeq = events[0].Seq
