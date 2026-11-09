@@ -17,6 +17,7 @@ func TestExecuteHintBurstCoalesced(t *testing.T) {
 	defer cancel()
 	st, ln, cfg := ownerSetup(t, "m_burst")
 	cfg.NoDispatch = false
+	cfg.Backoff = time.Second // keeps backstop timer ticks out of the quiet window
 	s := New(st, cfg, ln)
 	rctx, rcancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
