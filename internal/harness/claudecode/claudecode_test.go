@@ -96,7 +96,7 @@ func fakeClaude(mode string) {
 		case "env":
 			emit(assistant(text(fmt.Sprintf("env_count=%d", len(os.Environ())))))
 			emit(result("success", false))
-		case "silent", "toolerr", "argv", "pwd", "stderrsecret", "grandchild", "setsid":
+		case "hooks", "silent", "toolerr", "argv", "pwd", "stderrsecret", "grandchild", "setsid":
 			extraModes(mode)
 		case "hang":
 			time.Sleep(time.Hour) // ignores stdin close and never exits

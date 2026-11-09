@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"bufio"
 	"context"
 	"os"
 	"strconv"
@@ -46,6 +47,28 @@ func init() {
 		}
 		emit(assistant(text("three")))
 		emit(result("success", false))
+		os.Exit(0)
+	case "merge":
+		// real claude folds inputs queued during a turn into that turn: read
+		// one line, wait, take everything already queued, answer once
+		sc := bufio.NewScanner(os.Stdin)
+		sc.Buffer(make([]byte, 1<<20), 8<<20)
+		sc.Scan()
+		time.Sleep(400 * time.Millisecond)
+		emit(assistant(text("merged-answer")))
+		emit(result("success", false))
+		for sc.Scan() { // the rest are consumed silently, as merged
+		}
+		os.Exit(0)
+	case "lost":
+		// answers the first line, reads the second, exits 0 without answering
+		sc := bufio.NewScanner(os.Stdin)
+		sc.Buffer(make([]byte, 1<<20), 8<<20)
+		sc.Scan()
+		time.Sleep(300 * time.Millisecond)
+		emit(assistant(text("first")))
+		emit(result("success", false))
+		sc.Scan()
 		os.Exit(0)
 	case "deaf":
 		time.Sleep(time.Hour) // never reads stdin
@@ -193,5 +216,70 @@ func TestGracefulStopClosesStdin(t *testing.T) {
 	f, _ := s.Wait(ctx)
 	if f.ExitCode != 0 || time.Since(t0) > 5*time.Second {
 		t.Fatalf("not a graceful exit: %+v after %v", f, time.Since(t0))
+	}
+}
+
+// Inputs queued while a turn runs are merged by real claude into that turn:
+// one result answers them all, so none is reported undelivered.
+func TestMergedInputsAreNotReportedUndelivered(t *testing.T) {
+	a := adapter("merge", false, nil).(*Adapter)
+	rec := &harnesstest.Recorder{}
+	s, err := a.Start(context.Background(), harness.StartSpec{SessionID: "ses_mg", Prompt: "one", Dir: t.TempDir()}, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = s.Input(ctx, "two")
+	_ = s.Input(ctx, "three")
+	if !rec.WaitFor(5*time.Second, func(e []harness.Event) bool { return contains(harnesstest.Texts(e), "merged-answer") }) {
+		t.Fatal("no answer")
+	}
+	if err := s.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := s.Wait(ctx)
+	if f.Outcome != harness.OutcomeStopped || strings.Contains(f.Reason, "undelivered") || !strings.Contains(f.Reason, "inputs=3 results=1") {
+		t.Fatalf("merged inputs must be noted, not reported as undelivered: %+v", f)
+	}
+}
+
+// A child that answers the first prompt and exits without answering a second
+// input must not look like a clean success: the unanswered input is noted.
+func TestLostInputIsNotSilent(t *testing.T) {
+	a := adapter("lost", false, nil).(*Adapter)
+	rec := &harnesstest.Recorder{}
+	s, err := a.Start(context.Background(), harness.StartSpec{SessionID: "ses_lost", Prompt: "one", Dir: t.TempDir()}, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = s.Input(ctx, "two")
+	f, _ := s.Wait(ctx)
+	if !strings.Contains(f.Reason, "inputs=2 results=1") {
+		t.Fatalf("a lost input left no trace in the final: %+v", f)
+	}
+}
+
+func TestCancelledInputIsRefusedBeforeRecording(t *testing.T) {
+	a := adapter("block", false, nil)
+	rec := &harnesstest.Recorder{}
+	s, err := a.Start(context.Background(), harness.StartSpec{SessionID: "ses_cn", Prompt: "go", Dir: t.TempDir()}, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 50; i++ { // the select race made this pass only some of the time
+		if err := s.Input(ctx, "never"); err == nil {
+			t.Fatal("a cancelled Input was accepted")
+		}
+	}
+	sctx, c2 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer c2()
+	_ = s.Stop(sctx)
+	if contains(harnesstest.Texts(rec.Snapshot()), "never") {
+		t.Fatal("a refused Input was recorded as a turn")
 	}
 }

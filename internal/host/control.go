@@ -6,10 +6,22 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"fabric/internal/domain"
 )
+
+var controlRunSeq atomic.Int64
+
+// freshRun returns g with its own run id. Each control start needs one: a run
+// id names the unit and the environment file, and a control that reuses its
+// predecessor's id collides with the file or unit the predecessor left behind
+// (goodqa#15466: the worker-account controls failed with "file exists").
+func freshRun(g Grant) Grant {
+	g.Run = domain.AttemptID("r_nc_" + strconv.FormatInt(time.Now().UnixNano(), 36) + "_" + strconv.FormatInt(controlRunSeq.Add(1), 36))
+	return g
+}
 
 // describe renders an inventory compactly for control details.
 func describe(inv []Process) string {

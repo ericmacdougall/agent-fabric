@@ -106,7 +106,8 @@ type session struct {
 	// sections; never across a write, a queue operation or an emit.
 	mu       sync.Mutex
 	turn     int
-	sent     int
+	sent     int // inputs queued since the last result arrived
+	total    int // every input accepted
 	results  int
 	lastOK   bool
 	lastSub  string
@@ -172,6 +173,15 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 
 func (s *session) ID() string { return s.id }
 
+// Results is how many results the child has produced so far. A caller that
+// sends one input at a time and waits for the matching result can tell a lost
+// input from a merged one, which a stream of queued inputs cannot.
+func (s *session) Results() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.results
+}
+
 // write is the only goroutine that writes stdin. On close it flushes what is
 // queued, then closes stdin. A write error ends writing; the child exiting
 // settles the session.
@@ -235,6 +245,9 @@ func (s *session) ended() bool {
 // send records and queues one user turn. The Turn event precedes the queueing
 // so every reply the process produces follows it in the stream.
 func (s *session) send(ctx context.Context, text string) error {
+	if err := ctx.Err(); err != nil {
+		return err // a cancelled Input is refused before anything is recorded
+	}
 	// Order concurrent Inputs, but give up when ctx ends.
 	select {
 	case s.sendSem <- struct{}{}:
@@ -261,6 +274,7 @@ func (s *session) send(ctx context.Context, text string) error {
 	}
 	s.turn++
 	s.sent++
+	s.total++
 	n := s.turn
 	s.mu.Unlock()
 	// Recording must not depend on the caller's ctx: a cancelled Input would
@@ -279,6 +293,7 @@ func (s *session) send(ctx context.Context, text string) error {
 	}
 	s.mu.Lock()
 	s.sent-- // not queued: not counted as undelivered
+	s.total--
 	s.mu.Unlock()
 	<-s.slots
 	return err
@@ -423,10 +438,19 @@ func (s *session) read() {
 	code, werr := s.proc.Wait()
 	s.mu.Lock()
 	s.settling = true
-	pending := s.sent - s.results
-	results, lastOK, lastSub := s.results, s.lastOK, s.lastSub
+	pending := s.sent
+	results, lastOK, lastSub, total := s.results, s.lastOK, s.lastSub, s.total
 	s.mu.Unlock()
 	f := s.settle(code, werr, s.stopping.Load(), pending, results, lastOK, lastSub, panicked.Load())
+	if (f.Outcome == harness.OutcomeDone || f.Outcome == harness.OutcomeStopped) && results > 0 && total > results {
+		// Real claude folds inputs queued during a turn into that turn, so
+		// fewer results than inputs is normal; but a lost input looks the
+		// same. Say so instead of claiming either.
+		if f.Reason != "" {
+			f.Reason += "; "
+		}
+		f.Reason += fmt.Sprintf("inputs=%d results=%d (queued inputs may have been merged by the harness, or lost)", total, results)
+	}
 	s.final, _ = s.em.FinalOutcome(context.Background(), f)
 }
 
@@ -501,7 +525,8 @@ func (s *session) handle(line []byte) {
 	switch w.Type {
 	case "system":
 		switch w.Subtype {
-		case "init", "api_retry", "status", "compact_boundary":
+		case "init", "api_retry", "status", "compact_boundary", "hook_started", "hook_response":
+			// hook_* are session-hook progress that real claude emits on start.
 		default:
 			_ = s.em.Unknown(ctx, "system event subtype "+w.Subtype, string(line))
 		}
@@ -545,6 +570,7 @@ func (s *session) handle(line []byte) {
 		ok := w.Subtype == "success" && !w.IsError
 		s.mu.Lock()
 		s.results++
+		s.sent = 0 // real claude merges queued inputs into one turn, so a result answers every input sent before it
 		s.lastOK = ok
 		s.lastSub = w.Subtype
 		s.mu.Unlock()
