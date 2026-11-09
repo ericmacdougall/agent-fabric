@@ -72,8 +72,11 @@ type Config struct {
 	WorkRoot     string // worktrees and run dirs live under here
 	FabBin       string // the fab binary the daemon uses to watch jobs
 	Launch       claude.Launch
-	Backoff      time.Duration // backstop timer; doubles up to MaxBackoff
-	MaxBackoff   time.Duration
+	// NoDispatch turns the dispatch step off (fab daemon --no-dispatch): the
+	// daemon drains the outbox and runs its other sweeps but starts nothing.
+	NoDispatch bool
+	Backoff    time.Duration // backstop timer; doubles up to MaxBackoff
+	MaxBackoff time.Duration
 	// Holds turns on the C5 dispatch gate (0012). Empty (the default) keeps
 	// today's behaviour: no reservation, no grant. When set, each attempt
 	// holds these items after START, and the runner starts only on a stored
@@ -270,10 +273,15 @@ func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 	} else if n > 0 {
 		worked = true
 	}
-	if n, err := s.dispatch(ctx); err != nil {
-		return false, err
-	} else if n > 0 {
-		worked = true
+	// NoDispatch (fab daemon --no-dispatch, goodqa#15587) skips only this
+	// step: the scheduler still consumes the outbox, expires leases and wakes
+	// jobs, but never starts an attempt, whatever is admitted later.
+	if !s.cfg.NoDispatch {
+		if n, err := s.dispatch(ctx); err != nil {
+			return false, err
+		} else if n > 0 {
+			worked = true
+		}
 	}
 	return worked || len(exp) > 0, nil
 }
