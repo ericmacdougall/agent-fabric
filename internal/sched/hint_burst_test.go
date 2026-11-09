@@ -61,7 +61,8 @@ func TestWakeHintCounter(t *testing.T) {
 	defer cancel()
 	st, ln, cfg := ownerSetup(t, "m_wakectr")
 	cfg.NoDispatch = false
-	cfg.Backoff = 30 * time.Second // a timer tick cannot fall in the window
+	cfg.Backoff = 20 * time.Millisecond // many timer ticks fall in the idle window
+	cfg.MaxBackoff = 40 * time.Millisecond
 	if _, err := st.Pool().Exec(ctx, `DELETE FROM sched_counters WHERE name = 'wake_hints_total'`); err != nil {
 		t.Fatal(err)
 	}
@@ -81,9 +82,13 @@ func TestWakeHintCounter(t *testing.T) {
 	// The first ticks may themselves commit commands (hinting); take the baseline
 	// after they settle and require it to stay put while idle (no timer count).
 	base := count()
+	tk0 := s.ticks.Load()
 	time.Sleep(time.Second)
+	if n := s.ticks.Load() - tk0; n < 10 {
+		t.Fatalf("only %d timer ticks in the idle second: the window does not exercise timer ticks", n)
+	}
 	if c := count(); c != base {
-		t.Fatalf("wake_hints_total moved %d -> %d while idle: only a hint may count", base, c)
+		t.Fatalf("wake_hints_total moved %d -> %d across timer ticks while idle: only a hint may count", base, c)
 	}
 	cmd := domain.Command{Kind: domain.CmdReviseIntent, Mission: "m_wakectr", Reason: "wake"}
 	if _, err := st.Execute(ctx, "chat", "wakectr-1", cmd); err != nil {
