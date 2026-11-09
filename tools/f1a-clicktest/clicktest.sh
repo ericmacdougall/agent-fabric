@@ -106,7 +106,7 @@ plant m_ct_badtype 100 ATTEMPT_STARTED '{"kind":"ATTEMPT_STARTED","mission":"m_c
 start_daemon() {  # seconds it may run
   printf '{"rungs":{"R0":{"effort":"n/a","models":{"claude":"fake-model"}}}}\n' > "$WORK/tiers.json"
   FABRIC_DSN="$APP_DSN" FABRIC_RUNNER_DSN="$RUNNER_DSN" timeout "$1" "$FAB" daemon --provider "$FAKE" --trust-provider \
-    --work-root "$WORK/wr" --tier-table "$WORK/tiers.json" --rung R0 --host h_fabtest >"${DAEMON_LOG:-/dev/null}" 2>&1 &
+    --work-root "$WORK/wr" --tier-table "$WORK/tiers.json" --rung R0 --host h_fabtest >>"${DAEMON_LOG:-/dev/null}" 2>&1 &
   DAEMON_PID=$!
 }
 held_sql() { ownerq -c "SELECT count(*) FROM outbox_cursors WHERE consumer LIKE 'sched.hold.%'"; }
