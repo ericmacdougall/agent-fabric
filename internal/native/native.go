@@ -319,7 +319,7 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 	if _, err := keySrc(lctx); err != nil {
 		return nil, err
 	}
-	cl, err := anthropic.New(anthropic.Config{BaseURL: g.BaseURL, Version: g.AnthropicVersion, Key: keySrc, HTTP: o.HTTP})
+	cl, err := anthropic.New(anthropic.Config{BaseURL: g.BaseURL, Version: g.AnthropicVersion, Key: keySrc, HTTP: o.HTTP, Vouched: &keys.vouched})
 	if err != nil {
 		return nil, err
 	}

@@ -31,6 +31,9 @@ type keyRing struct {
 	mu    sync.Mutex
 	seen  []string
 	check string // last authority check: status and sha256 prefix only
+	// vouched holds the values the authority check accepted (hashes only); the
+	// client's shape guard accepts those too.
+	vouched anthropic.Vouched
 }
 
 func (k *keyRing) add(v string) {
@@ -58,7 +61,7 @@ func (k *keyRing) Redact(s string) string {
 func newKeyRing(argv []string, ttl time.Duration, mode anthropic.KeyCheck, hc *http.Client) (anthropic.KeySource, *keyRing, error) {
 	ring := &keyRing{}
 	src, err := anthropic.KeyFromCommandWith(argv, ttl, ring.add, anthropic.KeyOptions{
-		Check: mode, HTTP: hc,
+		Check: mode, HTTP: hc, Vouched: &ring.vouched,
 		OnCheck: func(status int, sum string) {
 			ring.mu.Lock()
 			ring.check = fmt.Sprintf("authority status=%d key_sha256=%s", status, sum)

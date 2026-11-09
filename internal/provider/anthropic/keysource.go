@@ -73,7 +73,7 @@ func KeyFromCommandWith(argv []string, ttl time.Duration, onKey func(string), op
 			return "", fmt.Errorf("anthropic: key command %q returned more than one token", argv[0])
 		}
 		if !apiKeyShape.MatchString(k) {
-			if err := authorityAccepts(ctx, argv[0], k, opts); err != nil {
+			if err := authorityAccepts(ctx, argv[0], k, opts, opts.Vouched.Has(k)); err != nil {
 				return "", err
 			}
 		}
