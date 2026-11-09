@@ -83,6 +83,7 @@ func daemonMain(args []string) error {
 	once := fs.Bool("once", false, "run ticks until idle, then exit (tests)")
 	hostID := fs.String("host", "h_"+hostname(), "host id")
 	trustProvider := fs.Bool("trust-provider", false, "the provider is a trusted recorded fake; skip the containment gate")
+	noDispatch := fs.Bool("no-dispatch", false, "consume the outbox and run the other sweeps but never start an attempt (the live fabd install, goodqa#15587)")
 	workerUser := fs.String("worker-user", os.Getenv("FABRIC_WORKER_USER"), "dedicated worker account (Linux); empty means same-UID shadow mode")
 	var holds holdFlags
 	fs.Var(&holds, "hold", "turn on the dispatch gate: hold resource:unit:amount per attempt (repeatable)")
@@ -151,6 +152,7 @@ func daemonMain(args []string) error {
 	cfg := sched.Config{Host: domain.HostID(*hostID), Model: model, Effort: effort, Rung: *rung, TierTableSHA: sha, Profile: *profile,
 		MaxTurns: 40, MaxBudgetUSD: 2, Wall: 45 * time.Minute, WorkRoot: *workRoot, FabBin: selfPath()}
 	cfg.Holds = holds
+	cfg.NoDispatch = *noDispatch
 	cfg.RunnerDSN = os.Getenv(*runnerDSNEnv)
 	// FABRIC_WORKER_EXIT_CLEANUP=1 (exact; default off) verifies descendant
 	// cleanup after every worker exit before settling. Off by default: on
