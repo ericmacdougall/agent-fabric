@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -22,10 +23,13 @@ import (
 
 // harnessMain handles `fab harness ...`. Only `run` exists. The native
 // adapter runs a grant; the claude-code adapter runs an interactive session
-// scripted from flags. Other adapters land in their own PRs.
+// scripted from flags and is a TEST TOOL (it is not contained: see
+// --unconfined). Other adapters land in their own PRs.
+func usageErr(msg string) error { return usageError{errors.New(msg)} }
+
 func harnessMain(args []string) error {
 	if len(args) == 0 || args[0] != "run" {
-		return errors.New("usage: fab harness run --adapter native|claude-code --events FILE ...")
+		return usageErr("usage: fab harness run --adapter native|claude-code --events FILE ...")
 	}
 	return harnessRunMain(args[1:])
 }
@@ -45,25 +49,87 @@ func (s slowSink) Emit(ctx context.Context, e harness.Event) error {
 	return s.next.Emit(ctx, e)
 }
 
+// passEnvAllowed lists the variables --pass-env may name. They are the
+// identity and credential variables a signed-in harness needs; nothing else
+// (no FABRIC_*, DSNs, cloud credentials) can reach the child through this flag.
+var passEnvAllowed = map[string]bool{
+	"USER": true, "LOGNAME": true, "TMPDIR": true, "LANG": true, "LC_ALL": true, "SHELL": true, "TERM": true,
+	"ANTHROPIC_API_KEY": true, "CLAUDE_CODE_OAUTH_TOKEN": true,
+}
+
+var envNameRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+
+// parsePassEnv validates --pass-env names and returns name=value for the
+// ones set in the caller's environment, plus the values that are credentials
+// (so they can be masked wherever they would be printed or recorded).
+func parsePassEnv(list string) (env map[string]string, secrets []string, err error) {
+	env = map[string]string{}
+	for _, k := range strings.Split(list, ",") {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		if !envNameRE.MatchString(k) || !passEnvAllowed[k] {
+			return nil, nil, usageErr(fmt.Sprintf("--pass-env: %q is not an allowed variable name", k))
+		}
+		if v, ok := os.LookupEnv(k); ok {
+			env[k] = v
+			if k == "ANTHROPIC_API_KEY" || k == "CLAUDE_CODE_OAUTH_TOKEN" {
+				secrets = append(secrets, v)
+			}
+		}
+	}
+	return env, secrets, nil
+}
+
 func harnessRunMain(args []string) error {
 	fs := flag.NewFlagSet("harness run", flag.ContinueOnError)
 	adapter := fs.String("adapter", "", "harness adapter (native, claude-code)")
 	grantFile := fs.String("grant", "", "native: grant file")
 	events := fs.String("events", "", "new file to write the event trace to (JSONL, mode 0600)")
-	fake := fs.Bool("unconfined-fake-host", false, "tests only: run tools without containment (needs FABRIC_ALLOW_FAKE_HOST=1)")
+	fake := fs.Bool("unconfined-fake-host", false, "tests only: run native tools without containment (needs FABRIC_ALLOW_FAKE_HOST=1)")
 	slow := fs.Duration("sink-delay", 0, "delay every event write by this long (exercises a slow sink)")
 	claudeBin := fs.String("claude-bin", "claude", "claude-code: the claude executable")
 	prompt := fs.String("prompt", "", "claude-code: first prompt")
-	input := fs.String("input", "", "claude-code: a second message sent after the first reply")
-	cancelInput := fs.Bool("cancel-input", false, "claude-code: also send an Input whose context is cancelled mid-call")
-	passEnv := fs.String("pass-env", "", "claude-code: comma-separated names of extra environment variables to pass (names only; PATH and HOME are always passed)")
+	input := fs.String("input", "", "claude-code: a second message sent after the first")
+	cancelInput := fs.Bool("cancel-input", false, "claude-code: also send an Input with an already-cancelled context; it must be refused and not recorded")
 	model := fs.String("model", "", "claude-code: model name")
 	wait := fs.Duration("wait", 120*time.Second, "claude-code: how long to wait for replies before Stop")
+	passEnv := fs.String("pass-env", "", "claude-code: comma-separated variable NAMES to pass in addition to PATH and HOME (allow-listed: USER LOGNAME TMPDIR LANG LC_ALL SHELL TERM ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN)")
+	unconfined := fs.Bool("unconfined", false, "claude-code: acknowledge that claude runs with your user's files and no sandbox (a test tool)")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return usageErr(err.Error())
+	}
+	if fs.NArg() > 0 {
+		return usageErr("unexpected arguments: " + strings.Join(fs.Args(), " "))
 	}
 	if *events == "" {
-		return errors.New("--events is required")
+		return usageErr("--events is required")
+	}
+	switch *adapter {
+	case "native":
+		if *passEnv != "" || *prompt != "" || *input != "" || *cancelInput || *unconfined {
+			return usageErr("--pass-env, --prompt, --input, --cancel-input and --unconfined are claude-code flags")
+		}
+		if *grantFile == "" {
+			return usageErr("--grant is required for native")
+		}
+	case "claude-code":
+		if *prompt == "" {
+			return usageErr("--prompt is required for claude-code")
+		}
+		if !*unconfined {
+			return usageErr("claude-code runs with your user's files and no sandbox: pass --unconfined to run this test tool")
+		}
+		if *grantFile != "" || *fake {
+			return usageErr("--grant and --unconfined-fake-host are native flags")
+		}
+	default:
+		return usageErr(fmt.Sprintf("--adapter %q is not wired into fab harness run (native, claude-code)", *adapter))
+	}
+	extra, secrets, err := parsePassEnv(*passEnv)
+	if err != nil {
+		return err
 	}
 	sink, err := harness.NewJSONLSink(*events)
 	if err != nil {
@@ -73,22 +139,27 @@ func harnessRunMain(args []string) error {
 	if *slow > 0 {
 		out = slowSink{next: sink, delay: *slow}
 	}
+	// SIGINT or SIGTERM is Stop for either adapter.
+	sctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	red := harness.ChainRedactor(harness.LiteralRedactor(secrets), harness.PatternRedactor())
 	var runErr error
-	switch *adapter {
-	case "native":
-		runErr = runNative(*grantFile, *fake, out)
-	case "claude-code":
-		runErr = runClaudeCode(*claudeBin, *model, *prompt, *input, *passEnv, *cancelInput, *wait, out)
-	default:
-		runErr = fmt.Errorf("--adapter %q is not wired into fab harness run (native, claude-code)", *adapter)
+	if *adapter == "native" {
+		runErr = runNative(sctx, *grantFile, *fake, out)
+	} else {
+		runErr = runClaudeCode(sctx, *claudeBin, *model, *prompt, *input, extra, red, *cancelInput, *wait, out)
 	}
 	if cerr := sink.Close(); cerr != nil && runErr == nil {
 		runErr = cerr
 	}
-	return errors.Join(runErr, report(*events))
+	evs, rerr := harness.ReadJSONL(*events)
+	if rerr != nil {
+		return errors.Join(runErr, rerr)
+	}
+	return errors.Join(runErr, judge(*adapter, evs))
 }
 
-func runNative(grantFile string, fake bool, sink harness.Sink) error {
+func runNative(sctx context.Context, grantFile string, fake bool, sink harness.Sink) error {
 	g, err := native.LoadGrant(grantFile)
 	if err != nil {
 		return err
@@ -98,9 +169,6 @@ func runNative(grantFile string, fake bool, sink harness.Sink) error {
 		return err
 	}
 	opts.Sink = sink
-	// SIGINT or SIGTERM is Stop: the run ends and settles as stopped.
-	sctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	return withStore(func(_ context.Context, st *store.Store) error {
 		ctx, cancel := context.WithTimeout(sctx, time.Duration(g.WallSeconds+120)*time.Second)
 		defer cancel()
@@ -114,13 +182,10 @@ func runNative(grantFile string, fake bool, sink harness.Sink) error {
 }
 
 // runClaudeCode drives one interactive Claude Code session: the prompt, an
-// Input cancelled mid-call (the session must survive it), a real second
-// Input, an Interrupt, and a Stop. The environment given to claude is PATH,
-// HOME and the variables named by --pass-env.
-func runClaudeCode(bin, model, prompt, input, passEnv string, cancelInput bool, wait time.Duration, sink harness.Sink) error {
-	if prompt == "" {
-		return errors.New("--prompt is required for claude-code")
-	}
+// Input with an already-cancelled context (it must be refused), a real second
+// Input, an Interrupt, and a Stop. The child's environment is PATH, HOME and
+// the allow-listed variables named by --pass-env.
+func runClaudeCode(sctx context.Context, bin, model, prompt, input string, extra map[string]string, red harness.Redactor, cancelInput bool, wait time.Duration, sink harness.Sink) error {
 	path, err := exec.LookPath(bin)
 	if err != nil {
 		return fmt.Errorf("claude executable: %w", err)
@@ -131,49 +196,61 @@ func runClaudeCode(bin, model, prompt, input, passEnv string, cancelInput bool, 
 	}
 	defer os.RemoveAll(dir)
 	env := map[string]string{"PATH": os.Getenv("PATH"), "HOME": os.Getenv("HOME")}
-	for _, k := range strings.Split(passEnv, ",") {
-		if k = strings.TrimSpace(k); k != "" {
-			if v, ok := os.LookupEnv(k); ok {
-				env[k] = v
-			}
-		}
+	for k, v := range extra {
+		env[k] = v
 	}
-	a := &claudecode.Adapter{Launch: claudecode.ExecLauncher(path), StopGrace: 15 * time.Second}
-	spec := harness.StartSpec{SessionID: fmt.Sprintf("ses_%d", time.Now().UnixNano()), Prompt: prompt, Dir: dir, Model: model,
-		Env: env}
+	a := &claudecode.Adapter{Launch: claudecode.ExecLauncher(path), StopGrace: 15 * time.Second, Redact: red}
+	spec := harness.StartSpec{SessionID: fmt.Sprintf("ses_%d", time.Now().UnixNano()), Prompt: prompt, Dir: dir, Model: model, Env: env}
 	s, err := a.Start(context.Background(), spec, sink)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), wait+60*time.Second)
+	// Whatever happens next, the session is stopped before this returns.
+	ctx, cancel := context.WithTimeout(context.Background(), wait+90*time.Second)
 	defer cancel()
+	defer func() { _ = s.Stop(ctx) }()
+	var failure error
 	if cancelInput {
 		cctx, ccancel := context.WithCancel(context.Background())
-		go ccancel()
-		err := s.Input(cctx, "(cancelled input, ignore)")
-		fmt.Printf("cancelled input: %v\n", err)
+		ccancel()
+		if err := s.Input(cctx, "(cancelled input, must be refused)"); !errors.Is(err, context.Canceled) {
+			failure = fmt.Errorf("an Input with a cancelled context was not refused: %v", err)
+		}
 	}
 	if input != "" {
 		if err := s.Input(ctx, input); err != nil {
-			fmt.Printf("input: %v\n", err)
+			failure = errors.Join(failure, fmt.Errorf("input: %w", err))
 		}
 	}
-	time.Sleep(wait)
-	fmt.Printf("interrupt: %v\n", s.Interrupt(ctx))
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	waited := make(chan struct{})
+	go func() { _, _ = s.Wait(context.Background()); close(waited) }()
+	select {
+	case <-timer.C:
+	case <-sctx.Done():
+	case <-waited: // the child ended on its own
+	}
+	if err := s.Interrupt(ctx); err != nil {
+		failure = errors.Join(failure, fmt.Errorf("interrupt: %w", err))
+	}
 	if err := s.Stop(ctx); err != nil {
-		return err
+		return errors.Join(failure, err)
 	}
 	f, err := s.Wait(ctx)
-	fmt.Printf("session final: %+v err=%v\n", f, err)
-	return err
+	fmt.Printf("session final: outcome=%s exit_code=%d reason=%q err=%v\n", f.Outcome, f.ExitCode, f.Reason, err)
+	return errors.Join(failure, err)
 }
 
-// report reads the trace back and checks it against the adapter contract.
-func report(path string) error {
-	evs, err := harness.ReadJSONL(path)
-	if err != nil {
-		return err
-	}
+// judge reads the trace back, checks it against the adapter contract and
+// decides success. A deploy check can rely on the exit code: only a run that
+// really finished its work returns nil.
+//
+// native: the final outcome must be done.
+// claude-code: the scripted session is ended by Stop, so the final must be
+// stopped with exit code 0; at least one assistant reply must exist; no turn
+// may have ended in error; and no input may be reported undelivered.
+func judge(adapter string, evs []harness.Event) error {
 	counts := map[harness.Kind]int{}
 	for _, e := range evs {
 		counts[e.Kind]++
@@ -185,15 +262,48 @@ func report(path string) error {
 	sort.Strings(kinds)
 	conf := harness.CheckStream(evs)
 	fmt.Printf("trace: %d events (%s) conforms=%v\n", len(evs), strings.Join(kinds, " "), conf == nil)
-	if len(evs) > 0 {
-		last := evs[len(evs)-1]
-		var f harness.Final
-		if last.Kind == harness.KindFinal && json.Unmarshal(last.Payload, &f) == nil {
-			fmt.Printf("final: %s\n", f.Outcome)
-		}
-	}
 	if conf != nil {
 		return fmt.Errorf("trace does not conform: %w", conf)
+	}
+	var f harness.Final
+	if err := json.Unmarshal(evs[len(evs)-1].Payload, &f); err != nil {
+		return err
+	}
+	fmt.Printf("final: %s\n", f.Outcome)
+	switch adapter {
+	case "native":
+		if f.Outcome != harness.OutcomeDone {
+			return fmt.Errorf("native run ended %s", f.Outcome)
+		}
+	case "claude-code":
+		if f.Outcome != harness.OutcomeStopped || f.ExitCode != 0 {
+			return fmt.Errorf("claude-code session ended %s (exit code %d), want a clean stop", f.Outcome, f.ExitCode)
+		}
+		if strings.Contains(f.Reason, "undelivered_inputs=") {
+			return fmt.Errorf("claude-code session left inputs undelivered")
+		}
+		replies := 0
+		for _, e := range evs {
+			if e.Kind != harness.KindMessage {
+				continue
+			}
+			var m harness.Message
+			if json.Unmarshal(e.Payload, &m) != nil {
+				continue
+			}
+			switch {
+			case m.Role == "assistant" && m.Text != "":
+				replies++
+			case m.Role == "system" && strings.HasPrefix(m.Text, "turn ended:"):
+				return fmt.Errorf("claude-code turn ended in error: %s", m.Text)
+			}
+		}
+		if replies == 0 {
+			return errors.New("claude-code produced no assistant reply")
+		}
+		if strings.Contains(f.Reason, "may have been merged") {
+			fmt.Println("note: some queued inputs were merged by claude or lost; check the reply count")
+		}
 	}
 	return nil
 }

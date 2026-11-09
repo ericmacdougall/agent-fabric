@@ -107,6 +107,7 @@ type session struct {
 	mu       sync.Mutex
 	turn     int
 	sent     int // inputs queued since the last result arrived
+	total    int // every input accepted
 	results  int
 	lastOK   bool
 	lastSub  string
@@ -235,6 +236,9 @@ func (s *session) ended() bool {
 // send records and queues one user turn. The Turn event precedes the queueing
 // so every reply the process produces follows it in the stream.
 func (s *session) send(ctx context.Context, text string) error {
+	if err := ctx.Err(); err != nil {
+		return err // a cancelled Input is refused before anything is recorded
+	}
 	// Order concurrent Inputs, but give up when ctx ends.
 	select {
 	case s.sendSem <- struct{}{}:
@@ -261,6 +265,7 @@ func (s *session) send(ctx context.Context, text string) error {
 	}
 	s.turn++
 	s.sent++
+	s.total++
 	n := s.turn
 	s.mu.Unlock()
 	// Recording must not depend on the caller's ctx: a cancelled Input would
@@ -279,6 +284,7 @@ func (s *session) send(ctx context.Context, text string) error {
 	}
 	s.mu.Lock()
 	s.sent-- // not queued: not counted as undelivered
+	s.total--
 	s.mu.Unlock()
 	<-s.slots
 	return err
@@ -424,9 +430,18 @@ func (s *session) read() {
 	s.mu.Lock()
 	s.settling = true
 	pending := s.sent
-	results, lastOK, lastSub := s.results, s.lastOK, s.lastSub
+	results, lastOK, lastSub, total := s.results, s.lastOK, s.lastSub, s.total
 	s.mu.Unlock()
 	f := s.settle(code, werr, s.stopping.Load(), pending, results, lastOK, lastSub, panicked.Load())
+	if (f.Outcome == harness.OutcomeDone || f.Outcome == harness.OutcomeStopped) && results > 0 && total > results {
+		// Real claude folds inputs queued during a turn into that turn, so
+		// fewer results than inputs is normal; but a lost input looks the
+		// same. Say so instead of claiming either.
+		if f.Reason != "" {
+			f.Reason += "; "
+		}
+		f.Reason += fmt.Sprintf("inputs=%d results=%d (queued inputs may have been merged by the harness, or lost)", total, results)
+	}
 	s.final, _ = s.em.FinalOutcome(context.Background(), f)
 }
 

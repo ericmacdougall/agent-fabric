@@ -68,6 +68,16 @@ func init() {
 		for sc.Scan() { // the rest are consumed silently, as merged
 		}
 		os.Exit(0)
+	case "lost":
+		// answers the first line, reads the second, exits 0 without answering
+		sc := bufio.NewScanner(os.Stdin)
+		sc.Buffer(make([]byte, 1<<20), 8<<20)
+		sc.Scan()
+		time.Sleep(300 * time.Millisecond)
+		emit(assistant(text("first")))
+		emit(result("success", false))
+		sc.Scan()
+		os.Exit(0)
 	case "deaf":
 		time.Sleep(time.Hour) // never reads stdin
 	case "stderrbearer":
@@ -237,7 +247,47 @@ func TestMergedInputsAreNotReportedUndelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	f, _ := s.Wait(ctx)
-	if f.Outcome != harness.OutcomeStopped || f.Reason != "" {
-		t.Fatalf("merged inputs reported as undelivered: %+v", f)
+	if f.Outcome != harness.OutcomeStopped || strings.Contains(f.Reason, "undelivered") || !strings.Contains(f.Reason, "inputs=3 results=1") {
+		t.Fatalf("merged inputs must be noted, not reported as undelivered: %+v", f)
+	}
+}
+
+// A child that answers the first prompt and exits without answering a second
+// input must not look like a clean success: the unanswered input is noted.
+func TestLostInputIsNotSilent(t *testing.T) {
+	a := adapter("lost", false, nil).(*Adapter)
+	rec := &harnesstest.Recorder{}
+	s, err := a.Start(context.Background(), harness.StartSpec{SessionID: "ses_lost", Prompt: "one", Dir: t.TempDir()}, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = s.Input(ctx, "two")
+	f, _ := s.Wait(ctx)
+	if !strings.Contains(f.Reason, "inputs=2 results=1") {
+		t.Fatalf("a lost input left no trace in the final: %+v", f)
+	}
+}
+
+func TestCancelledInputIsRefusedBeforeRecording(t *testing.T) {
+	a := adapter("block", false, nil)
+	rec := &harnesstest.Recorder{}
+	s, err := a.Start(context.Background(), harness.StartSpec{SessionID: "ses_cn", Prompt: "go", Dir: t.TempDir()}, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 50; i++ { // the select race made this pass only some of the time
+		if err := s.Input(ctx, "never"); err == nil {
+			t.Fatal("a cancelled Input was accepted")
+		}
+	}
+	sctx, c2 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer c2()
+	_ = s.Stop(sctx)
+	if contains(harnesstest.Texts(rec.Snapshot()), "never") {
+		t.Fatal("a refused Input was recorded as a turn")
 	}
 }

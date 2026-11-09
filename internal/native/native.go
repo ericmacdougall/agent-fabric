@@ -370,7 +370,9 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 		}
 		obs := hnative.NewObserver(em)
 		loopProvider, toolset = obs.Provider(provider), obs.Tools(toolset)
-		defer func() { obs.Finish(context.WithoutCancel(ctx), loopOut, rerr, ctx.Err() != nil) }()
+		defer func() {
+			obs.Finish(context.WithoutCancel(ctx), loopOut, rerr, errors.Is(context.Cause(ctx), context.Canceled))
+		}()
 	}
 	loop, err := agent.New(agent.Config{
 		DB: db, Ledger: led, Provider: loopProvider, Tools: toolset, Guard: oracle,

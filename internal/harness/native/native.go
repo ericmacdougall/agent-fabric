@@ -131,7 +131,12 @@ func finalFor(out agent.Outcome, err error, cause error) harness.Final {
 	case errors.Is(cause, errInterrupted):
 		return harness.Final{Outcome: harness.OutcomeInterrupted, ExitCode: -1}
 	case errors.Is(cause, errStopped):
-		return harness.Final{Outcome: harness.OutcomeStopped, ExitCode: -1}
+		f := harness.Final{Outcome: harness.OutcomeStopped, ExitCode: -1}
+		// A real failure that raced with the stop must not vanish.
+		if err != nil && !errors.Is(err, context.Canceled) {
+			f.Reason = err.Error()
+		}
+		return f
 	}
 	if err == nil && out.Kind == agent.OutcomeApprovalRequired {
 		return harness.Final{Outcome: harness.OutcomeStopped, Reason: agent.OutcomeApprovalRequired, ExitCode: -1}
