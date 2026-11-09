@@ -4693,7 +4693,7 @@
   "invariant": "hold_released_only_when_log_decodes",
   "pkg": "./internal/sched",
   "file": "internal/store/hold.go",
-  "expect": "TestHoldFoundAfterStart",
+  "expect": "TestHoldBehindCursorStaysHeld",
   "edits": [
    [
     "if _, err := readViews(ctx, tx, m); err != nil {",

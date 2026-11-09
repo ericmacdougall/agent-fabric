@@ -39,7 +39,7 @@ def main():
         o, n = old.get(m), new.get(m)
         if o == n:
             continue
-        pre = o is not None and (o[1] != "True" or o[2] != "ok")
+        pre = o is not None and (o[1] != "true" or o[2] != "ok")
         print("%s\told=%s\tnew=%s%s" % (m, o, n, "\t(already mismatching on the old side)" if pre else ""))
         if not pre:
             bad += 1

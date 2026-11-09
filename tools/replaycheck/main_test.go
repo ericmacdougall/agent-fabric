@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 
 	"fabric/internal/domain"
 	"fabric/internal/storetest"
 )
+
+func TestMain(m *testing.M) { os.Exit(storetest.Main(m, "replaycheck")) }
 
 // The tool lists every mission with a digest, jsonb_eq true and status ok on
 // a healthy store, and flags a mission whose log has a row it cannot read.
@@ -28,7 +31,7 @@ func TestRunListsEveryMission(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := b.String()
-	for _, want := range []string{"# build test-commit\n", "m_rc_a\t", "m_rc_b\t", "\tTrue\tok\n"} {
+	for _, want := range []string{"# build test-commit\n", "m_rc_a\t", "m_rc_b\t", "\ttrue\tok\n"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output lacks %q:\n%s", want, out)
 		}
