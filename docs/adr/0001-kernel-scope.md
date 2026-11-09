@@ -45,7 +45,7 @@ These are decided once, before data accumulates. The slice that fixes each one i
 | 5 | Hash chain | Per-stream chain over the canonical envelope bytes. F1 reserves nullable columns and the byte form; F11 turns it on from a recorded anchor | F1, F11 |
 | 6 | Identity authority | GoodQA as issuer for orgs, `local` for personal. Principal and issuer on every event, `on_behalf_of` optional | F4 |
 | 7 | Capability class names | `fs.*`, `shell`, `net`, `llm.call`, `browser.{open,navigate,act,read}`, `desktop.{observe,act}`, `message.send`, `ticket.*`, `git.publish`. Policy bundles and audit reference these names for good | F8 (names), F7 (use) |
-| 8 | Provider contract names and descriptor fields | `fabric.provider/<kind>/v1`, closed capability lists per kind, enforcement tier in the descriptor; see [ADR 0002](0002-provider-interfaces.md) | F17 |
+| 8 (provisional, ADR 0002) | Provider contract names and descriptor fields | `fabric.provider/<kind>/v1`, closed capability lists per kind, enforcement tier in the descriptor; see [ADR 0002](0002-provider-interfaces.md) | F17 |
 
 ## Interim rules for parallel feature work
 
