@@ -60,6 +60,11 @@ func wait(t T, s harness.Session) harness.Final {
 func CheckStream(evs []harness.Event) error { return harness.CheckStream(evs) }
 
 func optional(ks []harness.Kind, k harness.Kind) bool {
+	// Only kinds a harness may legitimately never report can be waived: usage
+	// numbers and tool calls. Turn and message events are the contract.
+	if k != harness.KindUsage && k != harness.KindToolCall {
+		return false
+	}
 	for _, o := range ks {
 		if o == k {
 			return true

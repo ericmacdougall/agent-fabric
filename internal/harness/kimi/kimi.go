@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -107,6 +108,20 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 	red := a.Redact
 	if red == nil {
 		red = harness.PatternRedactor()
+	}
+	if !filepath.IsAbs(spec.Dir) {
+		return nil, errors.New("kimi: Dir must be an absolute path")
+	}
+	if spec.Prompt == "" || len(spec.Prompt) > MaxPromptBytes {
+		return nil, fmt.Errorf("kimi: prompt must be 1..%d bytes", MaxPromptBytes)
+	}
+	if spec.Model != "" && !modelRE.MatchString(spec.Model) {
+		return nil, fmt.Errorf("kimi: model %q is not an allowed model alias", spec.Model)
+	}
+	// The prompt travels in argv, which any local user can read: refuse one
+	// that holds a secret-shaped string (the event stream redacts it, argv does not).
+	if red.Redact(spec.Prompt) != spec.Prompt {
+		return nil, errors.New("kimi: the prompt contains a secret-shaped string; it would be visible in the process list")
 	}
 	em, err := harness.NewEmitter(Name, spec.SessionID, sink, red)
 	if err != nil {
@@ -196,8 +211,14 @@ func (s *session) handle(line []byte) {
 			}
 		}
 		if hasText && text != "" {
-			s.replies++
-			_ = s.em.Message(ctx, "assistant", text)
+			if isHookResult(text) {
+				// kimi writes hook output as an assistant-shaped line; it is not
+				// a model answer, so it never satisfies "done needs a reply".
+				_ = s.em.Message(ctx, "system", text)
+			} else {
+				s.replies++
+				_ = s.em.Message(ctx, "assistant", text)
+			}
 		}
 		for _, tc := range w.ToolCalls {
 			name, args := tc.Function.Name, tc.Function.Arguments
@@ -317,6 +338,14 @@ func (s *session) settle(code int, werr error, panicked any) harness.Final {
 		reason += "; stderr: " + e
 	}
 	return harness.Final{Outcome: harness.OutcomeFailed, Reason: reason, ExitCode: code}
+}
+
+// isHookResult reports whether text looks like the CLI's hook-result block:
+// a first line ending in "hook" or "hook blocked".
+func isHookResult(text string) bool {
+	first, _, _ := strings.Cut(text, "\n")
+	first = strings.TrimSpace(first)
+	return strings.HasSuffix(first, " hook") || strings.HasSuffix(first, " hook blocked")
 }
 
 func (a *Adapter) redactor() harness.Redactor {
