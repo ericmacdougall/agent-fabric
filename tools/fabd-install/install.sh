@@ -1,5 +1,5 @@
 #!/bin/bash
-# fabd install on t2-dev (goodqa#15587, spec v3). Runs as the ops user on t2-dev.
+# fabd install on t2-dev (goodqa#15587, spec v5). Runs as the ops user on t2-dev.
 #
 #   MODE=rehearse FAB_BIN=/path/fab-with-no-dispatch tools/fabd-install/install.sh
 #   MODE=live     FAB_BIN=/srv/fabric/bin/fab-live   tools/fabd-install/install.sh
@@ -95,14 +95,19 @@ do_remove() {
   local before_old; before_old=$(pq "$PGADM" -c "SELECT count(*) FROM pg_roles WHERE rolname LIKE 'fabric\\_live\\_%'")
   if [[ -f "$SVC/old_scheduler_role" && -n "$(pq "$PGADM" -c "SELECT 1 FROM pg_database WHERE datname = '$DB'")" ]]; then
     local old; old=$(cat "$SVC/old_scheduler_role")
-    [[ "$old" =~ ^[a-z0-9_]+$ ]] || die "the saved scheduler_role value is not a plain role name"
-    pq "$TARGET" -c "UPDATE fabric_settings SET value = '$old' WHERE key = 'scheduler_role'" >/dev/null
-    local now; now=$(pq "$TARGET" -c "SELECT value FROM fabric_settings WHERE key = 'scheduler_role'")
+    [[ -z "$old" || "$old" =~ ^[a-z0-9_]+$ ]] || die "the saved scheduler_role value is not a plain role name"
+    if [[ -z "$old" ]]; then
+      pq "$TARGET" -c "DELETE FROM fabric_settings WHERE key = 'scheduler_role'" >/dev/null
+    else
+      pq "$TARGET" -c "UPDATE fabric_settings SET value = '$old' WHERE key = 'scheduler_role'" >/dev/null
+    fi
+    local now; now=$(pq "$TARGET" -c "SELECT COALESCE((SELECT value FROM fabric_settings WHERE key = 'scheduler_role'), '')")
     say "removal: scheduler_role restored to $now (saved value $old)"
     [[ "$now" == "$old" ]] || die "scheduler_role was not restored"
     for r in app runner scheduler; do
       [[ "${PREFIX}_$r" =~ $ROLE_RE ]] || die "refusing to drop ${PREFIX}_$r"
       if [[ -n "$(pq "$PGADM" -c "SELECT 1 FROM pg_roles WHERE rolname = '${PREFIX}_$r'")" ]]; then
+        pq "$TARGET" -c "REASSIGN OWNED BY ${PREFIX}_$r TO CURRENT_USER" >/dev/null
         pq "$TARGET" -c "DROP OWNED BY ${PREFIX}_$r" >/dev/null
       fi
     done
@@ -172,8 +177,12 @@ if ! phase_done snapshot; then
   expect_zero "dispatchable missions" "SELECT count(*) FROM missions m WHERE m.execution = 'ADMITTED' AND m.terminal = 'NONE' AND m.provider = 'claude-code' AND NOT EXISTS (SELECT 1 FROM waits w WHERE w.mission_id = m.id)"
   LS=$(pqr "$LIVEREAD" -c "SHOW log_statement"); say "log_statement = $LS"
   [[ "$LS" == none ]] || die "log_statement is $LS: mod and ddl log ALTER ROLE ... PASSWORD, so it must be none"
-  say "log_min_error_statement = $(pqr "$LIVEREAD" -c 'SHOW log_min_error_statement')"
+  say "log_min_error_statement = $(pqr "$LIVEREAD" -c 'SHOW log_min_error_statement') (the roles command runs with it forced to panic, see below)"
+  LMD=$(pqr "$LIVEREAD" -c 'SHOW log_min_duration_statement'); say "log_min_duration_statement = $LMD"
+  [[ "$LMD" == -1 ]] || die "log_min_duration_statement is $LMD: a successful ALTER ROLE would be logged with the password"
+  SPL=$(pqr "$LIVEREAD" -c 'SHOW shared_preload_libraries'); say "shared_preload_libraries = $SPL"
   PSS=$(pqr "$LIVEREAD" -c "SELECT count(*) FROM pg_extension WHERE extname = 'pg_stat_statements'")
+  [[ "$SPL" != *pg_stat_statements* ]] || PSS=1
   say "pg_stat_statements installed in this database: $PSS"
   if [[ "$PSS" != 0 ]]; then
     TU=$(pqr "$LIVEREAD" -c "SHOW pg_stat_statements.track_utility" 2>/dev/null || echo unknown)
@@ -203,7 +212,7 @@ if ! phase_done roles; then
   echo "$OLD_SCHED" > "$SVC/old_scheduler_role"
   say "scheduler_role before: $OLD_SCHED"
   openssl rand -hex 24 > "$SVC/app.pw"; openssl rand -hex 24 > "$SVC/runner.pw"; chmod 600 "$SVC/app.pw" "$SVC/runner.pw"
-  FABRIC_DSN="$(dsn_for "$DB")" "$FAB" db roles --prefix "$PREFIX" --app-password-file "$SVC/app.pw" --runner-password-file "$SVC/runner.pw" 2>&1 | tail -2
+  PGOPTIONS='-c log_min_error_statement=panic -c log_min_duration_statement=-1' FABRIC_DSN="$(dsn_for "$DB")" "$FAB" db roles --prefix "$PREFIX" --app-password-file "$SVC/app.pw" --runner-password-file "$SVC/runner.pw" 2>&1 | tail -2
   APPD=$(dsn_for "$DB" "${PREFIX}_app" "$SVC/app.pw"); RUND=$(dsn_for "$DB" "${PREFIX}_runner" "$SVC/runner.pw")
   FABRIC_DSN="$APPD" FABRIC_RUNNER_DSN="$RUND" "$FAB" db check-runner && say "check-runner ok"
   say "scheduler_role after: $(pqr "$LIVEREAD" -c "SELECT value FROM fabric_settings WHERE key = 'scheduler_role'")"
@@ -264,6 +273,10 @@ fi
 # --- first start and verification (AC-6)
 if ! phase_done started; then
   say "starting $UNIT.service"
+  if [[ $MODE == rehearse ]]; then
+    FABRIC_DSN="$(dsn_for "$DB" "${PREFIX}_app" "$SVC/app.pw")" "$SVC/guard.sh" || die "the guard refuses with no daemon running"
+    say "assert: the guard passes when no daemon is running (positive control)"
+  fi
   STARTED_AT=$(date -u +"%Y-%m-%d %H:%M:%S")
   systemctl --user start "$UNIT.service"
   for i in $(seq 1 40); do
@@ -302,8 +315,7 @@ if ! phase_done asserts; then
   say "assert: the journal and process arguments hold neither password"
   if [[ "$(pqr "$LIVEREAD" -c "SELECT count(*) FROM pg_extension WHERE extname = 'pg_stat_statements'")" != 0 ]]; then
     for f in app runner; do
-      hit=$(printf "SELECT count(*) FROM pg_stat_statements WHERE position('%s' in query) > 0;\n" "$(cat "$SVC/$f.pw")" | PGCALL_DSN="$LIVEREAD" python3 -I "$D/pgcall.py" psql -X -At)
-      [[ "$hit" == 0 ]] || die "the $f password appears in pg_stat_statements"
+      if pqr "$LIVEREAD" -c "SELECT query FROM pg_stat_statements" | grep -qF -f "$SVC/$f.pw"; then die "the $f password appears in pg_stat_statements"; fi
     done
     say "assert: pg_stat_statements holds neither password"
   fi
@@ -316,7 +328,10 @@ if ! phase_done asserts; then
     e=$(pqr "$LIVEREAD" -c "SELECT execution FROM missions WHERE id = 'm_rh_nd'")
     say "assert: admitted mission after 75 s: attempts=$n execution=$e runs_launched_total=$(pqr "$LIVEREAD" -c "SELECT COALESCE((SELECT value FROM sched_counters WHERE name='runs_launched_total'),0)")"
     [[ "$n" == 0 && "$e" == ADMITTED ]] || die "an admitted mission was dispatched or changed"
-    if "$SVC/guard.sh" 2>/dev/null; then die "the guard allowed a second instance"; else say "assert: the guard refuses a second instance"; fi
+    GDSN=$(dsn_for "$DB" "${PREFIX}_app" "$SVC/app.pw")
+    if GOUT=$(FABRIC_DSN="$GDSN" "$SVC/guard.sh" 2>&1); then die "the guard allowed a second instance"; fi
+    [[ "$GOUT" == *"another session with application_name fabd exists"* ]] || die "the guard refused for another reason: $GOUT"
+    say "assert: the guard refuses a second instance (by its session check)"
     python3 -I - "$SVC/guard.sh" "$SVC/guard-swapped.sh" <<'PYG'
 import re, sys
 s = open(sys.argv[1]).read()
@@ -324,7 +339,9 @@ s = re.sub(r"== \"[0-9a-f]{64}\"", '== "' + "0" * 64 + '"', s, count=1)
 open(sys.argv[2], "w").write(s)
 PYG
     chmod 700 "$SVC/guard-swapped.sh"
-    if "$SVC/guard-swapped.sh" 2>/dev/null; then die "the guard accepted a swapped provider"; else say "assert: the guard refuses a swapped provider"; fi
+    if GOUT=$(FABRIC_DSN="$GDSN" "$SVC/guard-swapped.sh" 2>&1); then die "the guard accepted a swapped provider"; fi
+    [[ "$GOUT" == *"is not the recorded fake"* ]] || die "the swapped-provider guard refused for another reason: $GOUT"
+    say "assert: the guard refuses a swapped provider (by its sha check)"
     if /usr/bin/flock -n "$SVC/fabd.lock" true 2>/dev/null; then die "the daemon does not hold its lock"; else say "assert: the daemon holds its flock"; fi
   fi
   done_phase asserts
