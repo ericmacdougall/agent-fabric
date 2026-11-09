@@ -27,6 +27,12 @@ func extraModes(mode string) {
 	switch mode {
 	case "silent":
 		// reads stdin and never answers
+	case "hooks":
+		// what real claude emits at session start
+		emit(map[string]any{"type": "system", "subtype": "hook_started", "hook_id": "h1"})
+		emit(map[string]any{"type": "system", "subtype": "hook_response", "hook_id": "h1", "output": "x"})
+		emit(assistant(text("hi")))
+		emit(result("success", false))
 	case "toolerr":
 		emit(assistant(map[string]any{"type": "tool_use", "id": "toolu_e", "name": "Bash", "input": map[string]any{"command": "false"}}))
 		emit(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []map[string]any{{"type": "tool_result", "tool_use_id": "toolu_e", "is_error": true, "content": "boom"}}}})
@@ -250,6 +256,19 @@ func TestStderrTailDoesNotLeakPartialSecret(t *testing.T) {
 	for i := 0; i+8 <= len(secret); i++ {
 		if strings.Contains(f.Reason, secret[i:i+8]) {
 			t.Fatalf("reason carries part of the secret: %q", secret[i:i+8])
+		}
+	}
+}
+
+// Session-hook progress events from real claude are not unknown events.
+func TestSessionHookEventsAreNotUnknown(t *testing.T) {
+	f, evs := runToEnd(t, adapter("hooks", true, nil), harness.StartSpec{Prompt: "go"})
+	if f.Outcome != harness.OutcomeDone {
+		t.Fatalf("%+v", f)
+	}
+	for _, e := range evs {
+		if e.Kind == harness.KindUnknown {
+			t.Fatalf("unexpected unknown event: %s", e.Payload)
 		}
 	}
 }
