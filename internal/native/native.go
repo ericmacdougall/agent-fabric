@@ -68,6 +68,8 @@ type Grant struct {
 	BaseURL          string   `json:"base_url"`
 	AnthropicVersion string   `json:"anthropic_version"`
 	KeyCommand       []string `json:"key_command"`
+	// KeyCheck is "shape" (default) or "authority": see anthropic.KeyCheck.
+	KeyCheck string `json:"key_check,omitempty"`
 
 	Prices json.RawMessage `json:"prices"`
 	Caps   struct {
@@ -127,6 +129,9 @@ func (g Grant) Validate() error {
 	} else if g.BaseURL != APIBaseURL {
 		p = append(p, "base_url must be exactly "+APIBaseURL)
 	}
+	if !anthropic.KeyCheck(g.KeyCheck).Valid() {
+		p = append(p, "key_check must be shape or authority")
+	}
 	if g.MaxTurns <= 0 || g.WallSeconds <= 0 {
 		p = append(p, "max_turns and wall_seconds are required")
 	}
@@ -184,6 +189,8 @@ type Receipt struct {
 	CostLabel  string   `json:"cost_label"`
 	Billing    string   `json:"billing_mode"`
 	Starts     int      `json:"process_starts"`
+	// KeyCheck records an authority check as status and sha256 prefix only.
+	KeyCheck string `json:"key_check,omitempty"`
 }
 
 func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt, rerr error) {
@@ -303,7 +310,7 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 		allow = append(allow, re)
 	}
 
-	keySrc, keys, err := newKeyRing(g.KeyCommand, 5*time.Minute)
+	keySrc, keys, err := newKeyRing(g.KeyCommand, 5*time.Minute, anthropic.KeyCheck(g.KeyCheck), o.HTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +423,11 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 		out, err = loop.Resume(lctx)
 	}
 	loopOut = out
-	return finishNative(ctx, st, db, led, g, fence, out)
+	rcpt, ferr := finishNative(ctx, st, db, led, g, fence, out)
+	if rcpt != nil {
+		rcpt.KeyCheck = keys.lastCheck()
+	}
+	return rcpt, ferr
 }
 
 // nativeOracle is the run's guard oracle: its hooks see the canonical

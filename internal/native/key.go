@@ -2,6 +2,7 @@ package native
 
 import (
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -27,8 +28,9 @@ func checkBaseURL(u string) error {
 // keyRing redacts every key value its source has returned, so a secret
 // rotated during a run is scrubbed from tool output as well as the first.
 type keyRing struct {
-	mu   sync.Mutex
-	seen []string
+	mu    sync.Mutex
+	seen  []string
+	check string // last authority check: status and sha256 prefix only
 }
 
 func (k *keyRing) add(v string) {
@@ -53,11 +55,24 @@ func (k *keyRing) Redact(s string) string {
 // newKeyRing is the native key source: the API-key shape check runs in
 // anthropic.KeyFromCommand before caching, and every accepted value goes
 // into the ring.
-func newKeyRing(argv []string, ttl time.Duration) (anthropic.KeySource, *keyRing, error) {
+func newKeyRing(argv []string, ttl time.Duration, mode anthropic.KeyCheck, hc *http.Client) (anthropic.KeySource, *keyRing, error) {
 	ring := &keyRing{}
-	src, err := anthropic.KeyFromCommand(argv, ttl, ring.add)
+	src, err := anthropic.KeyFromCommandWith(argv, ttl, ring.add, anthropic.KeyOptions{
+		Check: mode, HTTP: hc,
+		OnCheck: func(status int, sum string) {
+			ring.mu.Lock()
+			ring.check = fmt.Sprintf("authority status=%d key_sha256=%s", status, sum)
+			ring.mu.Unlock()
+		},
+	})
 	if err != nil {
 		return nil, nil, err
 	}
 	return src, ring, nil
+}
+
+func (k *keyRing) lastCheck() string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.check
 }
