@@ -47,6 +47,7 @@ Each slice has one owner, its own ticket when it starts, and `Verify by:` checks
 | **F15** Evaluation and optimisation | evaluators, online and batch evaluation, LLM-as-judge, recommendations, A/B tests | 4, 5 | none | labelled fixture agreement thresholds met |
 | **F16** Agent definitions, prompts and flows | declarative agent definition, immutable versions and aliases, prompt management, workflows | 1, 3 | none | one definition runs on two adapters with conforming traces |
 | **F17** Provider interfaces | a versioned provider contract and conformance suite per component, descriptors with enforcement tiers, per-tenant bindings | 1, 3, 4, 5 | provider contract names (ADR 0001 choice 8) | the same mission yields the same policy decisions and trace kinds with first-party and fake third-party providers; see [ADR 0002](adr/0002-provider-interfaces.md) |
+| **F18** Voice and channels | speech in and out behind the `voice` provider kind, telephony and web-audio channel gateway, caller-to-principal mapping | 1, 4, 5 | none | a fixture call yields transcript and reply events with the conformance run passing; see [aws-agent-parity.md](aws-agent-parity.md) |
 
 ### Execution plan: two parallel lanes
 

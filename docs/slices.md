@@ -1,4 +1,4 @@
-# Slice spec outlines (F0 to F17)
+# Slice spec outlines (F0 to F18)
 
 These are outlines, not final specs. Each slice gets its own ticket and a full spec (outcome, scope, `AC-n` each with `Verify by:`, `NEG-n (AC-n)` cases, risks) before code. Specs for data, auth and migration slices need two reviews from different models or agents. The decision record is [adr/0001-kernel-scope.md](adr/0001-kernel-scope.md); the order is in [status-and-roadmap.md](status-and-roadmap.md).
 
@@ -185,3 +185,7 @@ Each new slice follows the interim rules in the ADR (tenant and stream scope on 
 ## F17 Provider interfaces (cross-cutting, new)
 
 Added by the Microsoft and Google parity map and [ADR 0002](adr/0002-provider-interfaces.md). Every component of Fabric has a first-party implementation behind a versioned provider contract (`fabric.provider/<kind>/v1`) with a conformance suite; a tenant binds a provider per kind (ours, AWS, Microsoft, Google or its own), and F7 policy and F11 trace wrap every provider call the same way. Fixes the provider contract names and descriptor fields (ADR 0001 choice 8). Its acceptance criteria, each with `Verify by:`, are AC-PI1 to AC-PI11 in [aws-agent-parity.md](aws-agent-parity.md). It is also a design constraint on every slice that owns a kind (F4 to F12, F14 to F16): each builds its first-party implementation behind the contract for its kind. A Google adapter has no live path: nothing in our deployments, CI or tests calls Vertex or aiplatform.
+
+## F18 Voice and channels (new)
+
+Added by the Microsoft and Google parity map (voice agents, phone and web-audio channels) at the owner's request for Fabric's own flavor of everything. A first-party `voice` provider kind (speech to text and text to speech behind one contract, ADR 0002) and a channel gateway that maps a caller to a principal. Its acceptance criteria, each with `Verify by:`, are AC-VO1 and AC-VO2 in [aws-agent-parity.md](aws-agent-parity.md). It waits for F4 (caller identity) and F17 (the provider contract), and sits after the first lanes in the order.
