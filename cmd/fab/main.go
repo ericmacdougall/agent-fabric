@@ -185,10 +185,16 @@ func withStoreService(f func(context.Context, *store.Store) error) error {
 	}
 	sctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// After the first signal, stop catching signals: a second Ctrl-C or SIGTERM
+	// then takes the default action even if the shutdown is blocked.
+	go func() { <-sctx.Done(); stop() }()
 	octx, cancel := context.WithTimeout(sctx, 60*time.Second)
 	st, err := store.Open(octx, dsn)
 	cancel()
 	if err != nil {
+		if sctx.Err() != nil {
+			return nil // stopped by a signal while opening
+		}
 		return err
 	}
 	defer st.Close()
