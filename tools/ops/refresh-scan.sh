@@ -32,23 +32,15 @@ BIN=$EV/control-bin/fab-live-150bac7
 PAIRDIR=$EV/control-scan-2
 PAIRFILE=$PAIRDIR/PAIR.ok
 LOG=$EV/refresh-scan-$TS.log
-REPIN=()
-REPINSHA=()
-while [[ "${1:-}" == --repin ]]; do
-  spec=${2:?--repin needs FILE=SHA256}; f=${spec%%=*}; h=${spec#*=}
-  [[ "$f" != *"/"* && "$f" != "$spec" && "$h" =~ ^[0-9a-f]{64}$ ]] || { echo "refresh-scan: --repin takes FILE=SHA256 (a name under the ops directory)"; exit 2; }
-  [[ "$(sha256sum -- "$D/$f" | cut -d" " -f1)" == "$h" ]] || { echo "refresh-scan: $f does not have the reviewed sha256 $h; refusing"; exit 2; }
-  REPIN+=("$D/$f"); shift 2
-done
-[[ $# == 0 ]] || { echo "usage: refresh-scan.sh [--repin FILE ...]"; exit 2; }
+[[ $# == 0 ]] || { echo "usage: refresh-scan.sh (no arguments; it only re-pairs the control scan)"; exit 2; }
 exec > >(tee -a "$LOG") 2>&1
 echo "refresh-scan $TS"
 
 [[ "$(sha256sum -- "$T" | cut -d' ' -f1)" == d1dfca6ae10a1ad4540bb94e64f0510077c47008920a9b554986b39dca573d83 ]] || { echo "refresh-scan: trivy binary is not the pinned one"; exit 2; }
 echo "== 1 current manifest"
-EXCL=(-e "  $PAIRFILE"); for f in "${REPIN[@]}"; do grep -qF -- "  $f" "$MAN" || { echo "refresh-scan: $f is not pinned"; exit 2; }; EXCL+=(-e "  $f"); done
+EXCL=(-e "  $PAIRFILE")
 grep -vF "${EXCL[@]}" "$MAN" > "$MAN.chk-$TS"
-(cd / && sha256sum --strict --quiet -c "$MAN.chk-$TS") || { echo "refresh-scan: the current manifest does not verify (apart from the --repin files); refusing"; rm -f "$MAN.chk-$TS"; exit 2; }
+(cd / && sha256sum --strict --quiet -c "$MAN.chk-$TS") || { echo "refresh-scan: the current manifest does not verify (apart from the PAIR.ok line); refusing"; rm -f "$MAN.chk-$TS"; exit 2; }
 rm -f "$MAN.chk-$TS"
 echo "manifest ok: $(sha256sum < "$MAN" | cut -d' ' -f1)"
 grep -qF -- "  $PAIRFILE" "$MAN" || { echo "refresh-scan: manifest does not pin $PAIRFILE"; exit 2; }
@@ -88,22 +80,18 @@ echo "== 5 new manifest"
 NEW=$MAN.new-$TS
 OLDHASH=$(sha256sum -- "$OLD/PAIR.ok" | cut -d' ' -f1)
 NEWHASH=$(sha256sum -- "$PAIRFILE" | cut -d' ' -f1)
-python3 -I - "$MAN" "$NEW" "$PAIRFILE" "$OLDHASH" "$NEWHASH" "${REPIN[@]}" <<'PY'
-import sys, hashlib
+python3 -I - "$MAN" "$NEW" "$PAIRFILE" "$OLDHASH" "$NEWHASH" <<'PY'
+import sys
 man, new, pair, oldh, newh = sys.argv[1:6]
-repin = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in sys.argv[6:]}
 lines = open(man).read().split("\n")
 out, changed = [], 0
 for l in lines:
     if l.endswith("  " + pair):
         assert l.startswith(oldh + "  "), "the PAIR.ok line is not the previous control scan's"
         out.append(newh + "  " + pair); changed += 1
-    elif any(l.endswith("  " + p) for p in repin):
-        p = [p for p in repin if l.endswith("  " + p)][0]
-        out.append(repin[p] + "  " + p); changed += 1
     else:
         out.append(l)
-assert changed == 1 + len(repin), "expected exactly the PAIR.ok line and the --repin lines"
+assert changed == 1, "expected exactly the PAIR.ok line"
 open(new, "w").write("\n".join(out))
 PY
 # every other pinned file must still match: verify the old manifest minus the PAIR.ok line
@@ -112,7 +100,7 @@ grep -vF "${EXCL[@]}" "$MAN" > "$NEW.rest"
 rm -f "$NEW.rest"
 echo "manifest diff (old vs new):"
 diff <(cat "$MAN") <(cat "$NEW") | cut -c1-200 || true
-[[ "$(diff <(cat "$MAN") <(cat "$NEW") | grep -c '^[<>]')" == $(( 2 * (1 + ${#REPIN[@]}) )) ]] || { echo "refresh-scan: the manifest diff is not the PAIR.ok line plus the --repin lines"; rm -f "$NEW"; exit 4; }
+[[ "$(diff <(cat "$MAN") <(cat "$NEW") | grep -c '^[<>]')" == 2 ]] || { echo "refresh-scan: the manifest diff is not the PAIR.ok line"; rm -f "$NEW"; exit 4; }
 cp -- "$MAN" "$MAN.pre-$TS"
 mv -- "$NEW" "$MAN"
 ok=1
