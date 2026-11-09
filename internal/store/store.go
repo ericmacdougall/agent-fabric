@@ -51,6 +51,10 @@ type Store struct {
 type hooks struct {
 	beforeCommit func(cmd domain.Command) error // returning an error aborts the transaction
 	afterCommit  func(cmd domain.Command)       // runs after COMMIT and before the response is returned
+	// afterMissionLock runs in Execute right after the mission row lock (the
+	// statement that assigns the transaction id) and before any outbox insert
+	// (outbox_xid_test.go parks a writer here).
+	afterMissionLock func(cmd domain.Command)
 
 	// Reservation barriers (reservations_test.go).
 	holdLocked       func(resource string) // after each capacity row lock in Hold
@@ -407,21 +411,39 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	if err != nil {
 		return Response{}, err
 	}
-	defer conn.Release()
+	orderLocked := false
+	// Runs after the transaction has ended (the rollback defer below runs
+	// first). If the lock is still held it is dropped and the unlock is
+	// CONFIRMED; if it cannot be confirmed the connection is closed, which ends
+	// the session and with it the lock, instead of going back to the pool
+	// holding it (the pattern of effects.lockRelease).
+	defer func() {
+		if orderLocked {
+			var ok bool
+			if err := conn.QueryRow(context.Background(), "SELECT pg_advisory_unlock($1)", outboxOrderLock).Scan(&ok); err != nil || !ok {
+				conn.Hijack().Close(context.Background()) //nolint:errcheck
+				return
+			}
+		}
+		conn.Release()
+	}()
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", outboxOrderLock); err != nil {
+		// A cancelled wait may have been granted just before; the deferred
+		// closure unlocks and confirms, or closes the connection.
+		orderLocked = true
 		return Response{}, fmt.Errorf("outbox order lock: %w", err)
 	}
-	orderLocked := true
-	defer func() {
-		if orderLocked { // runs after the transaction has ended (rollback runs first)
-			conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", outboxOrderLock) //nolint:errcheck
-		}
-	}()
+	orderLocked = true
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return Response{}, err
 	}
 	defer tx.Rollback(context.Background()) //nolint:errcheck // no-op after commit
+	// A holder stuck on a row lock must fail fast and free the global lock
+	// (every queued writer pins a pooled connection while it waits).
+	if _, err := tx.Exec(ctx, "SET LOCAL lock_timeout = '5s'"); err != nil {
+		return Response{}, fmt.Errorf("lock_timeout: %w", err)
+	}
 
 	// Admissions serialise on the slots row so the cap is a transaction, not a
 	// warning (AC-1). Everything else serialises on the mission row only.
@@ -449,6 +471,9 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 	}
 	if err != nil {
 		return Response{}, err
+	}
+	if s.hooks.afterMissionLock != nil {
+		s.hooks.afterMissionLock(cmd)
 	}
 
 	// Replay check.
@@ -621,9 +646,11 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		}
 		// The last outbox id is assigned: later writers may now take their xid.
 		if orderLocked {
-			if _, err := tx.Exec(ctx, "SELECT pg_advisory_unlock($1)", outboxOrderLock); err == nil {
-				orderLocked = false
+			var released bool
+			if err := tx.QueryRow(ctx, "SELECT pg_advisory_unlock($1)", outboxOrderLock).Scan(&released); err != nil {
+				return Response{}, fmt.Errorf("outbox order unlock: %w", err)
 			}
+			orderLocked = !released // false means the lock was not held: the deferred closure closes the connection
 		}
 		if len(events) > 0 {
 			resp.FirstSeq = events[0].Seq
