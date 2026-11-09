@@ -161,7 +161,7 @@ func daemonMain(args []string) error {
 	// must stay dp.Launch: the operator's name, re-resolved per launch (N1;
 	// TestDaemonLaunchComesFromDaemonProvider guards this line).
 	cfg.Launch = dp.Launch
-	return withStore(func(ctx context.Context, st *store.Store) error {
+	return withStoreService(func(ctx context.Context, st *store.Store) error {
 		s := sched.New(st, cfg, ln)
 		if p, ok := runnerProber(*workerUser); ok {
 			s.SetProber(p) // G1: reconcile UNKNOWN attempts whose runner is gone

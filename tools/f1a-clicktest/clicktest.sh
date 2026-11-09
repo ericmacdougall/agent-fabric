@@ -23,7 +23,7 @@
 #      a payload of the wrong type) are seeded; the daemon starts on them
 #   2  `fab streams held` lists exactly the two poisoned missions, `fab status`
 #      and the gauge say 2, the healthy mission is not held, the daemon is still
-#      alive after 60 seconds
+#      alive after 70 seconds
 #   3  the daemon is stopped and restarted: the same two holds, nothing double
 #      counted
 #   4  the poisoned rows are repaired by ONE owner transaction that lifts the
@@ -143,8 +143,8 @@ grep -q '^m_ct_badtype	ATTEMPT_STARTED	undecodable' <<<"$held1" && echo "ok: the
 grep -q '^held streams: 2$' <<<"$held1" && echo "ok: held streams: 2"
 echo "--- fab status"; "$FAB" status | sed -n '1,3p'
 [[ "$(metric)" == 2 ]] && echo "ok: fabric_held_streams 2"
-sleep 60
-[[ -d "/proc/$DAEMON_PID" ]] && echo "ok: the daemon is alive after 60 seconds"
+sleep 70
+[[ -d "/proc/$DAEMON_PID" ]] && echo "ok: the daemon is alive after 70 seconds (past the old fixed 60 second context, goodqa#15579)"
 echo "--- the healthy mission is not left at ADMITTED"; "$FAB" status | grep m_ct_healthy | cut -c1-120
 
 # 3: restart: the first daemon's time is up; a second one starts on the same database.
