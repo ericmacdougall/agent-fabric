@@ -62,8 +62,24 @@ if len(sys.argv) > 2:
     netloc = u.quote(sys.argv[2]) + ":" + u.quote(pw) + "@" + host
 print(u.urlunsplit((p.scheme, netloc, "/" + db, p.query, "")))' "$@"
 }
-adminq() { PGAPPNAME=clicktest psql "$(dsn_for postgres)" -X -q -At -v ON_ERROR_STOP=1 "$@"; }
-ownerq() { psql "$(dsn_for "$DB")" -X -q -At -v ON_ERROR_STOP=1 "$@"; }
+# psql gets its connection from PG* environment variables of its own process
+# (readable only by this user), never a DSN with a password on its command
+# line (/proc/PID/cmdline is world-readable on a shared host).
+pgenv() {  # database: shell exports for libpq
+  ADMIN="$ADMIN" python3 -I -c '
+import os, shlex, sys, urllib.parse as u
+p = u.urlsplit(os.environ["ADMIN"])
+q = dict(u.parse_qsl(p.query))
+env = {"PGHOST": p.hostname or "", "PGPORT": str(p.port or ""), "PGUSER": u.unquote(p.username or ""),
+       "PGPASSWORD": u.unquote(p.password or ""), "PGDATABASE": sys.argv[1]}
+if "sslmode" in q:
+    env["PGSSLMODE"] = q["sslmode"]
+for k, v in env.items():
+    if v:
+        print("export %s=%s" % (k, shlex.quote(v)))' "$1"
+}
+adminq() ( eval "$(pgenv postgres)"; export PGAPPNAME=clicktest; exec psql -X -q -At -v ON_ERROR_STOP=1 "$@" )
+ownerq() ( eval "$(pgenv "$DB")"; exec psql -X -q -At -v ON_ERROR_STOP=1 "$@" )
 
 DAEMON_PID=""
 cleanup() {
