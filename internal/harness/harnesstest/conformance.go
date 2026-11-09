@@ -29,6 +29,9 @@ type Case struct {
 	// Block: starts a turn and runs until Interrupt or Stop. If the adapter
 	// is interactive, each Input is answered with a Message "echo:<input>".
 	Block func(t T) harness.Adapter
+	// Optional lists event kinds a harness does not report at all (for
+	// example kimi gives no usage). Every other kind must appear in a normal run.
+	Optional []harness.Kind
 }
 
 const waitFor = 5 * time.Second
@@ -55,6 +58,20 @@ func wait(t T, s harness.Session) harness.Final {
 
 // CheckStream verifies the stream invariants of one finished session.
 func CheckStream(evs []harness.Event) error { return harness.CheckStream(evs) }
+
+func optional(ks []harness.Kind, k harness.Kind) bool {
+	// Only kinds a harness may legitimately never report can be waived: usage
+	// numbers and tool calls. Turn and message events are the contract.
+	if k != harness.KindUsage && k != harness.KindToolCall {
+		return false
+	}
+	for _, o := range ks {
+		if o == k {
+			return true
+		}
+	}
+	return false
+}
 
 // sameFinal checks that what Wait reports is what the stream recorded: a sink
 // stores the stream, so a divergence would give the caller one answer and the
@@ -110,7 +127,7 @@ func run(t T, c Case) {
 			have[e.Kind] = true
 		}
 		for _, k := range []harness.Kind{harness.KindTurn, harness.KindMessage, harness.KindToolCall, harness.KindUsage} {
-			if !have[k] {
+			if !have[k] && !optional(c.Optional, k) {
 				t.Errorf("normal run emitted no %s event", k)
 			}
 		}
