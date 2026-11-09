@@ -290,6 +290,40 @@ func TestSlowSinkDoesNotLoseTheLastReply(t *testing.T) {
 	}
 }
 
+// When the hard cap cuts stdout while the sink is still behind, the run must
+// not report done: the last reply may be missing.
+func TestCutOutputIsNeverDone(t *testing.T) {
+	a := exec2("slowdrain", nil)
+	a.DrainGrace = 50 * time.Millisecond
+	a.DrainHardCap = 300 * time.Millisecond
+	sink := &slowSink{delay: 20 * time.Millisecond}
+	s, err := a.Start(context.Background(), harness.StartSpec{SessionID: "ses_cut", Prompt: "go", Dir: t.TempDir()}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	f, _ := s.Wait(ctx)
+	if f.Outcome == harness.OutcomeDone || !strings.Contains(f.Reason, "truncated") {
+		t.Fatalf("a cut stream was reported as done: %+v", f)
+	}
+}
+
+// Only the CLI's own hook block is hook output; an answer that ends its first
+// line in the word "hook" is a real reply and keeps the assistant role.
+func TestHookLookalikeAnswerIsAReply(t *testing.T) {
+	for text, want := range map[string]bool{
+		"Stop hook\n\nran":                                true,
+		"PreToolUse hook blocked\n\nno":                   true,
+		"Wrap the fetch in a custom useEffect hook":       false,
+		"The fix belongs in the pre-commit hook\n\nsteps": false,
+	} {
+		if got := isHookResult(text); got != want {
+			t.Errorf("isHookResult(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
 // The label survives stop and interrupt too.
 func TestLabelOnStopAndInterrupt(t *testing.T) {
 	for _, interrupt := range []bool{false, true} {

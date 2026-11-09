@@ -23,7 +23,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -81,6 +80,8 @@ type Adapter struct {
 	// DrainGrace is how long, after the process has exited, the reader keeps
 	// waiting for stdout to end before closing it. Zero means 2 seconds.
 	DrainGrace time.Duration
+	// DrainHardCap bounds the drain even while the sink is busy (default 60s).
+	DrainHardCap time.Duration
 }
 
 func (a *Adapter) Name() string       { return Name }
@@ -94,7 +95,8 @@ type session struct {
 
 	interrupted atomic.Bool
 	stopped     atomic.Bool
-	replies     int // owned by the reader until done is closed
+	cut         atomic.Bool // stdout was cut after exit: the tail may be missing
+	replies     int         // owned by the reader until done is closed
 
 	done  chan struct{}
 	final harness.Final
@@ -214,7 +216,7 @@ func (s *session) handle(line []byte) {
 			if isHookResult(text) {
 				// kimi writes hook output as an assistant-shaped line; it is not
 				// a model answer, so it never satisfies "done needs a reply".
-				_ = s.em.Message(ctx, "system", text)
+				_ = s.em.Message(ctx, "hook", text)
 			} else {
 				s.replies++
 				_ = s.em.Message(ctx, "assistant", text)
@@ -278,10 +280,14 @@ func (s *session) read() {
 		if grace <= 0 {
 			grace = 2 * time.Second
 		}
+		hardCap := s.a.DrainHardCap
+		if hardCap <= 0 {
+			hardCap = 60 * time.Second
+		}
 		exitedAt := time.Now()
 		tk := time.NewTicker(20 * time.Millisecond)
 		defer tk.Stop()
-		cut := false
+		cut, truncated := false, false
 	wait:
 		for {
 			select {
@@ -292,15 +298,21 @@ func (s *session) read() {
 				if l := idle.at(); l.After(since) {
 					since = l
 				}
-				if !busy.Load() && time.Since(since) > grace || time.Since(exitedAt) > 60*time.Second {
+				idleCut := !busy.Load() && time.Since(since) > grace
+				if idleCut || time.Since(exitedAt) > hardCap {
 					_ = out.Close()
 					<-readDone
 					cut = true
+					// An idle cut (a holder keeps the pipe open, nothing is
+					// pending) loses nothing; a hard-cap cut while data or the
+					// sink is still moving may have dropped the last reply.
+					truncated = !idleCut
 					break wait
 				}
 			}
 		}
 		if cut {
+			s.cut.Store(truncated)
 			_ = s.em.Unknown(context.Background(), "stdout cut after the process exited", "")
 		}
 	}
@@ -320,6 +332,8 @@ func (s *session) settle(code int, werr error, panicked any) harness.Final {
 		return harness.Final{Outcome: harness.OutcomeInterrupted, Reason: UnverifiedNotice, ExitCode: code}
 	case s.stopped.Load():
 		return harness.Final{Outcome: harness.OutcomeStopped, Reason: UnverifiedNotice, ExitCode: code}
+	case s.cut.Load():
+		return harness.Final{Outcome: harness.OutcomeFailed, Reason: "output truncated: stdout was cut after the process exited, so the last reply may be missing", ExitCode: code}
 	case code == 0 && werr == nil && s.replies > 0:
 		return harness.Final{Outcome: harness.OutcomeDone, Reason: UnverifiedNotice, ExitCode: 0}
 	}
@@ -340,13 +354,12 @@ func (s *session) settle(code int, werr error, panicked any) harness.Final {
 	return harness.Final{Outcome: harness.OutcomeFailed, Reason: reason, ExitCode: code}
 }
 
-// isHookResult reports whether text looks like the CLI's hook-result block:
-// a first line ending in "hook" or "hook blocked".
-func isHookResult(text string) bool {
-	first, _, _ := strings.Cut(text, "\n")
-	first = strings.TrimSpace(first)
-	return strings.HasSuffix(first, " hook") || strings.HasSuffix(first, " hook blocked")
-}
+// hookResultRE is the CLI's hook-result block: "<HookEvent> hook[ blocked]"
+// on its own line, a blank line, then the body. A model answer that merely
+// ends its first line in the word "hook" does not match.
+var hookResultRE = regexp.MustCompile(`^[A-Za-z]+ hook( blocked)?\n\n`)
+
+func isHookResult(text string) bool { return hookResultRE.MatchString(text) }
 
 func (a *Adapter) redactor() harness.Redactor {
 	if a.Redact != nil {
