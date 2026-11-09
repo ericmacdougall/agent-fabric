@@ -101,7 +101,10 @@ func TestHeldLeaseUntouched(t *testing.T) {
 	startAttempt(t, st, ctx, "m_hl_b", "r_hl_b")
 	holdIt(t, st, ctx, "m_hl_a")
 	time.Sleep(250 * time.Millisecond)
-	before := rowCounts(t, st, ctx)
+	var before string
+	if err := st.pool.QueryRow(ctx, `SELECT a::text FROM attempts a WHERE id = 'r_hl_a'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
 	exp, err := st.ExpireLeases(ctx, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -113,7 +116,10 @@ func TestHeldLeaseUntouched(t *testing.T) {
 	if err := st.pool.QueryRow(ctx, `SELECT state FROM attempts WHERE id = 'r_hl_a'`).Scan(&state); err != nil || state == string(domain.AttemptUnknown) {
 		t.Fatalf("held mission's attempt state %q (%v): the sweep touched it", state, err)
 	}
-	_ = before
+	var after string
+	if err := st.pool.QueryRow(ctx, `SELECT a::text FROM attempts a WHERE id = 'r_hl_a'`).Scan(&after); err != nil || after != before {
+		t.Fatalf("held mission's attempt row changed:\nbefore %s\nafter  %s (%v)", before, after, err)
+	}
 }
 
 // Two schedulers on one database: each outbox row is applied exactly once.

@@ -88,7 +88,7 @@ type ApplyFunc func(ctx context.Context, tx pgx.Tx, r OutboxRow) error
 func pageFrom(ctx context.Context, q querier, after, upto int64, mission domain.MissionID, limit int) ([]OutboxRow, error) {
 	rows, err := q.Query(ctx, `SELECT o.id, o.mission_id, o.seq, COALESCE(e.kind, ''), COALESCE(e.actor, ''), COALESCE(e.at, o.at), COALESCE(e.payload::text, '')
 		FROM outbox o LEFT JOIN events e ON e.mission_id = o.mission_id AND e.seq = o.seq
-		WHERE o.id > $1 AND ($2 < 0 OR o.id <= $2) AND ($3 = '' OR o.mission_id = $3)
+		WHERE o.id > $1 AND ($2::bigint < 0 OR o.id <= $2::bigint) AND ($3 = '' OR o.mission_id = $3)
 		  AND o.xid < pg_snapshot_xmin(pg_current_snapshot())
 		ORDER BY o.id LIMIT $4`, after, upto, string(mission), limit)
 	if err != nil {
@@ -288,11 +288,14 @@ func (s *Store) drainOne(ctx context.Context, consumer string, m domain.MissionI
 // HoldMission records a hold found outside the consumer (replay, a start
 // that finds an unreadable log) at the current scheduler cursor, so rows
 // already applied are never redelivered. It is idempotent.
+// The cursor row is read FOR SHARE so the insert serialises with a
+// ConsumeOutbox transaction that holds the row FOR UPDATE: a hold can never be
+// written at a cursor that transaction is about to move past (review M3).
 func (s *Store) HoldMission(ctx context.Context, q interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 }, m domain.MissionID) error {
 	_, err := q.Exec(ctx, `INSERT INTO outbox_cursors (consumer, last_id)
-		VALUES ($1, COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer = 'sched'), 0))
+		VALUES ($1, COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer = 'sched' FOR SHARE), 0))
 		ON CONFLICT (consumer) DO NOTHING`, holdConsumer(m))
 	return err
 }

@@ -645,7 +645,9 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		// redelivered. The abandon comes first, so a crash between the two
 		// cannot leave a live attempt on a held mission (the next tick
 		// starts, fails and abandons again).
-		if envelope.Undecodable(err) {
+		// Only when the abandon succeeded: a hold over a LEASED attempt would
+		// exempt it from lease expiry and reconcile and keep its slot (review M2).
+		if aerr == nil && envelope.Undecodable(err) {
 			if herr := s.st.HoldMission(ctx, s.st.Pool(), mission); herr != nil {
 				fmt.Fprintln(os.Stderr, "fabd: hold:", herr)
 			} else {
