@@ -44,6 +44,8 @@ func main() {
 		err = liveTestMain(os.Args[2:])
 	case "status":
 		err = statusMain(os.Args[2:])
+	case "streams":
+		err = streamsMain(os.Args[2:])
 	case "asks":
 		err = asksMain(os.Args[2:])
 	case "ask":
@@ -125,7 +127,8 @@ func usage() {
   live-test --mission M --commit C --generation G --host H --target URL --receipt R --key K
                                        record a live_test receipt for the deployed commit (AC-6)
   done --mission M --key K             close a mission; refused without a live_test receipt (AC-6)
-  status                               missions, slots, open asks
+  status                               missions, slots, held streams, open asks
+  streams held [--scan] [--limit N]    list missions held on an event this build cannot decode (read-only)
   metrics [--timeout D]                health metrics (Prometheus text format, read-only)
   serve-metrics [--listen 127.0.0.1:9464] [--allow-remote] [--timeout D]   GET /metrics; loopback only by default
   tui [--interval 2s] [--timeout 1s] [--no-color] [--keys on|off]   read-only terminal view (fab tui -h: keys)
@@ -319,6 +322,11 @@ func statusMain(args []string) error {
 			return err
 		}
 		fmt.Printf("slots: %d of %d held\n", held, cap)
+		heldStreams, err := st.HeldCount(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("held streams: %d\n", heldStreams)
 		if err := printMissions(ctx, st); err != nil {
 			return err
 		}

@@ -1,0 +1,80 @@
+{
+ "cases": [
+  {
+   "actor": "chat",
+   "at_micros": 1762646400123456,
+   "canonical": "{\"at\":\"2025-11-09T00:00:00.123456Z\",\"event_id\":\"evt_01K9JYK73V4M316NPA1BA702ZV\",\"kind\":\"MISSION_ADMITTED\",\"mission\":\"m_demo1\",\"payload\":{\"generation\":1,\"kind\":\"MISSION_ADMITTED\",\"mission\":\"m_demo1\",\"revision\":1,\"seq\":1},\"principal\":{\"issuer\":\"legacy-unverified\",\"subject\":\"chat\"},\"schema_version\":2,\"seq\":1,\"tenant_id\":\"t_personal\"}",
+   "event_id": "evt_01K9JYK73V4M316NPA1BA702ZV",
+   "kind": "MISSION_ADMITTED",
+   "mission": "m_demo1",
+   "name": "admitted",
+   "payload": "{\"generation\":1,\"kind\":\"MISSION_ADMITTED\",\"mission\":\"m_demo1\",\"revision\":1,\"seq\":1}",
+   "seq": 1
+  },
+  {
+   "actor": "fabd",
+   "at_micros": 1762646400000500,
+   "canonical": "{\"at\":\"2025-11-09T00:00:00.000500Z\",\"event_id\":\"evt_01K9JYK700PKD4TVW1CZRRPKK9\",\"kind\":\"ATTEMPT_STARTED\",\"mission\":\"m_demo1\",\"payload\":{\"attempt\":\"r_demo1_1\",\"fence\":1,\"host\":\"h_demo\",\"kind\":\"ATTEMPT_STARTED\",\"mission\":\"m_demo1\",\"seq\":2},\"principal\":{\"issuer\":\"legacy-unverified\",\"subject\":\"fabd\"},\"schema_version\":2,\"seq\":2,\"tenant_id\":\"t_personal\"}",
+   "event_id": "evt_01K9JYK700PKD4TVW1CZRRPKK9",
+   "kind": "ATTEMPT_STARTED",
+   "mission": "m_demo1",
+   "name": "fraction-500",
+   "payload": "{\"attempt\":\"r_demo1_1\",\"fence\":1,\"host\":\"h_demo\",\"kind\":\"ATTEMPT_STARTED\",\"mission\":\"m_demo1\",\"seq\":2}",
+   "seq": 2
+  },
+  {
+   "actor": "native-runner",
+   "at_micros": 1762646400000999,
+   "canonical": "{\"at\":\"2025-11-09T00:00:00.000999Z\",\"event_id\":\"evt_01K9JYK70072AX5FHHYD3S8EAC\",\"kind\":\"ATTEMPT_FINISHED\",\"mission\":\"m_demo1\",\"payload\":{\"attempt\":\"r_demo1_1\",\"fence\":1,\"kind\":\"ATTEMPT_FINISHED\",\"mission\":\"m_demo1\",\"outcome\":\"checkpoint\",\"seq\":3},\"principal\":{\"issuer\":\"legacy-unverified\",\"subject\":\"native-runner\"},\"schema_version\":2,\"seq\":3,\"tenant_id\":\"t_personal\"}",
+   "event_id": "evt_01K9JYK70072AX5FHHYD3S8EAC",
+   "kind": "ATTEMPT_FINISHED",
+   "mission": "m_demo1",
+   "name": "fraction-999",
+   "payload": "{\"attempt\":\"r_demo1_1\",\"fence\":1,\"kind\":\"ATTEMPT_FINISHED\",\"mission\":\"m_demo1\",\"outcome\":\"checkpoint\",\"seq\":3}",
+   "seq": 3
+  },
+  {
+   "actor": "op:alice",
+   "at_micros": 1762646401000000,
+   "canonical": "{\"at\":\"2025-11-09T00:00:01.000000Z\",\"event_id\":\"evt_01K9JYK7Z8G07ZC155SW6JB8GC\",\"kind\":\"MISSION_RELEASED\",\"mission\":\"m_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"payload\":{\"kind\":\"MISSION_RELEASED\",\"mission\":\"m_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"seq\":7},\"principal\":{\"issuer\":\"legacy-unverified\",\"subject\":\"op:alice\"},\"schema_version\":2,\"seq\":7,\"tenant_id\":\"t_personal\"}",
+   "event_id": "evt_01K9JYK7Z8G07ZC155SW6JB8GC",
+   "kind": "MISSION_RELEASED",
+   "mission": "m_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "name": "max-mission",
+   "payload": "{\"kind\":\"MISSION_RELEASED\",\"mission\":\"m_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"seq\":7}",
+   "seq": 7
+  },
+  {
+   "actor": "fabd",
+   "at_micros": 1762646402654321,
+   "canonical": "{\"at\":\"2025-11-09T00:00:02.654321Z\",\"event_id\":\"evt_01K9JYK9JY3M7B54PZJM29KE5Y\",\"kind\":\"DELIVERED\",\"mission\":\"m_demo1\",\"payload\":{\"kind\":\"DELIVERED\",\"mission\":\"m_demo1\",\"seq\":4294967296},\"principal\":{\"issuer\":\"legacy-unverified\",\"subject\":\"fabd\"},\"schema_version\":2,\"seq\":4294967296,\"tenant_id\":\"t_personal\"}",
+   "event_id": "evt_01K9JYK9JY3M7B54PZJM29KE5Y",
+   "kind": "DELIVERED",
+   "mission": "m_demo1",
+   "name": "seq-large",
+   "payload": "{\"kind\":\"DELIVERED\",\"mission\":\"m_demo1\",\"seq\":4294967296}",
+   "seq": 4294967296
+  }
+ ],
+ "refused": [
+  {
+   "at_micros": 1762646400000000,
+   "mission": "m_caf\u00e9",
+   "name": "non-ascii-mission",
+   "seq": 1
+  },
+  {
+   "at_micros": 1762646400000000,
+   "mission": "",
+   "name": "empty-mission",
+   "seq": 1
+  },
+  {
+   "at_micros": 1762646400000000,
+   "mission": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm",
+   "name": "long-mission",
+   "seq": 1
+  }
+ ],
+ "version": 1
+}

@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"fabric/internal/domain"
+	"fabric/internal/envelope"
 	"fabric/internal/reducer"
 )
 
@@ -466,6 +467,19 @@ func (s *Store) Execute(ctx context.Context, actor domain.ActorID, commandID dom
 		return Response{}, err
 	}
 
+	// F1a: a held mission (a stored event this build cannot decode) is not
+	// written to. The refusal is a plain sentinel and nothing is stored, so
+	// the same command id succeeds once a decoder that reads the row is
+	// deployed. The abandon of an attempt is exempt (a start that finds the
+	// hold must not leave a live attempt); the exemption bypasses only this
+	// check, every other check on the command still runs. The stored-command
+	// replay lookup above ran first, so a stored command still replays.
+	if held, err := isHeld(ctx, tx, cmd.Mission); err != nil {
+		return Response{}, err
+	} else if held && !(cmd.Kind == domain.CmdFinishAttempt && cmd.Outcome == "abandoned") {
+		return Response{}, fmt.Errorf("%w: mission %s", domain.ErrStreamHeld, cmd.Mission)
+	}
+
 	// goodqa#15324 S1b, after the lock and the replay lookup: row identity,
 	// receipt-sha dedupe and the cap, all against the locked state.
 	if isLadder {
@@ -751,6 +765,7 @@ func (s *Store) ExpireLeasesOnHost(ctx context.Context, host domain.HostID, limi
 func (s *Store) expireLeases(ctx context.Context, host domain.HostID, limit int) ([]ExpiredLease, error) {
 	rows, err := s.pool.Query(ctx, `SELECT id, mission_id, fence, (extract(epoch FROM lease_until) * 1000)::bigint FROM attempts
 		WHERE state IN ('LEASED', 'PREPARING', 'RUNNING') AND lease_until < now() AND ($2::text = '' OR host = $2::text)
+		AND NOT EXISTS (SELECT 1 FROM outbox_cursors hc WHERE hc.consumer = 'sched.hold.' || attempts.mission_id)
 		ORDER BY lease_until LIMIT $1`, limit, string(host))
 	if err != nil {
 		return nil, err
@@ -806,28 +821,44 @@ func (s *Store) Mission(ctx context.Context, id domain.MissionID) (domain.Missio
 
 // Events returns a mission's log in sequence order.
 func (s *Store) Events(ctx context.Context, id domain.MissionID) ([]domain.Event, error) {
-	return readEvents(ctx, s.pool, id)
+	views, err := readViews(ctx, s.pool, id)
+	if err != nil {
+		return nil, err
+	}
+	return viewEvents(views), nil
 }
 
-func readEvents(ctx context.Context, q interface {
+// viewEvents is the v1 events inside a list of views.
+func viewEvents(views []envelope.View) []domain.Event {
+	out := make([]domain.Event, 0, len(views))
+	for _, v := range views {
+		out = append(out, v.Event)
+	}
+	return out
+}
+
+// readViews reads a mission's log through the v2 reader: every event is
+// upcast from its events row (envelope.Upcast, F1a), so a row this build
+// cannot decode is an error that names the failing seq, never a skipped row.
+func readViews(ctx context.Context, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
-}, id domain.MissionID) ([]domain.Event, error) {
-	rows, err := q.Query(ctx, "SELECT payload FROM events WHERE mission_id = $1 ORDER BY seq", string(id))
+}, id domain.MissionID) ([]envelope.View, error) {
+	rows, err := q.Query(ctx, "SELECT seq, kind, actor, at, payload FROM events WHERE mission_id = $1 ORDER BY seq", string(id))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []domain.Event
+	var out []envelope.View
 	for rows.Next() {
-		var payload []byte
-		if err := rows.Scan(&payload); err != nil {
+		r := envelope.Row{Mission: string(id)}
+		if err := rows.Scan(&r.Seq, &r.Kind, &r.Actor, &r.At, &r.Payload); err != nil {
 			return nil, err
 		}
-		var e domain.Event
-		if err := json.Unmarshal(payload, &e); err != nil {
-			return nil, err
+		v, err := envelope.Upcast(r)
+		if err != nil {
+			return nil, fmt.Errorf("mission %s seq %d: %w", id, r.Seq, err)
 		}
-		out = append(out, e)
+		out = append(out, v)
 	}
 	return out, rows.Err()
 }
@@ -843,10 +874,11 @@ func (s *Store) VerifiedSnapshot(ctx context.Context, id domain.MissionID) (doma
 		return domain.Mission{}, nil, err
 	}
 	defer tx.Rollback(context.Background()) //nolint:errcheck // read-only
-	events, err := readEvents(ctx, tx, id)
+	views, err := readViews(ctx, tx, id)
 	if err != nil {
 		return domain.Mission{}, nil, err
 	}
+	events := viewEvents(views)
 	if s.hooks.afterEventsRead != nil {
 		s.hooks.afterEventsRead()
 	}
@@ -862,7 +894,7 @@ func (s *Store) VerifiedSnapshot(ctx context.Context, id domain.MissionID) (doma
 	if err := json.Unmarshal(stateJSON, &snap); err != nil {
 		return domain.Mission{}, nil, fmt.Errorf("mission %s snapshot: %w", id, err)
 	}
-	rebuilt, err := reducer.Replay(id, events)
+	rebuilt, err := reducer.Replay(id, views)
 	if err != nil {
 		// Never serve the known prefix as current state (Kimi compatibility analysis).
 		return domain.Mission{}, nil, fmt.Errorf("mission %s: %w", id, err)
@@ -885,34 +917,34 @@ type OutboxRow struct {
 	Mission domain.MissionID
 	Seq     int64
 	Event   domain.Event
+	// View is the v2 envelope of the same event (F1a).
+	View envelope.View
+	// Err is why the row could not be decoded; the consumer holds the mission.
+	Err error
 }
 
-// OutboxPage returns up to limit rows after the consumer's cursor.
+// OutboxPage returns up to limit rows after the consumer's cursor. A row
+// this build cannot decode is an error here (the poster-style consumers stop
+// on it); the scheduler uses ConsumeOutbox, which holds the mission instead.
 func (s *Store) OutboxPage(ctx context.Context, consumer string, limit int) ([]OutboxRow, error) {
 	// Rows whose transaction is still in progress (or newer than one that is)
 	// are not visible yet, so an id that commits late can never be skipped
 	// (review H5 / RV-3).
-	rows, err := s.pool.Query(ctx, `SELECT o.id, o.mission_id, o.seq, o.payload FROM outbox o
-		WHERE o.id > COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer = $1), 0)
-		  AND o.xid < pg_snapshot_xmin(pg_current_snapshot())
-		ORDER BY o.id LIMIT $2`, consumer, limit)
+	var after int64
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE((SELECT last_id FROM outbox_cursors WHERE consumer = $1), 0)`, consumer).Scan(&after)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []OutboxRow
-	for rows.Next() {
-		var r OutboxRow
-		var payload []byte
-		if err := rows.Scan(&r.ID, &r.Mission, &r.Seq, &payload); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(payload, &r.Event); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
+	rows, err := pageFrom(ctx, s.pool, after, -1, "", limit)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	for _, r := range rows {
+		if r.Err != nil {
+			return nil, r.Err
+		}
+	}
+	return rows, nil
 }
 
 // AckOutbox advances the consumer's cursor; it never moves backwards, so a

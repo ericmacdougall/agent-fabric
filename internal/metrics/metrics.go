@@ -26,6 +26,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"fabric/internal/domain"
 )
 
 // DefaultTimeout bounds one collection: statement and lock waits both.
@@ -250,6 +252,17 @@ func collect(ctx context.Context, tx pgx.Tx, o Options) (*Snapshot, error) {
 	var oldestAsk int64
 	c.row(`SELECT COALESCE(floor(EXTRACT(EPOCH FROM now() - min(created_at)))::bigint, 0) FROM asks WHERE state = 'open'`, &oldestAsk)
 	add(gauge("fabric_asks_open_oldest_age_seconds", "Age of the oldest open ask (0: none).", float64(oldestAsk)))
+
+	// F1a: distinct held missions: hold rows plus any mission whose log holds
+	// a kind this build does not know. No payload is decoded per scrape.
+	known := make([]string, 0)
+	for _, k := range domain.KnownEventKinds() {
+		known = append(known, "'"+k+"'")
+	}
+	var heldStreams int
+	c.row(`SELECT count(*) FROM (SELECT substr(consumer, 12) AS m FROM outbox_cursors WHERE consumer LIKE 'sched.hold.%'
+		UNION SELECT mission_id FROM events WHERE kind NOT IN (`+strings.Join(known, ",")+`)) h`, &heldStreams)
+	add(gauge("fabric_held_streams", "Missions held because a stored event cannot be decoded by this build (distinct missions).", float64(heldStreams)))
 
 	if c.err != nil {
 		return nil, c.err

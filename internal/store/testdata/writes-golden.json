@@ -1,0 +1,8 @@
+{
+  "attempts": "2:987705452e88eef546f854bdc47dcd398d9aedc81a856eb8786afccd8711c928",
+  "commands": "20:b7d771e089b0053fedfc98a6bac94e5b1eed2d826e882f2846a4411c619fdb40",
+  "events": "21:f665fe556a035e71f7b15b9dc73d86f5a84a00f267fcc807a9e379921c101881",
+  "outbox": "21:3da49583fbca2455e52b1317a7450445690ccd0a11adab8dccb2709e96da3795",
+  "reservations": "0:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "schema": "35:migrations/0038_attempt_worktree.sql"
+}

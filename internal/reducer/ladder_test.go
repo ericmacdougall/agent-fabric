@@ -123,7 +123,7 @@ func TestLadderKindsAreInTheRegistry(t *testing.T) {
 			t.Errorf("%s not known", k)
 		}
 		// Replay of a log holding one must not stop at it.
-		m, err := Replay(ladderID, []domain.Event{{Kind: k, Mission: ladderID, Seq: 1, Ladder: &domain.LadderRecord{Step: "x"}}})
+		m, err := Replay(ladderID, views([]domain.Event{{Kind: k, Mission: ladderID, Seq: 1, Ladder: &domain.LadderRecord{Step: "x"}}}))
 		if err != nil || m.Seq != 1 {
 			t.Errorf("%s: replay (%d, %v)", k, m.Seq, err)
 		}
@@ -167,7 +167,7 @@ func TestLadderReplayEqualsLive(t *testing.T) {
 	if len(log) < 100 {
 		t.Fatalf("seed %d: only %d valid records; the generator is vacuous", seed, len(log))
 	}
-	rebuilt, err := Replay(ladderID, log)
+	rebuilt, err := Replay(ladderID, views(log))
 	if err != nil {
 		t.Fatalf("seed %d: replay: %v", seed, err)
 	}

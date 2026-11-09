@@ -12,7 +12,7 @@ import (
 // carry one.
 func TestStartAttemptWorktreeRule(t *testing.T) {
 	admitted := func(id domain.MissionID) domain.Mission {
-		m, err := Replay(id, []domain.Event{{Kind: domain.EvMissionAdmitted, Mission: id, Seq: 1}})
+		m, err := Replay(id, views([]domain.Event{{Kind: domain.EvMissionAdmitted, Mission: id, Seq: 1}}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -53,7 +53,7 @@ func TestReplayPre0038NativeStartWithoutWorktree(t *testing.T) {
 			Path: domain.ProviderAnthropicAPI, LockPath: "/s/native-locks/r_old.lock", AttemptTo: domain.AttemptLeased},
 		{Kind: domain.EvAttemptAcked, Mission: "m_old", Seq: 3, Attempt: "r_old", Fence: 1, AttemptTo: domain.AttemptRunning},
 	}
-	m, err := Replay("m_old", log)
+	m, err := Replay("m_old", views(log))
 	if err != nil {
 		t.Fatalf("replay of a pre-0038 native start: %v", err)
 	}
