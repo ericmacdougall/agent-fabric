@@ -34,7 +34,8 @@ type Row struct {
 	Seq     int64
 	Kind    string // events.kind; "" when the event row is missing
 	At      time.Time
-	Held    bool // the mission's stream is held at or before this row
+	Held    bool   // the mission's stream is held at or before this row
+	Ticket  string // missions.ticket as stored (free text); only a "name#N" reference leaves this package
 }
 
 // Event is one mc.event/1 line.
@@ -52,7 +53,8 @@ type Event struct {
 
 // Subject names the stream: the initiative is the fabric mission.
 type Subject struct {
-	Initiative string `json:"initiative"`
+	Initiative string `json:"initiative,omitempty"`
+	Ticket     string `json:"ticket,omitempty"`
 }
 
 var idShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$`)
@@ -89,7 +91,7 @@ func MapRow(r Row) Event {
 		ID:      Source + ":" + itoa(r.ID),
 		TS:      r.At.UTC().Format("2006-01-02T15:04:05.000Z"),
 		Source:  Source,
-		Subject: Subject{Initiative: mission},
+		Subject: Subject{Initiative: mission, Ticket: ticketRef(r.Ticket)},
 	}
 	k := domain.EventKind(r.Kind)
 	prefix := "mission " + mission + ": "
@@ -128,3 +130,27 @@ func clip(s string, n int) string {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+var ticketShape = regexp.MustCompile(`[a-z][a-z0-9_-]{0,30}#[0-9]{1,9}`)
+
+// ticketRef extracts the first "project#N" reference (lower-cased, e.g.
+// "goodqa#15586") from a mission's ticket text, the join key Mission Control
+// derives initiatives from. Nothing else of the text is exported; no match, no field.
+func ticketRef(s string) string {
+	return ticketShape.FindString(strings.ToLower(s))
+}
+
+// MapLag is the system event that tells a file-drop reader (which never sees
+// stderr) that committed rows are held back: one per lag episode, keyed by the
+// first held outbox id, so replays dedupe on it. The next normal event clears it.
+func MapLag(n, firstHeldID int64, at time.Time) Event {
+	return Event{
+		Schema:   Schema,
+		ID:       Source + ":lag:" + itoa(firstHeldID),
+		TS:       at.UTC().Format("2006-01-02T15:04:05.000Z"),
+		Kind:     "system",
+		Source:   Source,
+		Summary:  "fabric export lagging: " + itoa(n) + " rows held back",
+		Severity: "warn",
+	}
+}

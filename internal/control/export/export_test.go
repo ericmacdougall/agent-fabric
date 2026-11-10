@@ -144,6 +144,26 @@ func rawEvents(t *testing.T, st *store.Store, ctx context.Context, mission strin
 	}
 }
 
+func lagEvents(evs []map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, e := range evs {
+		if strings.HasPrefix(e["id"].(string), "fabric:lag:") {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func withoutLag(evs []map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, e := range evs {
+		if !strings.HasPrefix(e["id"].(string), "fabric:lag:") {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func idsOf(evs []map[string]any) []string {
 	var out []string
 	for _, e := range evs {
@@ -425,8 +445,8 @@ func TestNoSkipEarlierOpenTx(t *testing.T) {
 	rawEvent(t, ctx, a, "m_x0", 1000, "EVIDENCE_RECORDED", "{}")
 	rawEvents(t, st, ctx, "m_x1", [2]string{"EVIDENCE_RECORDED", "{}"}) // B: higher id, committed
 	evs, cur2, _ := run(t, ctx, c, cur)
-	if len(evs) != 0 {
-		t.Fatalf("a row behind an open earlier transaction was exported: %v", idsOf(evs))
+	if live := withoutLag(evs); len(live) != 0 {
+		t.Fatalf("a row behind an open earlier transaction was exported: %v", idsOf(live))
 	}
 	if err := a.Commit(ctx); err != nil {
 		t.Fatal(err)
@@ -461,7 +481,7 @@ func TestNoSkipUnderConcurrentWriters(t *testing.T) {
 			return
 		}
 		evs, next := parseOutput(t, buf.Bytes())
-		for _, id := range idsOf(evs) {
+		for _, id := range idsOf(withoutLag(evs)) {
 			if seen[id] {
 				t.Errorf("%s repeated", id)
 			}
@@ -595,14 +615,14 @@ func TestLaggingReported(t *testing.T) {
 	}
 	seed(t, st, ctx, "m", 2)
 	evs, cur2, res := run(t, ctx, c, cur)
-	if len(evs) != 0 || cur2 != cur || res.Lagging < 2 {
+	if lag := lagEvents(evs); len(withoutLag(evs)) != 0 || len(lag) != 1 || cur2 != cur || res.Lagging < 2 || lag[0]["severity"] != "warn" || lag[0]["kind"] != "system" || lag[0]["summary"] != fmt.Sprintf("fabric export lagging: %d rows held back", res.Lagging) || !strings.HasPrefix(lag[0]["id"].(string), "fabric:lag:") {
 		t.Fatalf("events=%d cursor same=%v lagging=%d", len(evs), cur2 == cur, res.Lagging)
 	}
 	if _, err := blocker.Exec(ctx, `ROLLBACK`); err != nil {
 		t.Fatal(err)
 	}
 	evs, _, res = run(t, ctx, c, cur)
-	if len(evs) == 0 || res.Lagging != 0 {
+	if len(evs) == 0 || res.Lagging != 0 || len(lagEvents(evs)) != 0 {
 		t.Fatalf("after the blocker ended: events=%d lagging=%d", len(evs), res.Lagging)
 	}
 }
@@ -630,6 +650,28 @@ func TestHistoricOnBackfillOnly(t *testing.T) {
 		if _, ok := e["historic"]; ok {
 			t.Fatalf("live event marked historic: %v", e)
 		}
+	}
+}
+
+// Mission Control's join key: subject.ticket is the "project#N" reference of the
+// mission's ticket and nothing else of the ticket text; no reference, no field.
+func TestSubjectTicket(t *testing.T) {
+	for in, want := range map[string]string{
+		"GoodQA goodqa#14791":         "goodqa#14791",
+		"goodqa#15586 and more text":  "goodqa#15586",
+		"GoodQA #5":                   "",
+		"no reference " + secret:      "",
+		"x\x1b[31m goodqa#7\n":        "goodqa#7",
+		"goodqa#12345678901234567890": "goodqa#123456789",
+	} {
+		if got := ticketRef(in); got != want {
+			t.Errorf("ticketRef(%q) = %q, want %q", in, got, want)
+		}
+	}
+	ev := MapRow(Row{ID: 1, Mission: "m_t", Seq: 1, Kind: "MISSION_ADMITTED", At: at, Ticket: "GoodQA goodqa#14791 " + secret})
+	line, _ := json.Marshal(ev)
+	if ev.Subject.Ticket != "goodqa#14791" || ev.Subject.Initiative != "m_t" || strings.Contains(string(line), secret) {
+		t.Fatalf("%s", line)
 	}
 }
 

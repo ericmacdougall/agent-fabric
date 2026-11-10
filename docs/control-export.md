@@ -13,6 +13,10 @@ One JSON object per line, then exactly one `{"cursor":"OPAQUE"}` line.
 - `ts` is the event time (UTC, milliseconds, `Z`).
 - `subject.initiative` is the stream: the fabric mission id. (Assumption: "stream"
   means mission, as in `fab streams held`.)
+- `subject.ticket` is the mission's ticket reference as `project#N` (for example
+  `goodqa#15586`), lower-cased, taken from `missions.ticket`; no other ticket text is
+  exported, and the field is absent when the mission has no such reference. It is
+  Mission Control's join key (initiatives there are keyed by ticket).
 - `kind` is `owner` for mission, attempt, candidate and effect events, `release` for
   DELIVERED, `deploy` for LIVE_VERIFIED, and `system` for wake, ladder and dispatch
   notices, for a held stream, and for any kind this build does not know.
@@ -35,7 +39,10 @@ One JSON object per line, then exactly one `{"cursor":"OPAQUE"}` line.
 - Lagging: a committed row is held back while any older transaction in the cluster is
   open (this is the same visibility rule the scheduler uses). "No event lines" therefore
   does not always mean caught up. When rows are held back, stderr says `LAGGING: N ...`
-  and the exit code stays 0; the cursor does not move past them, so a later call returns
+  and the exit code stays 0. Because a file-drop reader never sees stderr, the stream
+  also carries one event `fabric:lag:<first held outbox id>` (kind `system`, severity
+  `warn`, summary `fabric export lagging: N rows held back`), stable per lag episode; the
+  next normal event clears it. The cursor does not move past them, so a later call returns
   them in order.
 - A held-stream placeholder (`stream held, event withheld`) is exported once under its
   `fabric:<id>`. If the hold is later released, the same id is not re-exported with the
