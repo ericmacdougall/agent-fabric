@@ -160,7 +160,7 @@ func runFixtureFailureChild(t *testing.T, phase string) {
 func controlChildEnv(phase, root string) []string {
 	keys := map[string]string{ChildDSNEnv: DSN, failureChildEnv: phase, failureRootEnv: root}
 	env := make([]string, 0, len(os.Environ())+len(keys))
-	for _, entry := range os.Environ() {
+	for _, entry := range connref.ChildEnvironment(os.Environ()) {
 		name, _, _ := strings.Cut(entry, "=")
 		if _, replaced := keys[name]; !replaced {
 			env = append(env, entry)

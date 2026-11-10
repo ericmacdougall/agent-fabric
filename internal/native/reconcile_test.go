@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"fabric/internal/connref"
 	"fabric/internal/domain"
 	"fabric/internal/hostid"
 	"fabric/internal/native"
@@ -32,7 +33,7 @@ import (
 func lockChild(t *testing.T, path string, mode os.FileMode, exit bool) (stop func()) {
 	t.Helper()
 	c := exec.Command(os.Args[0], "-test.run=^TestNativeLockChildHelper$", "-test.count=1")
-	c.Env = append(os.Environ(), "FABRIC_LOCK_CHILD_PATH="+path, "FABRIC_LOCK_CHILD_MODE="+mode.String())
+	c.Env = append(connref.ChildEnvironment(os.Environ()), "FABRIC_LOCK_CHILD_PATH="+path, "FABRIC_LOCK_CHILD_MODE="+mode.String())
 	if exit {
 		c.Env = append(c.Env, "FABRIC_LOCK_CHILD_EXIT=1")
 	}
@@ -251,7 +252,7 @@ func TestNativeKilledQuarantined(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := exec.Command(os.Args[0], "-test.run=^TestNativeChildHelper$", "-test.count=1")
-	child.Env = append(os.Environ(), storetest.ChildDSNEnv+"="+storetest.DSN, "FABRIC_NATIVE_CHILD_GRANT="+grant,
+	child.Env = append(connref.ChildEnvironment(os.Environ()), storetest.ChildDSNEnv+"="+storetest.DSN, "FABRIC_NATIVE_CHILD_GRANT="+grant,
 		"FABRIC_NATIVE_CHILD_LEASE="+lease.String())
 	if err := child.Start(); err != nil {
 		t.Fatal(err)

@@ -121,7 +121,7 @@ func takeReviewDSN() (string, *connectionRef, error) {
 	dsn, credential, err := connectionDSN("FABRIC_REVIEW_DSN", connref.Review, false)
 	// Remove values and reference metadata before any tool is constructed,
 	// including on a resolution error. Only Options retains the owned Ref.
-	for _, name := range []string{"FABRIC_REVIEW_DSN", "FABRIC_REVIEW_DSN_FILE", "FABRIC_REVIEW_DSN_FILE_KEY"} {
+	for _, name := range []string{"FABRIC_REVIEW_DSN", "FABRIC_REVIEW_DSN_FILE", "FABRIC_REVIEW_DSN_FILE_KEY", "FABRIC_REVIEW_DSN_PASSWORD_FILE", "FABRIC_REVIEW_DSN_DATABASE"} {
 		if unsetErr := os.Unsetenv(name); unsetErr != nil && err == nil {
 			err = errors.New("cannot clear review connection environment")
 		}

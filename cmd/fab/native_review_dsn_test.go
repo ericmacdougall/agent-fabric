@@ -7,7 +7,7 @@ import (
 
 func TestTakeReviewDSNScrubsProcessEnvironment(t *testing.T) {
 	const dsn = "postgres://app:secret@127.0.0.1/review"
-	for _, name := range []string{"FABRIC_REVIEW_DSN_FILE", "FABRIC_REVIEW_DSN_PASSWORD_FILE", "FABRIC_REVIEW_DSN_FILE_KEY"} {
+	for _, name := range []string{"FABRIC_REVIEW_DSN_FILE", "FABRIC_REVIEW_DSN_PASSWORD_FILE", "FABRIC_REVIEW_DSN_FILE_KEY", "FABRIC_REVIEW_DSN_DATABASE"} {
 		unsetConnectionEnv(t, name)
 	}
 	t.Setenv("FABRIC_REVIEW_DSN", dsn)

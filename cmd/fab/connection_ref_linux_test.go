@@ -28,6 +28,7 @@ func TestAppConnectionUsesProtectedFile(t *testing.T) {
 	unsetConnectionEnv(t, "FABRIC_DSN")
 	unsetConnectionEnv(t, "FABRIC_DSN_PASSWORD_FILE")
 	unsetConnectionEnv(t, "FABRIC_DSN_FILE_KEY")
+	unsetConnectionEnv(t, "FABRIC_DSN_DATABASE")
 	t.Setenv("FABRIC_DSN_FILE", syntheticConnectionFile(t, u.String()))
 	dsn, credential, err := appConnection()
 	if err != nil {
@@ -49,6 +50,7 @@ func TestReviewFileReferenceIsOwnedAndRemovedFromEnvironment(t *testing.T) {
 	unsetConnectionEnv(t, "FABRIC_REVIEW_DSN")
 	unsetConnectionEnv(t, "FABRIC_REVIEW_DSN_PASSWORD_FILE")
 	unsetConnectionEnv(t, "FABRIC_REVIEW_DSN_FILE_KEY")
+	unsetConnectionEnv(t, "FABRIC_REVIEW_DSN_DATABASE")
 	t.Setenv("FABRIC_REVIEW_DSN_FILE", syntheticConnectionFile(t, "FABRIC_REVIEW_DSN="+u.String()+"\n"))
 	t.Setenv("FABRIC_REVIEW_DSN_FILE_KEY", "FABRIC_REVIEW_DSN")
 	dsn, credential, err := takeReviewDSN()
@@ -56,7 +58,7 @@ func TestReviewFileReferenceIsOwnedAndRemovedFromEnvironment(t *testing.T) {
 		t.Fatal("review file reference refused")
 	}
 	defer credential.Close()
-	for _, name := range []string{"FABRIC_REVIEW_DSN", "FABRIC_REVIEW_DSN_FILE", "FABRIC_REVIEW_DSN_FILE_KEY"} {
+	for _, name := range []string{"FABRIC_REVIEW_DSN", "FABRIC_REVIEW_DSN_FILE", "FABRIC_REVIEW_DSN_FILE_KEY", "FABRIC_REVIEW_DSN_PASSWORD_FILE", "FABRIC_REVIEW_DSN_DATABASE"} {
 		if _, ok := os.LookupEnv(name); ok {
 			t.Fatal("review source metadata survived in worker parent")
 		}
@@ -76,10 +78,12 @@ func TestWorkerPortsResolveCustomRunnerReference(t *testing.T) {
 	unsetConnectionEnv(t, "FABRIC_DSN")
 	unsetConnectionEnv(t, "FABRIC_DSN_PASSWORD_FILE")
 	unsetConnectionEnv(t, "FABRIC_DSN_FILE_KEY")
+	unsetConnectionEnv(t, "FABRIC_DSN_DATABASE")
 	t.Setenv("FABRIC_RUNNER_DSN_ENV", "CUSTOM_RUNNER")
 	unsetConnectionEnv(t, "CUSTOM_RUNNER")
 	unsetConnectionEnv(t, "CUSTOM_RUNNER_PASSWORD_FILE")
 	unsetConnectionEnv(t, "CUSTOM_RUNNER_FILE_KEY")
+	unsetConnectionEnv(t, "CUSTOM_RUNNER_DATABASE")
 	t.Setenv("CUSTOM_RUNNER_FILE", syntheticConnectionFile(t, "postgres://fixture:synthetic@127.0.0.1:5545/fabric_fixture?sslmode=disable"))
 	if got := workerTCPPorts(); !slices.Equal(got, []int{443, 5545}) {
 		t.Fatal("custom runner reference port was not allowed")
@@ -91,7 +95,7 @@ func TestWorkerPortsResolveCustomRunnerReference(t *testing.T) {
 }
 
 func TestAppPasswordFileReusesProtectedSource(t *testing.T) {
-	for _, name := range []string{"FABRIC_DSN", "FABRIC_DSN_FILE", "FABRIC_DSN_FILE_KEY", "FABRIC_DSN_PASSWORD_FILE"} {
+	for _, name := range []string{"FABRIC_DSN", "FABRIC_DSN_FILE", "FABRIC_DSN_FILE_KEY", "FABRIC_DSN_PASSWORD_FILE", "FABRIC_DSN_DATABASE"} {
 		unsetConnectionEnv(t, name)
 	}
 	const marker = "synthetic-reused-password"
@@ -120,5 +124,34 @@ func TestAppPasswordFileReusesProtectedSource(t *testing.T) {
 	files, err := os.ReadDir(filepath.Dir(path))
 	if err != nil || len(files) != 1 {
 		t.Fatal("password-only reference created another persistent source")
+	}
+}
+
+func TestReviewPasswordTargetMetadataIsScrubbed(t *testing.T) {
+	names := []string{"FABRIC_REVIEW_DSN", "FABRIC_REVIEW_DSN_FILE", "FABRIC_REVIEW_DSN_FILE_KEY", "FABRIC_REVIEW_DSN_PASSWORD_FILE", "FABRIC_REVIEW_DSN_DATABASE"}
+	for _, name := range names {
+		unsetConnectionEnv(t, name)
+	}
+	const marker = "synthetic-review-target-source"
+	t.Setenv("FABRIC_REVIEW_DSN", "postgres://fixture@127.0.0.1:5432/unapproved_base_fixture?sslmode=disable")
+	t.Setenv("FABRIC_REVIEW_DSN_PASSWORD_FILE", syntheticConnectionFile(t, marker))
+	t.Setenv("FABRIC_REVIEW_DSN_DATABASE", "fabric_fixture")
+	dsn, credential, err := takeReviewDSN()
+	if err != nil {
+		t.Fatal("review password target reference refused")
+	}
+	defer credential.Close()
+	for _, name := range names {
+		if _, present := os.LookupEnv(name); present {
+			t.Fatal("review source or target metadata survived its boundary")
+		}
+	}
+	u, err := url.Parse(dsn)
+	if err != nil || u.Query().Get("passfile") == "" {
+		t.Fatal("review reference omitted its explicit passfile")
+	}
+	cfg, err := pgconn.ParseConfig(dsn)
+	if err != nil || cfg.Database != "fabric_fixture" || cfg.Password != marker {
+		t.Fatal("review target reference was not retained")
 	}
 }

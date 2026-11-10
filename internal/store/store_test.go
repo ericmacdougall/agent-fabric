@@ -630,7 +630,7 @@ func TestCrashCutpointsSubprocess(t *testing.T) {
 			id := domain.MissionID("m_" + cut)
 			mk(t, st, ctx, id)
 			child := exec.Command(os.Args[0], "-test.run=^TestHelperCrash$", "-test.count=1")
-			child.Env = append(os.Environ(),
+			child.Env = append(connref.ChildEnvironment(os.Environ()),
 				"FABRIC_HELPER_DSN="+testDSN, "FABRIC_HELPER_CUT="+cut, "FABRIC_HELPER_MISSION="+string(id))
 			out, err := child.CombinedOutput()
 			var exitErr *exec.ExitError
