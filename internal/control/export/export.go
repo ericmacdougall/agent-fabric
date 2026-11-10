@@ -45,40 +45,63 @@ type Result struct {
 	Lagging int64
 }
 
-// Cursor is "fx1." + base64url("<dbid>:<outbox id>") + "." + 8 hex of a digest,
-// so a typo or a cursor from another database is refused rather than guessed.
+// New mode-bearing cursors are fx2. Both published fx1 layouts remain readable;
+// their mode is conservatively historic because old fx1 writers could mark a
+// stalled backfill live. The checksum includes the version as well as the body.
 func encodeCursor(dbid string, id int64, rowhash string, backfill bool) string {
 	mode := "l"
 	if backfill {
 		mode = "b"
 	}
 	body := dbid + ":" + strconv.FormatInt(id, 10) + ":" + rowhash + ":" + mode
-	sum := sha256.Sum256([]byte("fx1|" + body))
-	return "fx1." + base64.RawURLEncoding.EncodeToString([]byte(body)) + "." + hex.EncodeToString(sum[:4])
+	return sealCursor("fx2", body)
+}
+
+func sealCursor(version, body string) string {
+	sum := sha256.Sum256([]byte(version + "|" + body))
+	return version + "." + base64.RawURLEncoding.EncodeToString([]byte(body)) + "." + hex.EncodeToString(sum[:4])
 }
 
 func decodeCursor(c string) (dbid string, id int64, rowhash string, backfill bool, err error) {
 	parts := strings.Split(c, ".")
-	if len(parts) != 3 || parts[0] != "fx1" {
+	if len(parts) != 3 || (parts[0] != "fx1" && parts[0] != "fx2") {
 		return "", 0, "", false, fmt.Errorf("%w: not an export cursor", ErrBadCursor)
 	}
 	raw, e := base64.RawURLEncoding.DecodeString(parts[1])
 	if e != nil {
 		return "", 0, "", false, fmt.Errorf("%w: malformed", ErrBadCursor)
 	}
-	sum := sha256.Sum256([]byte("fx1|" + string(raw)))
+	sum := sha256.Sum256([]byte(parts[0] + "|" + string(raw)))
 	if hex.EncodeToString(sum[:4]) != parts[2] {
 		return "", 0, "", false, fmt.Errorf("%w: checksum mismatch", ErrBadCursor)
 	}
 	f := strings.Split(string(raw), ":")
-	if len(f) != 4 || f[0] == "" || f[2] == "" || (f[3] != "b" && f[3] != "l") {
+	if (len(f) != 3 && len(f) != 4) || (parts[0] == "fx2" && len(f) != 4) || f[0] == "" || f[2] == "" {
+		return "", 0, "", false, fmt.Errorf("%w: malformed", ErrBadCursor)
+	}
+	if len(f) == 4 && f[3] != "b" && f[3] != "l" {
 		return "", 0, "", false, fmt.Errorf("%w: malformed", ErrBadCursor)
 	}
 	id, e = strconv.ParseInt(f[1], 10, 64)
-	if e != nil || id < 0 {
+	if e != nil || id < 0 || (id == 0 && f[2] != "0") {
 		return "", 0, "", false, fmt.Errorf("%w: malformed", ErrBadCursor)
 	}
-	return f[0], id, f[2], f[3] == "b", nil
+	return f[0], id, f[2], parts[0] == "fx1" || f[3] == "b", nil
+}
+
+// RollbackCursor converts a structurally valid, caught-up fx2 cursor to the
+// original three-field fx1 format. It cannot establish a consumer's ability to
+// seed that cursor; consumers without one must pause collection during rollback.
+// Backfill and legacy cursors need verified catch-up before conversion.
+func RollbackCursor(cursor string) (string, error) {
+	d, id, h, historic, err := decodeCursor(cursor)
+	if err != nil {
+		return "", err
+	}
+	if historic {
+		return "", fmt.Errorf("%w: backfill or legacy cursor must catch up before rollback conversion", ErrBadCursor)
+	}
+	return sealCursor("fx1", d+":"+strconv.FormatInt(id, 10)+":"+h), nil
 }
 
 // rowHashSQL binds a cursor to the content of the outbox row it names (mission,
@@ -145,7 +168,7 @@ page:
 		// every in-progress one, so a row that commits late with a lower id is
 		// never passed over by the cursor. Execute assigns ids in xid order.
 		rows, err := tx.Query(ctx, `SELECT o.id, o.mission_id, o.seq, COALESCE(e.kind, ''), COALESCE(e.at, o.at),
-				COALESCE(h.last_id IS NOT NULL AND o.id > h.last_id, false), COALESCE(left(m.ticket, 256), ''), `+rowHashSQL+`
+				COALESCE(h.last_id IS NOT NULL AND o.id > h.last_id, false), COALESCE(m.ticket, ''), `+rowHashSQL+`
 			FROM outbox o
 			LEFT JOIN events e ON e.mission_id = o.mission_id AND e.seq = o.seq
 			LEFT JOIN outbox_cursors h ON h.consumer = 'sched.hold.' || o.mission_id
@@ -164,6 +187,9 @@ page:
 				rows.Close()
 				return Result{}, err
 			}
+			// Validate against the complete original boundary, then retain only a
+			// detached bounded reference instead of the full mission ticket text.
+			r.Ticket = strings.Clone(ticketRef(r.Ticket))
 			page = append(page, r)
 			hashes = append(hashes, h)
 		}
@@ -201,7 +227,9 @@ page:
 		}
 		if res.Lagging > 0 {
 			// A file-drop reader never sees stderr: say it in the stream too, once per episode.
-			line, err := json.Marshal(MapLag(res.Lagging, firstHeld, now))
+			lag := MapLag(res.Lagging, firstHeld, now)
+			lag.Historic = backfill
+			line, err := json.Marshal(lag)
 			if err != nil {
 				return Result{}, err
 			}
@@ -209,7 +237,7 @@ page:
 			buf.WriteByte('\n')
 		}
 	}
-	res.Cursor = encodeCursor(dbid, last, lastHash, res.More && backfill)
+	res.Cursor = encodeCursor(dbid, last, lastHash, backfill && (res.More || res.Lagging > 0))
 	line, err := json.Marshal(struct {
 		Cursor string `json:"cursor"`
 	}{res.Cursor})

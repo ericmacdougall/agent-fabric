@@ -135,7 +135,7 @@ func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 // (no underscore, at most 7 digits, not part of a longer word or number; a neighbouring non-ASCII character
 // counts as part of the word), on the original text with ASCII-only
 // case folding (a Unicode fold would turn U+212A into k).
-var ticketShape = regexp.MustCompile(`(?:^|[\x00-\x2c\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f])([A-Za-z][A-Za-z0-9-]{0,30}#[0-9]{1,7})(?:[\x00-\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f]|$)`)
+var ticketShape = regexp.MustCompile(`(?:^|[\x00-\x2c\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f])([A-Za-z0-9][A-Za-z0-9-]{0,39}#[0-9]{1,7})(?:[\x00-\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f]|$)`)
 
 // ticketRef extracts the first "project#N" reference (lower-cased, e.g.
 // "goodqa#15586") from a mission's ticket text, the join key Mission Control

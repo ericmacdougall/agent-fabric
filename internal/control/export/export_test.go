@@ -681,7 +681,7 @@ func TestSubjectTicket(t *testing.T) {
 		"goodqa#1234567890":                      "",
 		"goodqa#1234567":                         "goodqa#1234567",
 		"goodqa#12345678":                        "",
-		"abcdefghijklmnopqrstuvwxyzabcdefghij#5": "",
+		"abcdefghijklmnopqrstuvwxyzabcdefghij#5": "abcdefghijklmnopqrstuvwxyzabcdefghij#5",
 		"\u212Aimi#5":                            "",
 		"foo.goodqa#5":                           "",
 		"my_proj#5":                              "",

@@ -13,6 +13,18 @@ import (
 	"fabric/internal/control/export"
 )
 
+func controlCursorRollbackMain(args []string) error {
+	if len(args) != 1 {
+		return usageError{errors.New("usage: fab control cursor-rollback CURSOR (caught-up fx2 only; does not seed a consumer)")}
+	}
+	cursor, err := export.RollbackCursor(args[0])
+	if err != nil {
+		return usageError{err}
+	}
+	_, err = fmt.Fprintln(os.Stdout, cursor)
+	return err
+}
+
 // controlExportMain is `fab control export [--since CURSOR]`: read-only
 // mc.event/1 lines for Mission Control, then one {"cursor":"..."} line. A
 // refused cursor is exit 3 with nothing written to stdout.
