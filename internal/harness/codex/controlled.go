@@ -21,6 +21,7 @@ type Control struct {
 	InstructionSources []string
 	PreflightOnly      bool
 	CatalogOnly        bool
+	Home               string
 }
 
 // FileEditSettings is the minimum explicit configuration ceiling. Inherited
@@ -37,7 +38,7 @@ func FileEditSettings() map[string]any {
 			"shell_tool": false, "unified_exec": false, "shell_snapshot": false, "multi_agent": false, "multi_agent_v2": false,
 			"apps": false, "plugins": false, "remote_plugin": false, "plugin_discovery_prefetch": false, "plugin_sharing": false,
 			"memories": false, "external_agent_memory_import": false, "deferred_executor": false, "hooks": true,
-			"browser_use": false, "browser_use_external": false, "browser_use_full_cdp_access": false, "computer_use": false, "image_generation": false, "view_image": false, "in_app_browser": false, "code_mode": false, "code_mode_host": false, "code_mode_interrupt": false, "code_mode_only": false, "code_mode_prewarm": false, "code_mode_tool_search": false, "multi_agent_v2_dynamic_tools": false, "multi_env_copy_file": false, "subagent_thread_environments": false, "runtime_agent_instances": false, "skill_mcp_dependency_install": false, "skill_search": false, "tool_suggest": false, "workspace_dependencies": false, "request_permissions_tool": false, "executor_capability_discovery": false, "executor_capability_discovery_v2": false, "incremental_exec_tools": false, "artifact": false, "skip_host_skill_discovery": true, "omit_skill_descriptions": true, "cli_daybreak": false, "goals": false, "daemon_auto_start": false,
+			"browser_use": false, "browser_use_external": false, "browser_use_full_cdp_access": false, "computer_use": false, "image_generation": false, "view_image": false, "in_app_browser": false, "code_mode": false, "code_mode_host": false, "code_mode_interrupt": false, "code_mode_only": false, "code_mode_prewarm": false, "code_mode_tool_search": false, "multi_agent_v2_dynamic_tools": false, "multi_env_copy_file": false, "subagent_thread_environments": false, "runtime_agent_instances": false, "skill_mcp_dependency_install": false, "skill_search": false, "tool_suggest": false, "workspace_dependencies": false, "request_permissions_tool": false, "executor_capability_discovery": false, "executor_capability_discovery_v2": false, "incremental_exec_tools": false, "artifact": false, "skip_host_skill_discovery": true, "omit_skill_descriptions": true, "unbounded_connection_retries": false, "cli_daybreak": false, "goals": false, "daemon_auto_start": false,
 		},
 		"memories":                 map[string]any{"use_memories": false, "generate_memories": false},
 		"shell_environment_policy": map[string]any{"inherit": "none", "experimental_use_profile": false, "ignore_default_excludes": false, "set": map[string]any{}},
@@ -110,6 +111,9 @@ func (c *Control) validate() error {
 	if !profileID.MatchString(c.Profile) {
 		return errors.New("codex: invalid controlled profile")
 	}
+	if c.Home == "" || !filepath.IsAbs(c.Home) {
+		return errors.New("codex: controlled home missing")
+	}
 	if len(c.InstructionSources) == 0 {
 		return errors.New("codex: required instruction sources missing")
 	}
@@ -169,8 +173,39 @@ func (s *session) startThread() {
 
 // FileEditPermissions is the exact invocation-only profile checked on readback.
 const DemoArtifact = "demo.txt"
-const DemoModel = "gpt-6.1-sol"
+const DemoModel = "gpt-6-luna"
+const DemoPrompt = "Use only apply_patch to create demo.txt containing exactly fabric followed by one newline. Do not run commands, access any other file, use any other tool, or create additional files. Complete the single file edit and stop."
 
 func FileEditPermissions(dir string) map[string]any {
 	return map[string]any{"filesystem": map[string]any{":root": "deny", ":minimal": "read", ":tmpdir": "deny", ":slash_tmp": "deny", dir: "read", filepath.Join(dir, DemoArtifact): "write"}, "network": map[string]any{"enabled": false}}
+}
+
+func (s *session) controlledModels(raw json.RawMessage) error {
+	var r struct {
+		Data []struct {
+			Model                     string
+			Hidden                    bool
+			SupportedReasoningEfforts []struct {
+				ReasoningEffort string `json:"reasoningEffort"`
+			}
+		}
+		NextCursor *string
+	}
+	if json.Unmarshal(raw, &r) != nil || r.NextCursor != nil {
+		return errors.New("codex: model metadata unavailable")
+	}
+	n := 0
+	for _, m := range r.Data {
+		if m.Model == DemoModel && !m.Hidden {
+			for _, e := range m.SupportedReasoningEfforts {
+				if e.ReasoningEffort == "low" {
+					n++
+				}
+			}
+		}
+	}
+	if n != 1 {
+		return errors.New("codex: selected subscription model absent from catalog")
+	}
+	return nil
 }

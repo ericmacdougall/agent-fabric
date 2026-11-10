@@ -328,11 +328,19 @@ func (s *session) onResponse(pk packet, raw []byte) {
 			return
 		}
 		if s.control != nil {
-			if err := s.request("permissionProfile/list", map[string]any{"cwd": s.spec.Dir, "limit": 100}, "controlled_profiles"); err != nil {
-				s.fail("codex: profile metadata unavailable")
+			if err := s.request("hooks/list", map[string]any{"cwds": []string{s.spec.Dir}}, "controlled_hooks"); err != nil {
+				s.fail("codex: hook metadata unavailable")
 			}
 		} else {
 			s.startThread()
+		}
+	case "controlled_hooks":
+		if err := CheckHooks(pk.Result, s.control.Home, s.spec.Dir); err != nil {
+			s.fail(err.Error())
+			return
+		}
+		if err := s.request("permissionProfile/list", map[string]any{"cwd": s.spec.Dir, "limit": 100}, "controlled_profiles"); err != nil {
+			s.fail("codex: profile metadata unavailable")
 		}
 	case "controlled_profiles":
 		if err := s.controlledProfiles(pk.Result); err != nil {
@@ -341,6 +349,14 @@ func (s *session) onResponse(pk packet, raw []byte) {
 		}
 		if s.control.CatalogOnly {
 			s.finish(harness.Final{Outcome: harness.OutcomeStopped, Reason: "controlled profile metadata checked; no thread or model turn", ExitCode: -1})
+			return
+		}
+		if err := s.request("model/list", map[string]any{"limit": 100, "includeHidden": false}, "controlled_models"); err != nil {
+			s.fail("codex: model metadata unavailable")
+		}
+	case "controlled_models":
+		if err := s.controlledModels(pk.Result); err != nil {
+			s.fail(err.Error())
 			return
 		}
 		s.startThread()
@@ -367,8 +383,21 @@ func (s *session) onResponse(pk packet, raw []byte) {
 		s.mu.Lock()
 		s.thread = r.Thread.ID
 		s.mu.Unlock()
+		if s.control != nil {
+			if err := s.request("hooks/list", map[string]any{"threadId": s.threadID()}, "controlled_thread_hooks"); err != nil {
+				s.fail("codex: thread hook metadata unavailable")
+			}
+			return
+		}
 		s.phase = phReady
-		if s.control != nil && s.control.PreflightOnly {
+		s.dispatch()
+	case "controlled_thread_hooks":
+		if err := CheckHooks(pk.Result, s.control.Home, s.spec.Dir); err != nil {
+			s.fail(err.Error())
+			return
+		}
+		s.phase = phReady
+		if s.control.PreflightOnly {
 			s.finish(harness.Final{Outcome: harness.OutcomeStopped, Reason: "controlled preflight complete; no model turn", ExitCode: -1})
 			return
 		}
@@ -417,6 +446,11 @@ func (s *session) bind(result json.RawMessage) {
 }
 
 func (s *session) onServerRequest(pk packet) {
+	if s.control != nil {
+		s.respond(pk.ID, nil, "request refused")
+		s.fail("codex: unexpected server request refused")
+		return
+	}
 	switch pk.Method {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
 		var p struct {
@@ -458,6 +492,35 @@ func isBenign(method string) bool {
 
 func (s *session) onNotification(pk packet) {
 	m := pk.Method
+	if s.control != nil && (m == "hook/started" || m == "hook/completed") {
+		var h struct{ Run struct{ ID, Status string } }
+		if json.Unmarshal(pk.Params, &h) != nil || h.Run.ID == "" {
+			s.fail("codex: hook lifecycle identity missing")
+			return
+		}
+		s.hooksObserved = true
+		if m == "hook/started" {
+			if s.pendingHooks[h.Run.ID] {
+				s.fail("codex: duplicate hook start")
+				return
+			}
+			s.pendingHooks[h.Run.ID] = true
+		} else {
+			if !s.pendingHooks[h.Run.ID] {
+				s.fail("codex: unbound hook completion")
+				return
+			}
+			delete(s.pendingHooks, h.Run.ID)
+			switch h.Run.Status {
+			case "completed":
+
+			default:
+				s.fail("codex: mandatory hook did not complete successfully")
+				return
+			}
+		}
+		return
+	}
 	var head struct {
 		ThreadID string `json:"threadId"`
 		Thread   struct {
@@ -689,6 +752,10 @@ func toolInfo(item map[string]any) (name string, input []byte, status string, ok
 
 // finishTurn handles the completion of the bound turn.
 func (s *session) finishTurn(status, message string) {
+	if s.control != nil && (len(s.pendingHooks) > 0 || !s.hooksObserved) {
+		s.fail("codex: hook cleanup uncertain; retain owned job evidence")
+		return
+	}
 	t := s.cur
 	if t.usage != nil {
 		_ = s.em.Usage(s.ctx, *t.usage)
@@ -755,6 +822,10 @@ func (s *session) finish(f harness.Final) {
 	}
 	s.finished = true
 	s.disarm()
+	if s.control != nil && len(s.pendingHooks) > 0 {
+		f.Outcome = harness.OutcomeFailed
+		f.Reason = joinReason(f.Reason, "hook cleanup uncertain; retain owned job evidence")
+	}
 	if f.Outcome != harness.OutcomeDone {
 		if n := s.undelivered(); n > 0 {
 			f.Reason = joinReason(f.Reason, fmt.Sprintf("undelivered_inputs=%d", n))

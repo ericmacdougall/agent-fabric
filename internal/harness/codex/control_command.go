@@ -15,7 +15,7 @@ func FileEditCommand(bin, profile, dir string, disabled ...DisabledIntegration) 
 	if !filepath.IsAbs(bin) || !filepath.IsAbs(dir) {
 		return nil, errors.New("codex: absolute executable and workspace required")
 	}
-	c := Control{Profile: profile, InstructionSources: []string{"required"}}
+	c := Control{Profile: profile, InstructionSources: []string{"required"}, Home: "/controlled"}
 	if err := c.validate(); err != nil {
 		return nil, err
 	}

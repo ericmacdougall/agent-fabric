@@ -100,10 +100,8 @@ func harnessRunMain(args []string) error {
 	codexBin := fs.String("codex-bin", codexDemoBinary, "codex: reviewed executable (identity pinned)")
 	codexDir := fs.String("codex-dir", "", "codex: new empty mode-0700 workspace")
 	codexPreflight := fs.Bool("codex-preflight", false, "codex: verify controls without a model turn")
-	disabledMCP := codexDisabledIDs{Kind: "mcp_servers"}
-	disabledPlugins := codexDisabledIDs{Kind: "plugins"}
-	fs.Var(&disabledMCP, "codex-disable-mcp", "codex: disable inherited MCP ID (repeatable)")
-	fs.Var(&disabledPlugins, "codex-disable-plugin", "codex: disable inherited plugin ID (repeatable)")
+	codexRun := fs.Bool("codex-run", false, "codex: one restricted fixed file edit (requires reviewed runtime gates)")
+	mcEvents := fs.String("mc-events", "", "codex run: optional new lifecycle-only mc.event/1 output")
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err.Error())
 	}
@@ -113,7 +111,7 @@ func harnessRunMain(args []string) error {
 	if *events == "" {
 		return usageErr("--events is required")
 	}
-	if *adapter != "codex" && (*codexPreflight || *codexDir != "" || *codexBin != codexDemoBinary || len(disabledMCP.Values) > 0 || len(disabledPlugins.Values) > 0) {
+	if *adapter != "codex" && (*codexPreflight || *codexDir != "" || *codexBin != codexDemoBinary || *codexRun || *mcEvents != "") {
 		return usageErr("--codex-* flags require the codex adapter")
 	}
 	switch *adapter {
@@ -125,8 +123,11 @@ func harnessRunMain(args []string) error {
 			return usageErr("--grant is required for native")
 		}
 	case "codex":
-		if !*codexPreflight {
-			return usageErr("codex model execution is gated; use --codex-preflight")
+		if *codexPreflight == *codexRun {
+			return usageErr("choose exactly one of --codex-preflight or --codex-run")
+		}
+		if *codexPreflight && *mcEvents != "" {
+			return usageErr("--mc-events requires --codex-run")
 		}
 		if *codexDir == "" || *wait <= 0 || *wait > 120*time.Second {
 			return usageErr("codex requires --codex-dir and 0 < --wait <= 120s")
@@ -165,7 +166,7 @@ func harnessRunMain(args []string) error {
 	red := harness.ChainRedactor(harness.LiteralRedactor(secrets), harness.PatternRedactor())
 	var runErr error
 	if *adapter == "codex" {
-		runErr = runCodexPreflight(sctx, *codexBin, *codexDir, *wait, out, append(disabledMCP.Values, disabledPlugins.Values...))
+		runErr = runCodexFileEdit(sctx, *codexBin, *codexDir, *wait, out, *codexPreflight, *mcEvents)
 	} else if *adapter == "native" {
 		runErr = runNative(sctx, *grantFile, *fake, out)
 	} else {

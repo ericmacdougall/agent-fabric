@@ -222,3 +222,32 @@ func TestCodexPreflightRejectsModelAndAmbientFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexArtifactRequiresExactOwnedPlainFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := checkCodexArtifact(dir); err == nil {
+		t.Fatal("missing artifact passed")
+	}
+	path := filepath.Join(dir, "demo.txt")
+	if err := os.WriteFile(path, []byte("fabric\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCodexArtifact(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCodexArtifact(dir); err == nil {
+		t.Fatal("executable artifact passed")
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "extra"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCodexArtifact(dir); err == nil {
+		t.Fatal("extra footprint passed")
+	}
+}

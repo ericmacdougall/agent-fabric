@@ -185,8 +185,8 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 		c := *a.Control
 		c.InstructionSources = append([]string(nil), c.InstructionSources...)
 		control = &c
-		if !control.PreflightOnly {
-			return nil, errors.New("codex: model execution remains gated")
+		if !control.PreflightOnly && (spec.Prompt != DemoPrompt || control.CatalogOnly) {
+			return nil, errors.New("codex: controlled task mismatch")
 		}
 		if err := control.validate(); err != nil {
 			return nil, err
@@ -254,7 +254,7 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 		reqTimeout: orDur(a.RequestTimeout, defaultReqTimout), grace: orDur(a.KillGrace, defaultKillGrace),
 		in: make(chan any, 64), quit: make(chan struct{}), done: make(chan struct{}),
 		readerDone: make(chan struct{}), exited: make(chan struct{}),
-		pend: map[uint64]string{}, completed: map[string]bool{},
+		pend: map[uint64]string{}, completed: map[string]bool{}, pendingHooks: map[string]bool{},
 		ctx: context.WithoutCancel(ctx),
 	}
 	if spec.Prompt != "" {
@@ -294,13 +294,15 @@ func orDur(v, d time.Duration) time.Duration {
 // session implements harness.Session. All protocol state lives in the run
 // goroutine (the actor); other goroutines only post events to it.
 type session struct {
-	control *Control
-	id      string
-	em      *harness.Emitter
-	opts    options
-	spec    harness.StartSpec
-	ctx     context.Context
-	p       *proc
+	control       *Control
+	pendingHooks  map[string]bool
+	hooksObserved bool
+	id            string
+	em            *harness.Emitter
+	opts          options
+	spec          harness.StartSpec
+	ctx           context.Context
+	p             *proc
 
 	maxLine    int
 	maxTotal   int64

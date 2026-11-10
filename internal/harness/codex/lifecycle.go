@@ -85,7 +85,7 @@ func (s *LifecycleSink) write(seq int, state, severity string) error {
 		Subject  map[string]string `json:"subject"`
 		Summary  string            `json:"summary"`
 		Severity string            `json:"severity"`
-	}{"mc.event/1", fmt.Sprintf("codex_demo:%s:%d", s.session, seq), time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), "owner", "codex_demo", map[string]string{"runtime": "codex", "session": s.session}, map[string]string{}, "Codex external file-edit run " + state, severity}
+	}{"mc.event/1", fmt.Sprintf("codex_demo:%s:%d", s.session, seq), time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), "owner", "codex_demo", map[string]string{"runtime": "codex", "session": s.session}, map[string]string{}, "Codex external provider session " + state, severity}
 	b, _ := json.Marshal(row)
 	b = append(b, '\n')
 	n, err := s.out.Write(b)

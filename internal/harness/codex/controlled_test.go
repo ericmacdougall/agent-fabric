@@ -121,13 +121,14 @@ func TestControlledProfileBeforeTurn(t *testing.T) {
 			case "model":
 				reply["model"] = "unapproved"
 			}
+			hb := validHookMetadata("/home/owned", spec.Dir)
 			cb, _ := json.Marshal(profiles)
 			rb, _ := json.Marshal(reply)
 			scriptPath := filepath.Join(t.TempDir(), "controlled.script")
-			if err := os.WriteFile(scriptPath, []byte("on initialize reply {}\non config/read exit 98\non permissionProfile/list reply "+string(cb)+"\non thread/start reply "+string(rb)+"\non turn/start exit 99\n"), 0600); err != nil {
+			if err := os.WriteFile(scriptPath, []byte("on initialize reply {}\non config/read exit 98\non hooks/list reply "+string(hb)+"\non permissionProfile/list reply "+string(cb)+"\non model/list reply {\"data\":[{\"model\":\"gpt-6-luna\",\"hidden\":false,\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\"}]}],\"nextCursor\":null}\non thread/start reply "+string(rb)+"\non turn/start exit 99\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			a := &codex.Adapter{Command: []string{exe(t), "--fabric-test-script", scriptPath}, Control: &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{source}, PreflightOnly: true, CatalogOnly: mut == "catalog"}, KillGrace: 300 * time.Millisecond, RequestTimeout: time.Second}
+			a := &codex.Adapter{Command: []string{exe(t), "--fabric-test-script", scriptPath}, Control: &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{source}, PreflightOnly: true, CatalogOnly: mut == "catalog", Home: "/home/owned"}, KillGrace: 300 * time.Millisecond, RequestTimeout: time.Second}
 			sess, rec := begin(t, a, spec)
 			f := finish(t, sess)
 			want := harness.OutcomeFailed
@@ -156,7 +157,7 @@ func TestControlledModeRejectsAmbientEnvironmentAndResume(t *testing.T) {
 	a := adapter(t, "normal")
 	a.Command = []string{exe(t), "--fabric-test-script", script(t, "normal")}
 	a.BaseEnv = nil
-	a.Control = &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{"/owned/AGENTS.md"}, PreflightOnly: true}
+	a.Control = &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{"/owned/AGENTS.md"}, PreflightOnly: true, Home: "/home/owned"}
 	for _, spec := range []harness.StartSpec{
 		{SessionID: "x", Dir: t.TempDir(), Prompt: "x", Env: map[string]string{"OPENAI_API_KEY": "canary"}},
 		{SessionID: "x", Dir: t.TempDir(), Prompt: "x", Extra: json.RawMessage(`{"resume_thread":"history"}`)},
@@ -165,5 +166,58 @@ func TestControlledModeRejectsAmbientEnvironmentAndResume(t *testing.T) {
 			_ = s.Stop(context.Background())
 			t.Fatal("unsafe input accepted")
 		}
+	}
+}
+
+func TestControlledFixedRunAndRuntimeRefusals(t *testing.T) {
+	for _, mode := range []string{"complete", "untrusted", "forbidden_tool", "pending_hook", "provider_unsupported"} {
+		t.Run(mode, func(t *testing.T) {
+			spec := startSpec(t, codex.DemoPrompt)
+			source := filepath.Join(spec.Dir, "AGENTS.md")
+			hooks := validHookMetadata("/home/owned", spec.Dir)
+			if mode == "untrusted" {
+				hooks = []byte(strings.Replace(string(hooks), `"trustStatus":"trusted"`, `"trustStatus":"untrusted"`, 1))
+			}
+			reply, _ := json.Marshal(map[string]any{"thread": map[string]any{"id": "thr_1"}, "cwd": spec.Dir, "approvalPolicy": "never", "modelProvider": "openai", "model": codex.DemoModel, "activePermissionProfile": map[string]any{"id": "fabric_demo_test"}, "runtimeWorkspaceRoots": []string{spec.Dir}, "instructionSources": []string{source}})
+			text := "on initialize reply {}\non config/read exit 98\non hooks/list reply " + string(hooks) + "\non permissionProfile/list reply {\"data\":[{\"id\":\"fabric_demo_test\",\"allowed\":true}],\"nextCursor\":null}\non model/list reply {\"data\":[{\"model\":\"gpt-6-luna\",\"hidden\":false,\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\"}]}],\"nextCursor\":null}\non thread/start reply " + string(reply) + "\n"
+			if mode == "provider_unsupported" {
+				text += "on turn/start error subscription-model-unsupported-private-canary\n"
+			} else {
+				text += "on turn/start reply {\"turn\":{\"id\":\"turn_1\"}}\non turn/start send {\"method\":\"hook/started\",\"params\":{\"run\":{\"id\":\"hook1\",\"status\":\"running\"}}}\n"
+				if mode != "pending_hook" {
+					text += "on turn/start send {\"method\":\"hook/completed\",\"params\":{\"run\":{\"id\":\"hook1\",\"status\":\"completed\"}}}\n"
+				}
+				if mode == "forbidden_tool" {
+					text += "on turn/start send {\"method\":\"item/started\",\"params\":{\"threadId\":\"thr_1\",\"turnId\":\"turn_1\",\"item\":{\"type\":\"commandExecution\",\"id\":\"cmd1\",\"command\":\"setsid double-fork private-canary\"}}}\n"
+				}
+				text += "on turn/start send {\"method\":\"turn/completed\",\"params\":{\"threadId\":\"thr_1\",\"turn\":{\"id\":\"turn_1\",\"status\":\"completed\"}}}\n"
+			}
+			scriptPath := filepath.Join(t.TempDir(), "fixed.script")
+			if err := os.WriteFile(scriptPath, []byte(text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			a := &codex.Adapter{Command: []string{exe(t), "--fabric-test-script", scriptPath}, Control: &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{source}, Home: "/home/owned"}, KillGrace: 300 * time.Millisecond, RequestTimeout: time.Second}
+			sess, rec := begin(t, a, spec)
+			f := finish(t, sess)
+			want := harness.OutcomeFailed
+			if mode == "complete" {
+				want = harness.OutcomeDone
+			}
+			if f.Outcome != want {
+				t.Fatalf("got %+v want %s", f, want)
+			}
+			if mode == "untrusted" {
+				for _, e := range rec.Snapshot() {
+					if e.Kind == harness.KindTurn {
+						t.Fatal("untrusted hook allowed model turn")
+					}
+				}
+			}
+			for _, e := range rec.Snapshot() {
+				if strings.Contains(string(e.Payload), "private-canary") {
+					t.Fatal("sensitive failure data leaked")
+				}
+			}
+		})
 	}
 }
