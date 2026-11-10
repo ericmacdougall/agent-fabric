@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -89,5 +90,50 @@ func TestRedactBounds(t *testing.T) {
 	hostile := strings.Repeat("password=", 4000) + strings.Repeat("x", 20000)
 	if _, n := Redact(hostile); n == 0 {
 		t.Fatal("hostile input not matched")
+	}
+}
+
+// RE2's \s is ASCII-only while the harness's Python redact.py treats every
+// Unicode space as \s. A credential whose key and value are separated by a
+// no-break or typographic space (macOS option-space, &nbsp; pasted from HTML,
+// French "mot de passe : x") must still be redacted before the append-only
+// insert. The strings are assembled from code points, with fake values.
+func TestRedactUnicodeSpaces(t *testing.T) {
+	spaces := []rune{0x00A0, 0x1680, 0x2000, 0x2005, 0x200A, 0x202F, 0x205F, 0x3000}
+	awsSecret := "wJalrXUtnFEMI" + strings.Repeat("K7MDENGbPx", 2) + "RfiCYEX" // 40 chars, fake
+	if len(awsSecret) != 40 {
+		t.Fatalf("fake aws secret is %d chars", len(awsSecret))
+	}
+	akia := "AKIA" + strings.Repeat("Q", 16)
+	for _, r := range spaces {
+		sp := string(r)
+		for _, c := range []struct{ in, value string }{
+			{"password" + sp + "=" + sp + "hunter2xyz", "hunter2xyz"},
+			{"Authorization: Bearer" + sp + "abcdef0123456789", "abcdef0123456789"},
+			{"api_key" + sp + ":" + sp + "k3yv4lu3abc", "k3yv4lu3abc"},
+			{"aws_secret_access_key" + sp + "=" + sp + awsSecret, awsSecret},
+			{"clientSecret" + sp + "=" + sp + "'k3yv4lu3abc'", "k3yv4lu3abc"},
+			{akia + sp + awsSecret, awsSecret},
+		} {
+			got, n := Redact("note " + c.in + " end")
+			if n == 0 || strings.Contains(got, c.value[len(c.value)-8:]) {
+				t.Errorf("U+%04X: %q -> n=%d %q", r, c.in, n, got)
+			}
+			if again, n2 := Redact(got); again != got || n2 != 0 {
+				t.Errorf("U+%04X: not idempotent: %q -> %q", r, got, again)
+			}
+		}
+		// end to end: the stored summary carries no secret
+		line, _ := json.Marshal(map[string]string{"schema": "mc.event/1", "id": "wal-x:zs", "ts": "2026-11-09T12:30:45Z", "kind": "wal",
+			"summary": "password" + sp + "=" + sp + "hunter2xyz"})
+		ev, err := ValidateLine(line, "wal-x")
+		if err != nil || ev.Redacted != 1 || strings.Contains(ev.Summary, "hunter2xyz") {
+			t.Errorf("U+%04X: ValidateLine err=%v redacted=%d summary=%q", r, err, ev.Redacted, ev.Summary)
+		}
+	}
+	// benign prose with no-break spaces is left alone
+	benign := "deployed fabric to t2-dev : ok"
+	if got, n := Redact(benign); got != benign || n != 0 {
+		t.Errorf("benign text changed: %q -> %q", benign, got)
 	}
 }

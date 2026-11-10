@@ -15,6 +15,14 @@ import (
 // Go's regexp is linear time, so hostile input cannot cause backtracking
 // blowup; the bounded repeats of the original are loosened where RE2's
 // 1000-repeat limit would not allow them.
+//
+// RE2's \s is ASCII-only ([\t\n\f\r ]) while Python's re \s is Unicode, so a
+// key and value separated by a no-break or typographic space (U+00A0, U+202F,
+// U+2000-200A, U+3000, U+1680 ...) would slip past. Every separator is written
+// as [\s\p{Zs}], and \p{Zs} is added to the separator and value classes.
+// cleanText refuses Zl/Zp and control characters, so Zs is the remaining gap.
+// url-userinfo keeps its ASCII [^\s...] classes: widening them would only
+// shorten its match (Go then redacts at least as much as the harness).
 
 const keysRE = `(?:[a-z0-9]+[_-])*(?:password|passwd|passphrase|secret|token|api[_-]?key|access[_-]?key|` +
 	`private[_-]?key|credentials?|client[_-]?secret|refresh[_-]?token|access[_-]?token|id[_-]?token)(?:[_-]value)?`
@@ -25,14 +33,14 @@ type secretPattern struct {
 }
 
 var secretPatterns = []secretPattern{
-	{"rclone-token", regexp.MustCompile(`(?im)^\s*token\s*=\s*\{[^\n]*`)},
-	{"oauth-json", regexp.MustCompile(`(?is)\{[^{}]*?["'](?:access_token|refresh_token|id_token)["']\s*:[^{}]*\}`)},
+	{"rclone-token", regexp.MustCompile(`(?im)^[\s\p{Zs}]*token[\s\p{Zs}]*=[\s\p{Zs}]*\{[^\n]*`)},
+	{"oauth-json", regexp.MustCompile(`(?is)\{[^{}]*?["'](?:access_token|refresh_token|id_token)["'][\s\p{Zs}]*:[^{}]*\}`)},
 	{"anthropic", regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{8,}`)},
 	{"openai", regexp.MustCompile(`\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}`)},
 	{"github", regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})`)},
-	{"aws-key-pair", regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b[\s,:;="']{1,20}[A-Za-z0-9/+]{40}`)},
+	{"aws-key-pair", regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b[\s\p{Zs},:;="']{1,20}[A-Za-z0-9/+]{40}`)},
 	{"aws-key", regexp.MustCompile(`\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[A-Z0-9]{16}\b`)},
-	{"aws-secret", regexp.MustCompile(`(?i)\baws[_-]?secret[_-]?(?:access[_-]?)?key["']?\s*[:=]\s*["']?[A-Za-z0-9/+]{40}`)},
+	{"aws-secret", regexp.MustCompile(`(?i)\baws[_-]?secret[_-]?(?:access[_-]?)?key["']?[\s\p{Zs}]*[:=][\s\p{Zs}]*["']?[A-Za-z0-9/+]{40}`)},
 	{"stripe", regexp.MustCompile(`\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}`)},
 	{"stripe-webhook", regexp.MustCompile(`\bwhsec_[A-Za-z0-9]{16,}`)},
 	{"huggingface", regexp.MustCompile(`\bhf_[A-Za-z0-9]{20,}`)},
@@ -45,10 +53,10 @@ var secretPatterns = []secretPattern{
 	{"slack", regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{6,}`)},
 	{"npm", regexp.MustCompile(`\bnpm_[A-Za-z0-9]{30,}`)},
 	{"jwt", regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{0,512}`)},
-	{"bearer", regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}`)},
+	{"bearer", regexp.MustCompile(`(?i)\bBearer[\s\p{Zs}]+[A-Za-z0-9._~+/=-]{8,}`)},
 	{"url-userinfo", regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]{0,30}://[^\s/?#@]{1,256}@[^\s/?#]{1,256}`)},
-	{"named-credential", regexp.MustCompile(`(?i)\b` + keysRE + `["']?\s*[:=]\s*["']?[^\s"',;}]{3,512}`)},
-	{"named-credential", regexp.MustCompile(`\b[a-z][a-z0-9]*(?:Secret|Token|Password|ApiKey|AccessKey|PrivateKey|Credentials?)["']?\s*[:=]\s*["']?[^\s"',;}]{3,512}`)},
+	{"named-credential", regexp.MustCompile(`(?i)\b` + keysRE + `["']?[\s\p{Zs}]*[:=][\s\p{Zs}]*["']?[^\s\p{Zs}"',;}]{3,512}`)},
+	{"named-credential", regexp.MustCompile(`\b[a-z][a-z0-9]*(?:Secret|Token|Password|ApiKey|AccessKey|PrivateKey|Credentials?)["']?[\s\p{Zs}]*[:=][\s\p{Zs}]*["']?[^\s\p{Zs}"',;}]{3,512}`)},
 }
 
 var (
