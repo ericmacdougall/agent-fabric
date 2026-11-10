@@ -23,7 +23,7 @@ var testDSN string
 func TestMain(m *testing.M) { os.Exit(reviewGateTestMain(m)) }
 
 func reviewGateTestMain(m *testing.M) (code int) {
-	if os.Getenv("FABRIC_TEST_DSN") == "" && os.Getenv("FABRIC_TEST_DSN_FILE") == "" {
+	if os.Getenv("FABRIC_TEST_DSN") == "" && !connref.HasReferenceConfig("FABRIC_TEST_DSN") {
 		return m.Run() // pure tests still run; PostgreSQL tests skip loudly
 	}
 	adminRef, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)

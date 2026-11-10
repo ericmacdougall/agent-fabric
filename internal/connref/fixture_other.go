@@ -4,7 +4,6 @@ package connref
 
 import (
 	"net/url"
-	"os"
 )
 
 // Fixture preserves only the pre-existing non-Linux raw-env test behavior.
@@ -12,11 +11,14 @@ import (
 type Fixture struct{ ref *Ref }
 
 func NewFixture(base string, purpose Purpose, user, password, _ string) (*Fixture, error) {
-	if os.Getenv("FABRIC_TEST_DSN_FILE") != "" || purpose.field() == "" {
+	if HasReferenceConfig("FABRIC_TEST_DSN") || purpose.field() == "" {
 		return nil, ErrUnsupported
 	}
 	u, err := url.Parse(base)
-	if err != nil || u.Query().Get("passfile") != "" {
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+	if _, referenced := u.Query()["passfile"]; referenced {
 		return nil, ErrUnsupported
 	}
 	u.User = url.UserPassword(user, password) // existing raw-env non-Linux compatibility only
@@ -43,7 +45,7 @@ func (f *Fixture) Close() error {
 // ForTestDatabase preserves URL path derivation only for pre-existing raw-env
 // tests. FILE mode errors in ResolveEnv and must never fall back here.
 func ForTestDatabase(ref *Ref, database string) (*Ref, error) {
-	if os.Getenv("FABRIC_TEST_DSN_FILE") != "" {
+	if HasReferenceConfig("FABRIC_TEST_DSN") {
 		return nil, ErrUnsupported
 	}
 	dsn, err := ref.DSN()
@@ -51,7 +53,10 @@ func ForTestDatabase(ref *Ref, database string) (*Ref, error) {
 		return nil, err
 	}
 	u, err := url.Parse(dsn)
-	if err != nil || u.Query().Get("passfile") != "" {
+	if err != nil {
+		return nil, ErrUnsupported
+	}
+	if _, referenced := u.Query()["passfile"]; referenced {
 		return nil, ErrUnsupported
 	}
 	u.Path = "/" + database

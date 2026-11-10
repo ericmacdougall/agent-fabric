@@ -103,12 +103,27 @@ func Open(t *testing.T) *store.Store {
 	return st
 }
 
+// fixtureFactories is per call so an isolated regression can exercise real
+// filesystem failures after provisioning without global mutable hooks.
+type fixtureFactories struct {
+	directory  func(string) (string, error)
+	credential func(string, connref.Purpose, string, string, string) (*connref.Fixture, error)
+}
+
 // AppRunnerDSNs gives the test database least-privilege roles and returns
 // directly authenticated app and runner DSNs with distinct test-only passwords.
 // The roles are cluster-wide, so they carry this process's id and are dropped
 // at the end of the test.
 func AppRunnerDSNs(t *testing.T, st *store.Store) (string, string) {
 	t.Helper()
+	return appRunnerDSNs(t, st, fixtureFactories{directory: connref.NewFixtureDirectory, credential: connref.NewFixture})
+}
+
+func appRunnerDSNs(t *testing.T, st *store.Store, factories fixtureFactories) (string, string) {
+	t.Helper()
+	// Register the parent directory's cleanup before role provisioning, so it
+	// cannot erase partial fixtures before the coordinator below closes them.
+	fixtureParent := t.TempDir()
 	r := store.Roles{Prefix: fmt.Sprintf("fabric_s%d", os.Getpid())}
 	// Random per call: these are cluster-wide LOGIN roles and the test cluster
 	// may host other databases, so no fixed or guessable password is used.
@@ -123,28 +138,49 @@ func AppRunnerDSNs(t *testing.T, st *store.Store) (string, string) {
 	if err := st.ApplyRoles(context.Background(), r, appPassword, runnerPassword); err != nil {
 		t.Fatal("apply test roles failed")
 	}
-	fixtureDir, err := connref.NewFixtureDirectory(t.TempDir())
+	// This registration is deliberately the first action after provisioning:
+	// a fatal directory/app/runner setup error must still remove owned roles.
+	var fixtureDir string
+	var appRef, runnerRef *connref.Fixture
+	t.Cleanup(func() {
+		// Callers register connection/pool cleanup after this helper returns,
+		// so LIFO closes those users first. These refs live through role cleanup.
+		for _, n := range []string{r.App(), r.Runner(), r.Scheduler()} {
+			if _, err := st.Pool().Exec(context.Background(), "DROP OWNED BY "+n); err != nil {
+				t.Error("cleanup test role ownership failed")
+			}
+			if _, err := st.Pool().Exec(context.Background(), "DROP ROLE "+n); err != nil {
+				t.Error("cleanup test role failed")
+			}
+		}
+		if runnerRef != nil {
+			if err := runnerRef.Close(); err != nil {
+				t.Error("cleanup runner credential fixture failed")
+			}
+		}
+		if appRef != nil {
+			if err := appRef.Close(); err != nil {
+				t.Error("cleanup app credential fixture failed")
+			}
+		}
+		if fixtureDir != "" {
+			if err := os.Remove(fixtureDir); err != nil && !os.IsNotExist(err) {
+				t.Error("cleanup credential fixture directory failed")
+			}
+		}
+	})
+	fixtureDir, err := factories.directory(fixtureParent)
 	if err != nil {
 		t.Fatal("create private credential fixture directory failed")
 	}
-	appRef, err := connref.NewFixture(DSN, connref.App, r.App(), appPassword, fixtureDir)
+	appRef, err = factories.credential(DSN, connref.App, r.App(), appPassword, fixtureDir)
 	if err != nil {
 		t.Fatal("create app credential fixture failed")
 	}
-	t.Cleanup(func() { appRef.Close() })
-	runnerRef, err := connref.NewFixture(DSN, connref.Runner, r.Runner(), runnerPassword, fixtureDir)
+	runnerRef, err = factories.credential(DSN, connref.Runner, r.Runner(), runnerPassword, fixtureDir)
 	if err != nil {
 		t.Fatal("create runner credential fixture failed")
 	}
-	t.Cleanup(func() { runnerRef.Close() })
-	// Cleanup is LIFO: roles still have their authenticated stores/fixtures;
-	// then fixtures close, then the private directory and caller's store.
-	t.Cleanup(func() {
-		for _, n := range []string{r.App(), r.Runner(), r.Scheduler()} {
-			st.Pool().Exec(context.Background(), "DROP OWNED BY "+n) //nolint:errcheck
-			st.Pool().Exec(context.Background(), "DROP ROLE "+n)     //nolint:errcheck
-		}
-	})
 	app, err := appRef.DSN()
 	if err != nil {
 		t.Fatal("app credential fixture unavailable")

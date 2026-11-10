@@ -14,14 +14,36 @@ but its allowed field remains `FABRIC_RUNNER_DSN`: changing a variable name
 does not change the connection's purpose. Review connection values and file
 metadata are removed from the worker parent environment after resolution.
 
+When a role is provisioned from an existing raw password file, Linux clients
+can reuse that exact source with `FABRIC_DSN_PASSWORD_FILE`. In this mode,
+`FABRIC_DSN` contains only approved nonsecret connection metadata: a PostgreSQL
+URL with username, server, database and supported options, with no password.
+The client reads the protected raw source and builds the sealed exact passfile
+inside its own process. It does not construct a password-bearing URL or write
+another operational credential file. This also applies to test, runner and
+review connection names and to configurable runner variable names.
+
+The password-only mode is exclusive with the full DSN file and field selector.
+It trims surrounding whitespace exactly as the role password loader does,
+then refuses an empty effective password or embedded NUL/CR/LF. Connection
+purpose labels supply no database authority: the actual expected server,
+database, role identity and denied privileges still require authenticated
+checks under the operation profile.
+
 File mode requires a bounded regular file owned by the client user with no
 group or other access. Path components are opened without following symbolic
 links and must be controlled by the user or root. Root-owned sticky temporary
 directories are permitted. Duplicate data fields, shell expressions, malformed
-URLs, unknown connection options, conflicting nonempty raw variables and
+URLs, unknown connection options, conflicting raw variables and
 ambient `PG*` settings are refused. The trusted operation launcher must establish
 its clean environment **before** interpreter and dynamic-loader startup;
 client-side checks do not replace that boundary.
+
+Reference configuration is presence-aware. Setting `_FILE`, `_PASSWORD_FILE`
+or `_FILE_KEY` to an empty value is an error and never falls back to a raw
+variable or skips a required test. Unset a mode to disable it. A full DSN file
+cannot be combined with any raw variable presence; password-only mode requires
+the nonempty, password-free metadata variable.
 
 Supported URL options are `sslmode`, `connect_timeout` (1–120 seconds), and
 the fixed versioned application names `fabd`, `fabd-install`, and `fab-tui`.

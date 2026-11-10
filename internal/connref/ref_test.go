@@ -34,7 +34,9 @@ func fixtureURL() string {
 
 func load(t *testing.T) *Ref {
 	t.Helper()
-	t.Setenv("FABRIC_TEST_DSN", "")
+	unsetEnv(t, "FABRIC_TEST_DSN")
+	unsetEnv(t, "FABRIC_TEST_DSN_FILE_KEY")
+	unsetEnv(t, "FABRIC_TEST_DSN_PASSWORD_FILE")
 	t.Setenv("FABRIC_TEST_DSN_FILE", source(t, fixtureURL()))
 	r, err := ResolveEnv("FABRIC_TEST_DSN", TestAdmin)
 	if err != nil {
@@ -52,6 +54,10 @@ func config(t *testing.T, r *Ref, db string) {
 	}
 	if strings.Contains(dsn, syntheticPassword) || strings.Contains(dsn, url.QueryEscape(syntheticPassword)) || strings.Contains(dsn, "password=") {
 		t.Fatal("secret appeared in connection reference")
+	}
+	u, parseErr := url.Parse(dsn)
+	if parseErr != nil || u.Query().Get("passfile") == "" {
+		t.Fatal("synthetic reference omitted its explicit passfile")
 	}
 	cfg, err := pgconn.ParseConfig(dsn)
 	if err != nil {
@@ -124,8 +130,10 @@ func TestSealedPassfileAndClose(t *testing.T) {
 }
 
 func TestPurposeIndependentOfConfigName(t *testing.T) {
+	unsetEnv(t, "CUSTOM_RUNNER_PASSWORD_FILE")
+	unsetEnv(t, "CUSTOM_RUNNER_FILE_KEY")
 	p := source(t, "FABRIC_DSN="+fixtureURL()+"\nFABRIC_RUNNER_DSN="+fixtureURL()+"\n")
-	t.Setenv("CUSTOM_RUNNER", "")
+	unsetEnv(t, "CUSTOM_RUNNER")
 	t.Setenv("CUSTOM_RUNNER_FILE", p)
 	t.Setenv("CUSTOM_RUNNER_FILE_KEY", "FABRIC_DSN")
 	if _, err := ResolveEnv("CUSTOM_RUNNER", Runner); err == nil {
@@ -140,6 +148,9 @@ func TestPurposeIndependentOfConfigName(t *testing.T) {
 }
 
 func TestUnsafeInputsRefuseWithoutEcho(t *testing.T) {
+	for _, suffix := range []string{"", "_FILE", "_PASSWORD_FILE", "_FILE_KEY"} {
+		unsetEnv(t, "FABRIC_DSN"+suffix)
+	}
 	for name, body := range map[string]string{
 		"duplicate":      "FABRIC_DSN=" + fixtureURL() + "\nFABRIC_DSN=" + fixtureURL() + "\n",
 		"shell":          "FABRIC_DSN=$(printf forbidden)\n",
@@ -148,7 +159,7 @@ func TestUnsafeInputsRefuseWithoutEcho(t *testing.T) {
 		"nul":            fixtureURL() + "\x00",
 	} {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("FABRIC_DSN", "")
+			unsetEnv(t, "FABRIC_DSN")
 			t.Setenv("FABRIC_DSN_FILE", source(t, body))
 			if name == "duplicate" || name == "shell" {
 				t.Setenv("FABRIC_DSN_FILE_KEY", "FABRIC_DSN")
@@ -165,7 +176,7 @@ func TestUnsafeInputsRefuseWithoutEcho(t *testing.T) {
 	for _, variant := range []string{"public", "symlink", "directory", "both", "pg override"} {
 		t.Run(variant, func(t *testing.T) {
 			p := source(t, fixtureURL())
-			t.Setenv("FABRIC_DSN", "")
+			unsetEnv(t, "FABRIC_DSN")
 			if variant == "public" {
 				os.Chmod(p, 0644)
 			}
@@ -252,6 +263,9 @@ func TestConcurrentReferencesRemainIndependent(t *testing.T) {
 }
 
 func TestConnectionMetadataCannotTransportCredential(t *testing.T) {
+	for _, suffix := range []string{"", "_FILE", "_PASSWORD_FILE", "_FILE_KEY"} {
+		unsetEnv(t, "FABRIC_DSN"+suffix)
+	}
 	for _, encoded := range []bool{false, true} {
 		t.Run(fmt.Sprint(encoded), func(t *testing.T) {
 			const marker = "SYNTHETIC_LONG_CANARY"
@@ -262,7 +276,7 @@ func TestConnectionMetadataCannotTransportCredential(t *testing.T) {
 				value = "%53YNTHETIC_LONG_CANARY"
 			}
 			u.RawQuery = "sslmode=disable&application_name=" + value
-			t.Setenv("FABRIC_DSN", "")
+			unsetEnv(t, "FABRIC_DSN")
 			t.Setenv("FABRIC_DSN_FILE", source(t, u.String()))
 			r, err := ResolveEnv("FABRIC_DSN", App)
 			if r != nil {
@@ -276,7 +290,7 @@ func TestConnectionMetadataCannotTransportCredential(t *testing.T) {
 			}
 		})
 	}
-	t.Setenv("FABRIC_DSN", "")
+	unsetEnv(t, "FABRIC_DSN")
 	u, _ := url.Parse(fixtureURL())
 	u.RawQuery = "sslmode=disable&application_name=fabd"
 	t.Setenv("FABRIC_DSN_FILE", source(t, u.String()))
@@ -286,4 +300,93 @@ func TestConnectionMetadataCannotTransportCredential(t *testing.T) {
 	}
 	defer r.Close()
 	config(t, r, "postgres")
+}
+
+func TestConfiguredEmptyReferenceNeverUsesLegacy(t *testing.T) {
+	for _, suffix := range []string{"_FILE", "_PASSWORD_FILE", "_FILE_KEY"} {
+		for _, legacy := range []bool{false, true} {
+			t.Run(suffix+fmt.Sprint(legacy), func(t *testing.T) {
+				for _, name := range []string{"FABRIC_DSN", "FABRIC_DSN_FILE", "FABRIC_DSN_PASSWORD_FILE", "FABRIC_DSN_FILE_KEY"} {
+					unsetEnv(t, name)
+				}
+				if legacy {
+					t.Setenv("FABRIC_DSN", fixtureURL())
+				}
+				t.Setenv("FABRIC_DSN"+suffix, "")
+				r, err := ResolveEnv("FABRIC_DSN", App)
+				if r != nil {
+					r.Close()
+				}
+				if err == nil {
+					t.Fatal("configured empty reference fell back to a legacy value")
+				}
+			})
+		}
+	}
+}
+
+func TestPasswordFileSourceReuse(t *testing.T) {
+	for _, name := range []string{"FABRIC_TEST_DSN", "FABRIC_TEST_DSN_FILE", "FABRIC_TEST_DSN_PASSWORD_FILE", "FABRIC_TEST_DSN_FILE_KEY"} {
+		unsetEnv(t, name)
+	}
+	u, _ := url.Parse(fixtureURL())
+	u.User = url.User("fixture_admin")
+	t.Setenv("FABRIC_TEST_DSN", u.String())
+	t.Setenv("FABRIC_TEST_DSN_PASSWORD_FILE", source(t, " \t"+syntheticPassword+"\u0085\n"))
+	r, err := ResolveEnv("FABRIC_TEST_DSN", TestAdmin)
+	if err != nil {
+		t.Fatal("password-only source refused")
+	}
+	defer r.Close()
+	config(t, r, "postgres")
+	child, err := r.ForDatabase("fabric_password_fixture")
+	if err != nil {
+		t.Fatal("password-only source derivation refused")
+	}
+	defer child.Close()
+	r.Close()
+	config(t, child, "fabric_password_fixture")
+}
+
+func TestPasswordFileModeRejectsInvalidSourcesAndMetadata(t *testing.T) {
+	cases := map[string]struct{ metadata, body string }{
+		"empty":            {"postgres://fixture_admin@127.0.0.1/postgres?sslmode=disable", " \t\r\n"},
+		"embedded newline": {"postgres://fixture_admin@127.0.0.1/postgres?sslmode=disable", "one\ntwo"},
+		"userinfo":         {fixtureURL(), syntheticPassword},
+		"query":            {"postgres://fixture_admin@127.0.0.1/postgres?sslmode=disable&password=forbidden", syntheticPassword},
+		"metadata":         {"postgres://fixture_admin@127.0.0.1/postgres?sslmode=disable&application_name=forbidden", syntheticPassword},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			unsetEnv(t, "FABRIC_DSN_FILE")
+			unsetEnv(t, "FABRIC_DSN_FILE_KEY")
+			t.Setenv("FABRIC_DSN", c.metadata)
+			t.Setenv("FABRIC_DSN_PASSWORD_FILE", source(t, c.body))
+			r, err := ResolveEnv("FABRIC_DSN", App)
+			if r != nil {
+				r.Close()
+			}
+			if err == nil {
+				t.Fatal("invalid password-source configuration accepted")
+			}
+			if strings.Contains(err.Error(), "forbidden") || strings.Contains(err.Error(), syntheticPassword) {
+				t.Fatal("password-source error echoed input")
+			}
+		})
+	}
+}
+
+func unsetEnv(t *testing.T, name string) {
+	t.Helper()
+	before, present := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatal("clear synthetic environment")
+	}
+	t.Cleanup(func() {
+		if present {
+			os.Setenv(name, before)
+		} else {
+			os.Unsetenv(name)
+		}
+	})
 }

@@ -60,28 +60,61 @@ func (p Purpose) field() string {
 	return ""
 }
 
-// ResolveEnv preserves the legacy raw variable when no file is configured.
-// FILE mode rejects ambient PG settings; the trusted caller must also supply
-// a clean environment before interpreter/dynamic-loader startup.
+// HasReferenceConfig distinguishes an explicitly configured empty reference
+// from an absent mode. Optional tests and compatibility paths must use presence.
+func HasReferenceConfig(name string) bool {
+	for _, suffix := range []string{"_FILE", "_PASSWORD_FILE", "_FILE_KEY"} {
+		if _, set := os.LookupEnv(name + suffix); set {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveEnv accepts one source mode. Any explicit reference configuration
+// is presence-aware and cannot fall back to a raw variable after failure.
 func ResolveEnv(name string, purpose Purpose) (*Ref, error) {
 	if !configName.MatchString(name) || purpose.field() == "" {
 		return nil, errReference
 	}
-	raw, path, key := os.Getenv(name), os.Getenv(name+"_FILE"), os.Getenv(name+"_FILE_KEY")
-	if path == "" {
-		if key != "" {
-			return nil, errReference
-		}
-		return &Ref{dsn: raw, purpose: purpose}, nil // compatibility; agent operations use protected files
+	raw, rawSet := os.LookupEnv(name)
+	path, fileSet := os.LookupEnv(name + "_FILE")
+	passwordPath, passwordSet := os.LookupEnv(name + "_PASSWORD_FILE")
+	key, keySet := os.LookupEnv(name + "_FILE_KEY")
+	if !fileSet && !passwordSet && !keySet {
+		return &Ref{dsn: raw, purpose: purpose}, nil // pre-existing raw-variable compatibility only
 	}
-	if raw != "" || (key != "" && key != purpose.field()) {
+	// Explicitly empty modes never become legacy raw inputs. A key is only
+	// meaningful with a full DSN file; password mode takes nonsecret metadata.
+	if (fileSet && (path == "" || rawSet || passwordSet)) ||
+		(passwordSet && (passwordPath == "" || !rawSet || raw == "" || fileSet || keySet)) ||
+		(keySet && (!fileSet || key == "" || key != purpose.field())) {
 		return nil, errReference
 	}
 	for _, pair := range os.Environ() {
-		name, _, _ := strings.Cut(pair, "=")
-		if strings.HasPrefix(name, "PG") {
+		envName, _, _ := strings.Cut(pair, "=")
+		if strings.HasPrefix(envName, "PG") {
 			return nil, errReference
 		}
+	}
+	if passwordSet {
+		// Validate metadata before reading any secret, and never reconstruct a
+		// password URL. The exact same parser/static metadata contract is shared.
+		m, err := parsePasswordMaterial(raw, "")
+		if err != nil {
+			return nil, err
+		}
+		body, err := readProtected(passwordPath)
+		if err != nil {
+			return nil, err
+		}
+		password := strings.TrimSpace(string(body)) // matches the roles CLI loader
+		if password == "" || strings.ContainsAny(password, "\x00\r\n") {
+			return nil, errReference
+		}
+		m.password = password
+		m.purpose = purpose
+		return makeRef(m, strings.TrimPrefix(m.base.Path, "/"))
 	}
 	body, err := readProtected(path)
 	if err != nil {

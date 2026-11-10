@@ -25,7 +25,9 @@ func syntheticConnectionFile(t *testing.T, body string) string {
 func TestAppConnectionUsesProtectedFile(t *testing.T) {
 	const marker = "synthetic-connection-fixture"
 	u := &url.URL{Scheme: "postgres", Host: "127.0.0.1:5544", Path: "/fabric_fixture", User: url.UserPassword("fixture", marker), RawQuery: "sslmode=disable"}
-	t.Setenv("FABRIC_DSN", "")
+	unsetConnectionEnv(t, "FABRIC_DSN")
+	unsetConnectionEnv(t, "FABRIC_DSN_PASSWORD_FILE")
+	unsetConnectionEnv(t, "FABRIC_DSN_FILE_KEY")
 	t.Setenv("FABRIC_DSN_FILE", syntheticConnectionFile(t, u.String()))
 	dsn, credential, err := appConnection()
 	if err != nil {
@@ -44,7 +46,9 @@ func TestAppConnectionUsesProtectedFile(t *testing.T) {
 func TestReviewFileReferenceIsOwnedAndRemovedFromEnvironment(t *testing.T) {
 	const marker = "synthetic-review-fixture"
 	u := &url.URL{Scheme: "postgres", Host: "127.0.0.1:5432", Path: "/fabric_fixture", User: url.UserPassword("fixture", marker), RawQuery: "sslmode=disable"}
-	t.Setenv("FABRIC_REVIEW_DSN", "")
+	unsetConnectionEnv(t, "FABRIC_REVIEW_DSN")
+	unsetConnectionEnv(t, "FABRIC_REVIEW_DSN_PASSWORD_FILE")
+	unsetConnectionEnv(t, "FABRIC_REVIEW_DSN_FILE_KEY")
 	t.Setenv("FABRIC_REVIEW_DSN_FILE", syntheticConnectionFile(t, "FABRIC_REVIEW_DSN="+u.String()+"\n"))
 	t.Setenv("FABRIC_REVIEW_DSN_FILE_KEY", "FABRIC_REVIEW_DSN")
 	dsn, credential, err := takeReviewDSN()
@@ -68,9 +72,14 @@ func TestReviewFileReferenceIsOwnedAndRemovedFromEnvironment(t *testing.T) {
 }
 
 func TestWorkerPortsResolveCustomRunnerReference(t *testing.T) {
-	t.Setenv("FABRIC_DSN", "")
+	unsetConnectionEnv(t, "FABRIC_DSN_FILE")
+	unsetConnectionEnv(t, "FABRIC_DSN")
+	unsetConnectionEnv(t, "FABRIC_DSN_PASSWORD_FILE")
+	unsetConnectionEnv(t, "FABRIC_DSN_FILE_KEY")
 	t.Setenv("FABRIC_RUNNER_DSN_ENV", "CUSTOM_RUNNER")
-	t.Setenv("CUSTOM_RUNNER", "")
+	unsetConnectionEnv(t, "CUSTOM_RUNNER")
+	unsetConnectionEnv(t, "CUSTOM_RUNNER_PASSWORD_FILE")
+	unsetConnectionEnv(t, "CUSTOM_RUNNER_FILE_KEY")
 	t.Setenv("CUSTOM_RUNNER_FILE", syntheticConnectionFile(t, "postgres://fixture:synthetic@127.0.0.1:5545/fabric_fixture?sslmode=disable"))
 	if got := workerTCPPorts(); !slices.Equal(got, []int{443, 5545}) {
 		t.Fatal("custom runner reference port was not allowed")
@@ -78,5 +87,38 @@ func TestWorkerPortsResolveCustomRunnerReference(t *testing.T) {
 	t.Setenv("CUSTOM_RUNNER_FILE_KEY", "FABRIC_DSN")
 	if got := workerTCPPorts(); !slices.Equal(got, []int{443}) {
 		t.Fatal("invalid runner purpose granted database access")
+	}
+}
+
+func TestAppPasswordFileReusesProtectedSource(t *testing.T) {
+	for _, name := range []string{"FABRIC_DSN", "FABRIC_DSN_FILE", "FABRIC_DSN_FILE_KEY", "FABRIC_DSN_PASSWORD_FILE"} {
+		unsetConnectionEnv(t, name)
+	}
+	const marker = "synthetic-reused-password"
+	path := syntheticConnectionFile(t, " \t"+marker+"\n")
+	// The existing role provisioning loader and the connection both consume
+	// this single source. Neither writes another operational credential file.
+	effective, err := readSecret(path)
+	if err != nil || effective != marker {
+		t.Fatal("role password loader source mismatch")
+	}
+	t.Setenv("FABRIC_DSN", "postgres://fixture@127.0.0.1:5432/fabric_fixture?sslmode=disable")
+	t.Setenv("FABRIC_DSN_PASSWORD_FILE", path)
+	dsn, credential, err := appConnection()
+	if err != nil {
+		t.Fatal("app password-file connection refused")
+	}
+	defer credential.Close()
+	u, err := url.Parse(dsn)
+	if err != nil || u.Query().Get("passfile") == "" || strings.Contains(dsn, marker) {
+		t.Fatal("app password reference is not secret-free")
+	}
+	cfg, err := pgconn.ParseConfig(dsn)
+	if err != nil || cfg.Password != effective {
+		t.Fatal("client and role loader did not reuse the same source")
+	}
+	files, err := os.ReadDir(filepath.Dir(path))
+	if err != nil || len(files) != 1 {
+		t.Fatal("password-only reference created another persistent source")
 	}
 }

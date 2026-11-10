@@ -16,7 +16,7 @@ import (
 // NOTIFY must arrive as a wake well inside a backoff that would otherwise
 // hide its loss. Changing the channel name on either side makes this fail.
 func TestWakeNotifyReachesListenerOverPostgres(t *testing.T) {
-	if os.Getenv("FABRIC_TEST_DSN") == "" && os.Getenv("FABRIC_TEST_DSN_FILE") == "" {
+	if os.Getenv("FABRIC_TEST_DSN") == "" && !connref.HasReferenceConfig("FABRIC_TEST_DSN") {
 		t.Skip("set FABRIC_TEST_DSN or FABRIC_TEST_DSN_FILE (a disposable PostgreSQL) to run the LISTEN test")
 	}
 	ref, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)
@@ -69,7 +69,7 @@ func TestWakeNotifyReachesListenerOverPostgres(t *testing.T) {
 // fail at once ("fabd: LISTEN wait failed") and sleep, so Run would quietly
 // fall back to polling; that shows here as a recorded sleep.
 func TestWakeListenerSurvivesIdleDeadlines(t *testing.T) {
-	if os.Getenv("FABRIC_TEST_DSN") == "" && os.Getenv("FABRIC_TEST_DSN_FILE") == "" {
+	if os.Getenv("FABRIC_TEST_DSN") == "" && !connref.HasReferenceConfig("FABRIC_TEST_DSN") {
 		t.Skip("set FABRIC_TEST_DSN or FABRIC_TEST_DSN_FILE (a disposable PostgreSQL) to run the LISTEN test")
 	}
 	ref, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)

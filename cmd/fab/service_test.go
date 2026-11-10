@@ -67,7 +67,7 @@ func TestWithStoreServiceReturnsRealErrors(t *testing.T) {
 
 func serviceTestDSN(t *testing.T) string {
 	t.Helper()
-	if os.Getenv("FABRIC_TEST_DSN") == "" && os.Getenv("FABRIC_TEST_DSN_FILE") == "" {
+	if os.Getenv("FABRIC_TEST_DSN") == "" && !connref.HasReferenceConfig("FABRIC_TEST_DSN") {
 		t.Skip("FABRIC_TEST_DSN or FABRIC_TEST_DSN_FILE is not set")
 	}
 	ref, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)

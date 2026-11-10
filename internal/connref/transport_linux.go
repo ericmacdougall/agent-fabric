@@ -82,14 +82,28 @@ func readProtected(path string) ([]byte, error) {
 	return body[:n], nil
 }
 
-func parseMaterial(dsn string) (*material, error) {
+func parseMaterial(dsn string) (*material, error) { return parseWithPassword(dsn, nil) }
+
+func parsePasswordMaterial(dsn, password string) (*material, error) {
+	return parseWithPassword(dsn, &password)
+}
+
+func parseWithPassword(dsn string, supplied *string) (*material, error) {
 	u, err := url.Parse(dsn)
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.User == nil || u.Fragment != "" {
 		return nil, errReference
 	}
-	password, ok := u.User.Password()
+	password, present := u.User.Password()
+	if supplied != nil {
+		if present {
+			return nil, errReference
+		}
+		password = *supplied
+	} else if !present {
+		return nil, errReference
+	}
 	host, user, db := u.Hostname(), u.User.Username(), strings.TrimPrefix(u.Path, "/")
-	if !ok || !validField(host) || strings.Contains(host, ",") || !validField(user) || !validField(db) || len(db) > 63 || strings.ContainsAny(password, "\x00\r\n") {
+	if !validField(host) || strings.Contains(host, ",") || !validField(user) || !validField(db) || len(db) > 63 || strings.ContainsAny(password, "\x00\r\n") {
 		return nil, errReference
 	}
 	port := u.Port()
