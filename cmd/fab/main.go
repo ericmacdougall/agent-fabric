@@ -137,6 +137,7 @@ func usage() {
   serve-metrics [--listen 127.0.0.1:9464] [--allow-remote] [--timeout D]   GET /metrics; loopback only by default
   tui [--interval 2s] [--timeout 1s] [--no-color] [--keys on|off]   read-only terminal view (fab tui -h: keys)
   control export [--since CURSOR]      mc.event/1 lines + cursor for Mission Control (read-only)
+  control ingest --source NAME         validate mc.event/1 lines on stdin, store in control.ingested_events
   version                              build revision
   harness run --adapter native --grant F --events F   run a native mission through the harness seam; record and check its event trace
   ladder status --state F --policy F [--json]   model ladder from an escalation.py state file (read-only)
