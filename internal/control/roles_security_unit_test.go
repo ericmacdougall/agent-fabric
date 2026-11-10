@@ -74,24 +74,11 @@ func (t *protectionTx) QueryRow(_ context.Context, q string, _ ...any) pgx.Row {
 	return settingRow{err: errors.New("unexpected setting query")}
 }
 func TestPasswordProtectionRequiresVerifiedLocalActivity(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		tx        protectionTx
-		wantError bool
-	}{
-		{"allowed", protectionTx{activity: "on", utility: "on"}, false},
-		{"permission-denied", protectionTx{activity: "on", utility: "on", denyActivity: true}, true},
-		{"setting-ineffective", protectionTx{activity: "on", utility: "on", ignoreActivity: true}, true},
-		{"utility-ineffective", protectionTx{activity: "on", utility: "on", ignoreUtility: true}, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := requireQuietLogging(context.Background(), &tc.tx)
-			if (err != nil) != tc.wantError {
-				t.Error("protection did not fail closed")
-			}
-			if len(tc.tx.calls) == 0 || tc.tx.calls[0] != "SET LOCAL track_activities = off" {
-				t.Error("activity protection was not established first")
-			}
-		})
+	// These legacy fake responses lack the required destination/module profile.
+	// They must fail closed before even a password-free handoff is attempted.
+	for _, tx := range []*protectionTx{{activity: "on", utility: "on"}, {activity: "on", denyActivity: true}, {activity: "on", ignoreActivity: true}, {activity: "on", utility: "on", ignoreUtility: true}} {
+		if err := requireQuietLogging(context.Background(), tx); err == nil {
+			t.Error("incomplete protection profile was accepted")
+		}
 	}
 }

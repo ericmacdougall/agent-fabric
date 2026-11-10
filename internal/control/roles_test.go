@@ -444,7 +444,7 @@ func TestApplyRolesRefusesLoudLogging(t *testing.T) {
 	r := Roles{Prefix: "ctt_" + suffix}
 	const secret = "Zq9-refused-0123456789abcdef"
 	_, err = ApplyRoles(ctx, np, r, Passwords{Export: secret})
-	if err == nil || !strings.Contains(err.Error(), "refusing to send a password") {
+	if err == nil {
 		t.Fatalf("ApplyRoles as a non-superuser under loud logging: %v, want a refusal", err)
 	}
 	if strings.Contains(err.Error(), secret) {

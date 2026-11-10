@@ -9,6 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"fabric/internal/passwordsql"
 )
 
 // Roles names the three database roles of the Control Room (goodqa#15586, spec
@@ -71,13 +73,7 @@ func columns(cols []string) string {
 }
 
 // redactErr drops the statement text from an error, which could hold a password.
-func redactErr(err error) error {
-	var pe interface{ SQLState() string }
-	if errors.As(err, &pe) {
-		return fmt.Errorf("sqlstate %s", pe.SQLState())
-	}
-	return errors.New("statement failed")
-}
+func redactErr(err error) error { return passwordsql.Safe(err) }
 
 // ApplyRoles creates or updates the three control roles and their grants. It
 // is idempotent, runs as the database owner in one transaction under an
@@ -86,65 +82,64 @@ func redactErr(err error) error {
 // already exist (fab control bootstrap).
 func ApplyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, pw Passwords) (changed bool, err error) {
 	if !rolePrefix.MatchString(r.Prefix) {
-		return false, fmt.Errorf("role prefix %q", r.Prefix)
+		return false, errors.New("invalid control role prefix")
 	}
-	conn, err := pool.Acquire(ctx)
+	for _, item := range []struct{ role, password string }{{r.Export(), pw.Export}, {r.Ingest(), pw.Ingest}, {r.Service(), pw.Service}} {
+		if !passwordsql.Valid(item.role, item.password) {
+			return false, passwordsql.ErrRefused
+		}
+	}
+	cfg, err := passwordsql.DedicatedConfig(pool.Config())
 	if err != nil {
 		return false, err
 	}
-	// On uncertain transaction completion or failed restoration checks, discard
-	// this physical connection rather than letting protected session state escape.
-	discard := false
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		return false, passwordsql.Safe(err)
+	}
+	committed := false
+	// A physical backend is never returned to any pool, including cancellation.
 	defer func() {
-		if discard {
-			conn.Hijack().Close(ctx) //nolint:errcheck // Close destroys even with an expired context
-		} else {
-			conn.Release()
+		closeErr := conn.Close(ctx)
+		if closeErr != nil && err == nil {
+			if committed {
+				err = errors.New("apply control roles: roles committed; dedicated connection close failed")
+			} else {
+				err = errors.New("apply control roles: dedicated connection close failed")
+			}
 		}
 	}()
 	withPassword := pw.Export != "" || pw.Ingest != "" || pw.Service != ""
-	var activityBefore string
-	if withPassword {
-		if err := conn.QueryRow(ctx, "SELECT current_setting('track_activities')").Scan(&activityBefore); err != nil {
-			return false, errors.New("apply control roles: cannot inspect activity tracking; no roles changed")
-		}
-	}
-	quote := func(v string) (string, error) {
-		q, err := conn.Conn().PgConn().EscapeString(v)
-		return "'" + q + "'", err
-	}
-	login := func(p string) (string, error) {
-		if p == "" {
-			return "NOLOGIN PASSWORD NULL", nil
-		}
-		q, err := quote(p)
-		return "LOGIN PASSWORD " + q, err
-	}
 	var db string
 	if err := conn.QueryRow(ctx, "SELECT current_database()").Scan(&db); err != nil {
-		return false, err
+		return false, passwordsql.Safe(err)
 	}
 	var haveControl bool
 	if err := conn.QueryRow(ctx, "SELECT to_regclass('control.ingested_events') IS NOT NULL").Scan(&haveControl); err != nil {
-		return false, err
+		return false, passwordsql.Safe(err)
 	}
 	if !haveControl {
 		return false, errors.New("the control schema does not exist: run fab control bootstrap first")
 	}
 	var stmts []string
-	before, err := rolesDigest(ctx, conn.Conn(), r)
+	passwordActions := map[string]struct{ role, password string }{}
+	before, err := rolesDigest(ctx, conn, r)
 	if err != nil {
-		return false, err
+		return false, passwordsql.Safe(err)
 	}
 	for _, c := range []struct{ name, pw string }{{r.Export(), pw.Export}, {r.Ingest(), pw.Ingest}, {r.Service(), pw.Service}} {
-		opts, err := login(c.pw)
-		if err != nil {
-			return false, redactErr(err)
+		opts := "NOLOGIN"
+		if c.pw == "" {
+			opts = "NOLOGIN PASSWORD NULL"
 		}
 		n := quoteID(c.name)
+		alter := fmt.Sprintf("ALTER ROLE %s NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION NOINHERIT %s", n, opts)
+		if c.pw != "" {
+			passwordActions[alter] = struct{ role, password string }{c.name, c.pw}
+		}
 		stmts = append(stmts,
 			fmt.Sprintf(`DO $do$ BEGIN CREATE ROLE %s NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $do$`, n),
-			fmt.Sprintf("ALTER ROLE %s NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION NOINHERIT %s", n, opts),
+			alter,
 			fmt.Sprintf("ALTER ROLE %s SET statement_timeout = '%s'", n, roleTimeout),
 			fmt.Sprintf("ALTER ROLE %s SET idle_in_transaction_session_timeout = '%s'", n, roleTimeout),
 			fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", quoteID(db), n),
@@ -187,28 +182,24 @@ func ApplyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, pw Passwords) 
 	}
 	tx, err := conn.Begin(ctx)
 	if err != nil {
-		return false, err
+		return false, passwordsql.Safe(err)
 	}
-	committed := false
+	var protection passwordsql.Protection
+	key := ""
 	defer func() {
 		if !committed {
-			if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-				discard = true
+			tx.Rollback(ctx)
+		} //nolint:errcheck // no rollback claim on failure
+		if withPassword && !conn.IsClosed() {
+			cleanupErr := protection.Restored(ctx, conn)
+			if key != "" && cleanupErr == nil {
+				cleanupErr = passwordsql.Empty(ctx, conn, key)
 			}
-		}
-		if conn.Conn().PgConn().TxStatus() != 'I' {
-			discard = true
-		}
-		if !discard && withPassword {
-			var restored string
-			if checkErr := conn.QueryRow(ctx, "SELECT current_setting('track_activities')").Scan(&restored); checkErr != nil || restored != activityBefore {
-				discard = true
-				if err == nil {
-					if committed {
-						err = errors.New("apply control roles: roles committed; session restoration could not be verified; connection discarded")
-					} else {
-						err = errors.New("apply control roles: session restoration could not be verified; connection discarded")
-					}
+			if cleanupErr != nil && err == nil {
+				if committed {
+					err = errors.New("apply control roles: roles committed; session cleanup could not be verified; dedicated connection closed")
+				} else {
+					err = errors.New("apply control roles: session cleanup could not be verified; dedicated connection closed")
 				}
 			}
 		}
@@ -217,21 +208,34 @@ func ApplyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, pw Passwords) 
 		return false, fmt.Errorf("apply control roles: %w", redactErr(err))
 	}
 	if withPassword {
-		if err := requireQuietLogging(ctx, tx); err != nil {
+		protection, err = passwordsql.Protect(ctx, tx)
+		if err != nil {
+			return false, err
+		}
+		key, err = passwordsql.NewKey()
+		if err != nil {
+			return false, err
+		}
+		if err := passwordsql.Preclaim(ctx, tx, key); err != nil {
 			return false, err
 		}
 	}
 	for _, q := range stmts {
+		if item, ok := passwordActions[q]; ok {
+			if err := passwordsql.Set(ctx, tx, key, item.role, item.password); err != nil {
+				return false, err
+			}
+			continue
+		}
 		if _, err := tx.Exec(ctx, q); err != nil {
 			return false, fmt.Errorf("apply control roles: %w", redactErr(err))
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		discard = true
 		return false, fmt.Errorf("apply control roles: commit outcome unconfirmed: %w", redactErr(err))
 	}
 	committed = true
-	after, err := rolesDigest(ctx, conn.Conn(), r)
+	after, err := rolesDigest(ctx, conn, r)
 	if err != nil {
 		return false, errors.New("apply control roles: roles committed; catalog readback failed")
 	}
@@ -258,59 +262,8 @@ func rolesDigest(ctx context.Context, conn *pgx.Conn, r Roles) (string, error) {
 	return d, err
 }
 
-// requireQuietLogging keeps a password literal out of the server log and out of
-// pg_stat_statements until the SCRAM verifier change (goodqa#15594) removes
-// plaintext: a failing ALTER ROLE ... PASSWORD is logged with its statement text
-// when log_min_error_statement is error or lower. A superuser sets the logging
-// settings for this transaction; any other caller must already run with
-// log_min_error_statement=panic, log_statement=none and
-// log_min_duration_statement=-1 (for example through PGOPTIONS). When pg_stat_statements
-// tracks utility statements it must be turned off for the transaction, or the run
-// is refused. A refusal sends no password.
+// requireQuietLogging is retained for callers of the focused guard control.
 func requireQuietLogging(ctx context.Context, tx pgx.Tx) error {
-	// Protect the outer transaction before any role mutation or plaintext SQL.
-	// Do not put this in a savepoint that could roll back the protection.
-	if _, err := tx.Exec(ctx, "SET LOCAL track_activities = off"); err != nil {
-		return errors.New("apply control roles: refusing to send a password: cannot disable activity tracking for this transaction")
-	}
-	var tracking string
-	if err := tx.QueryRow(ctx, "SELECT current_setting('track_activities')").Scan(&tracking); err != nil || tracking != "off" {
-		return errors.New("apply control roles: refusing to send a password: activity tracking protection cannot be verified")
-	}
-	var super bool
-	if err := tx.QueryRow(ctx, "SELECT rolsuper FROM pg_roles WHERE rolname = current_user").Scan(&super); err != nil {
-		return err
-	}
-	if super {
-		for _, q := range []string{
-			"SET LOCAL log_min_error_statement = panic",
-			"SET LOCAL log_statement = none",
-			"SET LOCAL log_min_duration_statement = -1",
-		} {
-			if _, err := tx.Exec(ctx, q); err != nil {
-				return errors.New("apply control roles: cannot set the logging parameters for this transaction")
-			}
-		}
-	}
-	var lmes, ls, lmd string
-	if err := tx.QueryRow(ctx, "SELECT current_setting('log_min_error_statement'), current_setting('log_statement'), current_setting('log_min_duration_statement')").Scan(&lmes, &ls, &lmd); err != nil {
-		return err
-	}
-	if lmes != "panic" || ls != "none" || lmd != "-1" {
-		return fmt.Errorf("apply control roles: refusing to send a password: log_min_error_statement=%s log_statement=%s log_min_duration_statement=%s would let the server log a failing ALTER ROLE statement with the password in it; connect with PGOPTIONS='-c log_min_error_statement=panic -c log_statement=none -c log_min_duration_statement=-1' (or wait for the SCRAM verifier change goodqa#15594)", lmes, ls, lmd)
-	}
-	var v *string
-	if err := tx.QueryRow(ctx, "SELECT current_setting('pg_stat_statements.track_utility', true)").Scan(&v); err != nil {
-		return err
-	}
-	if v == nil || *v == "off" {
-		return nil
-	}
-	if _, err := tx.Exec(ctx, "SET LOCAL pg_stat_statements.track_utility = off"); err != nil {
-		return errors.New("apply control roles: pg_stat_statements tracks utility statements and this session cannot turn that off; refusing to send a password (set pg_stat_statements.track_utility = off, or wait for the SCRAM verifier change goodqa#15594)")
-	}
-	if err := tx.QueryRow(ctx, "SELECT current_setting('pg_stat_statements.track_utility')").Scan(&tracking); err != nil || tracking != "off" {
-		return errors.New("apply control roles: refusing to send a password: utility tracking protection cannot be verified")
-	}
-	return nil
+	_, err := passwordsql.Protect(ctx, tx)
+	return err
 }

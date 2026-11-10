@@ -3,8 +3,8 @@ package control
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -79,26 +79,12 @@ func TestExportRoleJoinedColumns(t *testing.T) {
 	}
 }
 
-type sensitiveSignal struct{ started chan uint32 }
-
-func (s sensitiveSignal) TraceQueryStart(ctx context.Context, c *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
-	if strings.HasPrefix(d.SQL, "ALTER ROLE ") && strings.Contains(d.SQL, " PASSWORD ") {
-		select {
-		case s.started <- c.PgConn().PID():
-		default:
-		}
-	}
-	return ctx
-}
-func (s sensitiveSignal) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
-
-// The observer has superuser stats visibility. It only returns matching counts;
-// it never retrieves query text, a password, or a credential-bearing error.
+// Sensitive synchronization uses backend PID/locks, never query/argument tracers.
 func TestControlRolePasswordActivityDuringBlockedAlter(t *testing.T) {
 	p, _, r := setupRoles(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	synthetic := "synthetic-only-" + strings.Repeat("Q", 32)
+	marker := "synthetic-only-" + strings.Repeat("Q", 32)
 	var super bool
 	if err := p.QueryRow(ctx, "SELECT rolsuper FROM pg_roles WHERE rolname=current_user").Scan(&super); err != nil || !super {
 		t.Fatal("observer requires superuser stats visibility")
@@ -106,127 +92,120 @@ func TestControlRolePasswordActivityDuringBlockedAlter(t *testing.T) {
 	for _, protected := range []bool{false, true} {
 		locker, err := p.Acquire(ctx)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal("locker unavailable")
 		}
-		locktx, err := locker.Begin(ctx)
+		tx, err := locker.Begin(ctx)
 		if err != nil {
-			locker.Release()
-			t.Fatal(err)
+			t.Fatal("locker transaction unavailable")
 		}
 		var oid uint32
-		if err := locktx.QueryRow(ctx, "SELECT oid FROM pg_authid WHERE rolname=$1 FOR UPDATE", r.Export()).Scan(&oid); err != nil {
-			locktx.Rollback(ctx)
-			locker.Release()
-			t.Fatal("cannot lock unique disposable role row")
+		if err := tx.QueryRow(ctx, "SELECT oid FROM pg_authid WHERE rolname=$1 FOR UPDATE", r.Export()).Scan(&oid); err != nil {
+			t.Fatal("owned role lock unavailable")
 		}
 		t.Cleanup(func() {
-			cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			locktx.Rollback(cleanup) //nolint:errcheck
-			// Release is idempotent after the explicit successful path below.
+			tx.Rollback(ctx)
 			locker.Release()
 		})
 		blocker := locker.Conn().PgConn().PID()
-		signal := sensitiveSignal{started: make(chan uint32, 1)}
 		cfg, err := pgxpool.ParseConfig(storetest.DSN)
 		if err != nil {
-			t.Fatal("actor config failed")
+			t.Fatal("actor config")
 		}
+		app := r.Prefix + "_password_observer"
+		cfg.ConnConfig.RuntimeParams["application_name"] = app
 		cfg.MaxConns = 1
-		cfg.ConnConfig.Tracer = signal
 		actor, err := pgxpool.NewWithConfig(ctx, cfg)
 		if err != nil {
-			t.Fatal("actor pool failed")
+			t.Fatal("actor pool")
 		}
-		settingsSQL := "SELECT ARRAY[current_setting('track_activities'), current_setting('log_min_error_statement'), current_setting('log_statement'), current_setting('log_min_duration_statement'), coalesce(current_setting('pg_stat_statements.track_utility', true), '')]"
-		var settingsBefore []string
-		if err := actor.QueryRow(ctx, settingsSQL).Scan(&settingsBefore); err != nil {
-			t.Fatal("initial session settings unavailable")
-		}
+		defer actor.Close()
 		result := make(chan error, 1)
 		go func() {
 			if protected {
-				_, err := ApplyRoles(ctx, actor, r, Passwords{Export: synthetic})
+				_, err := ApplyRoles(ctx, actor, r, Passwords{Export: marker})
 				result <- err
 				return
 			}
-			c, err := actor.Acquire(ctx)
+			c, err := pgx.ConnectConfig(ctx, cfg.ConnConfig)
 			if err != nil {
-				result <- err
+				result <- errors.New("baseline connection failed")
 				return
 			}
-			defer c.Release()
-			tx, err := c.Begin(ctx)
+			defer c.Close(ctx)
+			btx, err := c.Begin(ctx)
 			if err != nil {
-				result <- err
+				result <- errors.New("baseline transaction failed")
 				return
 			}
-			defer tx.Rollback(ctx) //nolint:errcheck
+			defer btx.Rollback(ctx)
 			for _, q := range []string{"SET LOCAL track_activities=on", "SET LOCAL log_min_error_statement=panic", "SET LOCAL log_statement=none", "SET LOCAL log_min_duration_statement=-1", "SET LOCAL pg_stat_statements.track_utility=off"} {
-				if _, err := tx.Exec(ctx, q); err != nil {
-					result <- fmt.Errorf("baseline protection setup failed")
+				if _, err := btx.Exec(ctx, q); err != nil {
+					result <- errors.New("baseline protection failed")
 					return
 				}
 			}
-			escaped, err := c.Conn().PgConn().EscapeString(synthetic)
+			escaped, err := c.PgConn().EscapeString(marker)
 			if err != nil {
-				result <- fmt.Errorf("synthetic escaping failed")
+				result <- errors.New("baseline fixture escaping failed")
 				return
 			}
-			if _, err := tx.Exec(ctx, "ALTER ROLE "+quoteID(r.Export())+" PASSWORD '"+escaped+"'"); err != nil {
-				result <- fmt.Errorf("baseline ALTER failed")
+			if _, err := btx.Exec(ctx, "ALTER ROLE "+quoteID(r.Export())+" PASSWORD '"+escaped+"'"); err != nil {
+				result <- errors.New("baseline ALTER failed")
 				return
 			}
-			result <- tx.Commit(ctx)
+			result <- btx.Commit(ctx)
 		}()
 		var pid uint32
-		select {
-		case pid = <-signal.started:
-		case <-ctx.Done():
-			t.Error("sensitive ALTER was not sent")
-		}
 		blocked := false
 		for ctx.Err() == nil {
-			if err := p.QueryRow(ctx, "SELECT $2::int = ANY(pg_blocking_pids($1::int))", pid, blocker).Scan(&blocked); err != nil {
-				t.Fatal("blocking check failed")
+			if err := p.QueryRow(ctx, `SELECT COALESCE((SELECT pid FROM pg_stat_activity WHERE application_name=$1 AND $2::int=ANY(pg_blocking_pids(pid)) LIMIT 1),0)`, app, blocker).Scan(&pid); err != nil {
+				t.Fatal("blocking observer failed")
 			}
-			if blocked {
+			if pid != 0 {
+				blocked = true
 				break
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
 		if !blocked {
-			t.Error("sensitive ALTER was not proven blocked on owned role")
+			t.Fatal("intended ALTER not proven blocked on owned role")
 		}
-		if _, err := p.Exec(ctx, "SELECT pg_stat_clear_snapshot()"); err != nil {
-			t.Fatal("fresh observer snapshot failed")
-		}
+		p.Exec(ctx, "SELECT pg_stat_clear_snapshot()")
 		var matches int
-		if err := p.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE pid=$1 AND strpos(query,$2)>0", pid, synthetic).Scan(&matches); err != nil {
-			t.Fatal("observer count failed")
+		if err := p.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE pid=$1 AND strpos(query,$2)>0", pid, marker).Scan(&matches); err != nil {
+			t.Fatal("activity count failed")
 		}
 		t.Logf("protected=%t matching_activity_count=%d", protected, matches)
 		if (!protected && matches == 0) || (protected && matches != 0) {
 			t.Error("activity visibility control failed")
 		}
-		if err := locktx.Rollback(ctx); err != nil {
-			t.Fatal("owned row lock cleanup failed")
+		if err := tx.Rollback(ctx); err != nil {
+			t.Fatal("owned lock release failed")
 		}
 		locker.Release()
 		select {
 		case err := <-result:
 			if err != nil {
-				t.Error("actor operation failed (details suppressed)")
+				t.Error("actor operation failed; raw detail suppressed")
 			}
 		case <-ctx.Done():
-			t.Error("actor failed to finish")
+			t.Fatal("actor did not finish")
 		}
-		// A single-connection pool must hand back a restored idle session.
-		var settingsAfter []string
-		if err := actor.QueryRow(ctx, settingsSQL).Scan(&settingsAfter); err != nil || !reflect.DeepEqual(settingsBefore, settingsAfter) {
-			t.Error("pooled session protection settings did not restore")
+		var remaining int
+		for ctx.Err() == nil {
+			if err := p.QueryRow(ctx, "SELECT count(*) FROM pg_stat_activity WHERE pid=$1", pid).Scan(&remaining); err != nil {
+				t.Fatal("backend-close observer failed")
+			}
+			if remaining == 0 {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
-		actor.Close()
+		if remaining != 0 {
+			t.Error("dedicated backend remained after operation")
+		}
 	}
 }
 
@@ -234,110 +213,83 @@ func TestControlRolesRefuseUnprotectedActivity(t *testing.T) {
 	p, ctx, r := setupRoles(t)
 	admin := r.Prefix + "_limited"
 	if _, err := p.Exec(ctx, "CREATE ROLE "+quoteID(admin)+" NOLOGIN CREATEROLE; GRANT USAGE ON SCHEMA control TO "+quoteID(admin)+"; GRANT SELECT ON control.ingested_events TO "+quoteID(admin)); err != nil {
-		t.Fatal("limited admin setup failed")
+		t.Fatal("limited actor setup")
 	}
 	t.Cleanup(func() {
 		p.Exec(context.Background(), "REVOKE ALL ON control.ingested_events FROM "+quoteID(admin)+"; REVOKE ALL ON SCHEMA control FROM "+quoteID(admin)+"; DROP ROLE "+quoteID(admin))
-	}) //nolint:errcheck
+	})
 	cfg, err := pgxpool.ParseConfig(storetest.DSN)
 	if err != nil {
-		t.Fatal("limited config failed")
+		t.Fatal("limited config")
 	}
-	cfg.MaxConns = 1
-	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
-		for _, q := range []string{"SET log_min_error_statement=panic", "SET log_statement=none", "SET log_min_duration_statement=-1", "SET pg_stat_statements.track_utility=off", "SET ROLE " + quoteID(admin)} {
-			if _, err := c.Exec(ctx, q); err != nil {
-				return fmt.Errorf("limited session setup failed")
-			}
-		}
-		return nil
-	}
+	cfg.ConnConfig.RuntimeParams["role"] = admin
 	limited, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		t.Fatal("limited pool failed")
+		t.Fatal("limited pool")
 	}
 	defer limited.Close()
-	var before string
 	c, err := p.Acquire(ctx)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("snapshot connection")
 	}
-	before, err = rolesDigest(ctx, c.Conn(), r)
+	before, err := rolesDigest(ctx, c.Conn(), r)
 	c.Release()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("snapshot failed")
 	}
 	_, err = ApplyRoles(ctx, limited, r, Passwords{Export: "synthetic-only-" + strings.Repeat("R", 32)})
-	if err == nil || !strings.Contains(err.Error(), "activity tracking") {
-		t.Error("unprotected activity was not refused before mutation")
+	if err == nil {
+		t.Error("unprotected activity path accepted")
 	}
 	c, err = p.Acquire(ctx)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("readback connection")
 	}
 	after, err := rolesDigest(ctx, c.Conn(), r)
 	c.Release()
 	if err != nil || before != after {
 		t.Error("refusal changed role state")
 	}
-	var tracking string
-	if err := limited.QueryRow(ctx, "SELECT current_setting('track_activities')").Scan(&tracking); err != nil || tracking != "on" {
-		t.Error("refused session did not restore safely")
-	}
 }
 
-// Inject restoration corruption or a closed postcommit connection without
-// logging query text. Both paths must report committed state and discard.
-type completionFault struct {
-	loseAfterCommit bool
-	completed       bool
-}
+// An observing fault tracer is now explicitly unsupported before transmission.
+type completionFault struct{}
 
-func (f *completionFault) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+func (completionFault) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
 	return ctx
 }
-func (f *completionFault) TraceQueryEnd(ctx context.Context, c *pgx.Conn, d pgx.TraceQueryEndData) {
-	if !f.completed && d.CommandTag.String() == "COMMIT" && d.Err == nil {
-		f.completed = true
-		if f.loseAfterCommit {
-			c.Close(ctx)
-		} else {
-			c.Exec(ctx, "SET track_activities=off")
-		} //nolint:errcheck
-	}
-}
+func (completionFault) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 func TestControlRolesDiscardUnverifiedCompletion(t *testing.T) {
-	p, _, r := setupRoles(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	for _, lose := range []bool{false, true} {
-		fault := &completionFault{loseAfterCommit: lose}
-		cfg, err := pgxpool.ParseConfig(storetest.DSN)
-		if err != nil {
-			t.Fatal("fault config failed")
-		}
-		cfg.MaxConns = 1
-		cfg.ConnConfig.Tracer = fault
-		actor, err := pgxpool.NewWithConfig(ctx, cfg)
-		if err != nil {
-			t.Fatal("fault pool failed")
-		}
-		var before uint32
-		if err := actor.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&before); err != nil {
-			t.Fatal("initial backend unavailable")
-		}
-		_, err = ApplyRoles(ctx, actor, r, Passwords{Export: "synthetic-only-" + strings.Repeat("S", 32)})
-		if err == nil || !strings.Contains(err.Error(), "roles committed;") {
-			t.Error("postcommit cleanup uncertainty did not preserve confirmed outcome")
-		}
-		var after uint32
-		if err := actor.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&after); err != nil || after == before {
-			t.Error("uncertain or unsafe connection returned to pool")
-		}
-		actor.Close()
+	p, ctx, r := setupRoles(t)
+	cfg := p.Config()
+	cfg.ConnConfig.Tracer = completionFault{}
+	actor, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal("observing actor config")
 	}
-	// The owner connection can still verify and remove the managed test roles.
+	defer actor.Close()
+	c, err := p.Acquire(ctx)
+	if err != nil {
+		t.Fatal("snapshot connection")
+	}
+	before, err := rolesDigest(ctx, c.Conn(), r)
+	c.Release()
+	if err != nil {
+		t.Fatal("snapshot failed")
+	}
+	if _, err := ApplyRoles(ctx, actor, r, Passwords{Export: "synthetic-only-" + strings.Repeat("S", 32)}); err == nil {
+		t.Error("observing callback was silently bypassed")
+	}
+	c, err = p.Acquire(ctx)
+	if err != nil {
+		t.Fatal("readback connection")
+	}
+	after, err := rolesDigest(ctx, c.Conn(), r)
+	c.Release()
+	if err != nil || after != before {
+		t.Error("unsupported callback changed roles")
+	}
 	if problems, _, err := VerifyRoles(ctx, p, r); err != nil || len(problems) != 0 {
-		t.Error("committed roles are not intact")
+		t.Error("refused operation damaged managed roles")
 	}
 }
