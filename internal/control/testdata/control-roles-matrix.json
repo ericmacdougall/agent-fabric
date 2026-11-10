@@ -1,0 +1,47 @@
+{
+  "_comment": "Hand-written expectation for the three control roles (goodqa#15623 AC-1 to AC-3). It is a literal, not derived from the grant code: a wrong grant cannot also update this file. Anything not listed is expected to be denied.",
+  "tables": {
+    "export": {
+      "public.outbox": "SELECT",
+      "public.events": "SELECT"
+    },
+    "ingest": {
+      "control.allowed_sources": "SELECT"
+    },
+    "service": {
+      "public.events": "SELECT",
+      "public.outbox": "SELECT",
+      "public.outbox_cursors": "SELECT",
+      "public.missions": "SELECT",
+      "public.attempts": "SELECT",
+      "public.jobs": "SELECT",
+      "public.waits": "SELECT",
+      "control.ingested_events": "SELECT",
+      "control.mc_chat_mirror": "SELECT",
+      "control.mirror_states": "SELECT",
+      "control.mirror_refusals": "SELECT",
+      "control.allowed_sources": "SELECT",
+      "control.mc_chat_latest": "SELECT",
+      "control.proj_cursor": "SELECT,INSERT,UPDATE,DELETE",
+      "control.initiative_state": "SELECT,INSERT,UPDATE,DELETE",
+      "control.pulses": "SELECT,INSERT,UPDATE,DELETE"
+    }
+  },
+  "insert_columns": {
+    "ingest": {
+      "control.ingested_events": ["id", "ts", "kind", "source", "host", "actor", "initiative", "repo", "branch", "ref", "ticket", "summary", "severity", "count", "tenant"],
+      "control.mc_chat_mirror": ["id", "state", "origin", "ts", "mc_ts", "sender", "recipient", "body"]
+    }
+  },
+  "schema_usage": {
+    "export": ["public"],
+    "ingest": ["public", "control"],
+    "service": ["public", "control"]
+  },
+  "schema_create": [],
+  "database": {"connect": true, "create": false, "temp": true},
+  "control_function_execute": {"ingest": ["mirror_hash"]},
+  "definer_public_execute": ["agent_tool_calls_forward"],
+  "nondefiner_denied": ["fabric_review_gate_reject_runner"],
+  "functions": "no EXECUTE on any function in schema control or any SECURITY DEFINER function in public; the other functions in public keep PUBLIC's default EXECUTE"
+}

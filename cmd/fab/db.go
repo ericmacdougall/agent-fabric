@@ -25,8 +25,24 @@ func dbMain(args []string) error {
 		prefix := fs.String("prefix", "fabric", "role name prefix")
 		appPW := fs.String("app-password-file", "", "file holding the app role password (empty: NOLOGIN)")
 		runnerPW := fs.String("runner-password-file", "", "file holding the runner role password (empty: NOLOGIN)")
+		controlOnly := fs.Bool("control-only", false, "manage only the Control Room roles (never the fabric roles, scheduler_role or their passwords)")
+		exportPW := fs.String("export-password-file", "", "with --control-only: export role password file (empty: NOLOGIN)")
+		ingestPW := fs.String("ingest-password-file", "", "with --control-only: ingest role password file (empty: NOLOGIN)")
+		servicePW := fs.String("service-password-file", "", "with --control-only: service role password file (empty: NOLOGIN)")
+		verify := fs.Bool("verify", false, "with --control-only: report how the control roles differ from the design (read only)")
+		remove := fs.Bool("remove", false, "with --control-only: print the plan to drop the control roles (acts only with --confirm)")
+		confirm := fs.Bool("confirm", false, "with --control-only --remove: really drop the roles")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
+		}
+		if *controlOnly {
+			if *appPW != "" || *runnerPW != "" {
+				return usageError{errors.New("fab db roles --control-only never touches the fabric roles: drop --app-password-file and --runner-password-file")}
+			}
+			return controlRolesMain(*prefix, *exportPW, *ingestPW, *servicePW, *verify, *remove, *confirm)
+		}
+		if *exportPW != "" || *ingestPW != "" || *servicePW != "" || *verify || *remove || *confirm {
+			return usageError{errors.New("the control role flags need --control-only")}
 		}
 		app, err := readSecret(*appPW)
 		if err != nil {
