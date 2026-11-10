@@ -1078,6 +1078,19 @@ func (s *Store) Truncate(ctx context.Context) error {
 		`TRUNCATE commands, events, outbox, outbox_cursors, attempts, stale_observations, missions,
 		dispatch_grants, usage_receipts, reservation_events, reservations, hold_commands, resource_capacities RESTART IDENTITY CASCADE`,
 		"UPDATE slots SET cap = 4 WHERE id = 1",
+		// The Control Room schema (fab control bootstrap, goodqa#15586) exists
+		// only where it was bootstrapped. Its append-only source tables have no
+		// truncate exemption, so the owner's reset disarms their triggers for
+		// this transaction only (ALTER TABLE .. DISABLE TRIGGER is transactional).
+		`DO $$ BEGIN
+			IF to_regclass('control.ingested_events') IS NOT NULL THEN
+				ALTER TABLE control.ingested_events DISABLE TRIGGER USER;
+				ALTER TABLE control.mc_chat_mirror DISABLE TRIGGER USER;
+				TRUNCATE control.ingested_events, control.mc_chat_mirror, control.proj_cursor, control.initiative_state, control.pulses RESTART IDENTITY;
+				ALTER TABLE control.ingested_events ENABLE TRIGGER USER;
+				ALTER TABLE control.mc_chat_mirror ENABLE TRIGGER USER;
+			END IF;
+		END $$`,
 	} {
 		if _, err := tx.Exec(ctx, q); err != nil {
 			return err
