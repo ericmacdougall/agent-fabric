@@ -82,6 +82,8 @@ func main() {
 		err = harnessMain(os.Args[2:])
 	case "tui":
 		err = tuiMain(os.Args[2:])
+	case "control":
+		err = controlMain(os.Args[2:])
 	case "version":
 		err = versionMain(os.Args[2:])
 	case "migrate":
@@ -134,6 +136,7 @@ func usage() {
   metrics [--timeout D]                health metrics (Prometheus text format, read-only)
   serve-metrics [--listen 127.0.0.1:9464] [--allow-remote] [--timeout D]   GET /metrics; loopback only by default
   tui [--interval 2s] [--timeout 1s] [--no-color] [--keys on|off]   read-only terminal view (fab tui -h: keys)
+  control export [--since CURSOR]      mc.event/1 lines + cursor for Mission Control (read-only)
   version                              build revision
   harness run --adapter native --grant F --events F   run a native mission through the harness seam; record and check its event trace
   ladder status --state F --policy F [--json]   model ladder from an escalation.py state file (read-only)
