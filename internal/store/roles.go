@@ -304,6 +304,40 @@ func (s *Store) CheckRunnerRole(ctx context.Context) error {
 	if len(extra) > 0 {
 		return fmt.Errorf("runner role %s holds writes it must not have: %s", who, strings.Join(extra, ", "))
 	}
+	// goodqa#15623 AC-7: the runner has no business in the Control Room schema.
+	// Any privilege on a control table or view, or CREATE in the schema, held by
+	// the runner or by a role it is a member of (NOINHERIT included) is refused.
+	// Only the runner is checked here: a drifted control role is reported by
+	// `fab db roles --control-only --verify` and never stops fabd or a rollback.
+	var controlHit []string
+	crows, err := conn.Query(ctx, `SELECT DISTINCT 'schema control CREATE'
+			FROM pg_catalog.pg_roles r WHERE to_regnamespace('control') IS NOT NULL
+			AND pg_has_role(current_user, r.rolname, 'MEMBER') AND has_schema_privilege(r.oid, 'control', 'CREATE')
+		UNION SELECT DISTINCT 'control.' || c.relname
+			FROM pg_catalog.pg_class c JOIN pg_catalog.pg_roles r ON pg_has_role(current_user, r.rolname, 'MEMBER')
+			WHERE c.relnamespace = to_regnamespace('control') AND c.relkind IN ('r', 'p', 'v', 'f')
+			AND (has_table_privilege(r.oid, c.oid, 'SELECT') OR has_table_privilege(r.oid, c.oid, 'DELETE')
+			  OR has_table_privilege(r.oid, c.oid, 'TRUNCATE') OR has_table_privilege(r.oid, c.oid, 'TRIGGER')
+			  OR has_any_column_privilege(r.oid, c.oid, 'INSERT') OR has_any_column_privilege(r.oid, c.oid, 'UPDATE')
+			  OR has_any_column_privilege(r.oid, c.oid, 'REFERENCES'))
+		ORDER BY 1`)
+	if err != nil {
+		return err
+	}
+	defer crows.Close()
+	for crows.Next() {
+		var what string
+		if err := crows.Scan(&what); err != nil {
+			return err
+		}
+		controlHit = append(controlHit, what)
+	}
+	if err := crows.Err(); err != nil {
+		return err
+	}
+	if len(controlHit) > 0 {
+		return fmt.Errorf("runner role %s holds privileges in the control schema it must not have: %s", who, strings.Join(controlHit, ", "))
+	}
 	return nil
 }
 
