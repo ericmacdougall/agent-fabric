@@ -31,8 +31,12 @@ table only: never fabric `events`, `outbox` or any other table.
   is refused (exit 3) before anything is written. Empty lines count toward the line limit.
 - A malformed line is rejected alone; the rest continue. Counts go to stderr:
   `ingest: source=S lines=N accepted=A inserted=I existing=E duplicate-in-input=D rejected=R`,
-  then a count per reason and up to 20 `line L rejected: reason` lines. Exit is 0 even when
-  some lines were rejected: read the counts.
+  then a count per reason and up to 20 `line L rejected: reason` lines.
+- Exit codes: `0` every line was stored or already present; `4` the call completed and the
+  accepted lines are stored, but some lines were rejected (counts on stderr); `3` the call
+  was refused and nothing was written (bad usage, reserved or invalid source, over a limit);
+  `1` an error of unknown effect (for example the database). A pipeline treats `4` as
+  "inspect the rejects", not as a failure to retry.
 - Idempotent by id: `INSERT ... ON CONFLICT (id) DO NOTHING`; the first write wins, a
   replay with changed content changes nothing. One transaction per call: a database error
   leaves nothing behind. After the commit, and only when a row was inserted, the call sends

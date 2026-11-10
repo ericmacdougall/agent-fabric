@@ -98,10 +98,15 @@ func main() {
 	}
 }
 
-// exitCode: 3 is a refusal (nothing changed), 1 an error of unknown effect.
+// exitCode: 3 is a refusal (nothing changed), 4 a completed call that rejected
+// some input lines (fab control ingest), 1 an error of unknown effect.
 func exitCode(err error) int {
 	if err == nil {
 		return 0
+	}
+	var pr partialRejects
+	if errors.As(err, &pr) {
+		return 4
 	}
 	var ref *store.Refusal
 	var ue usageError
