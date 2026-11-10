@@ -168,6 +168,7 @@ func runNative(sctx context.Context, grantFile string, fake bool, sink harness.S
 	if err != nil {
 		return err
 	}
+	defer opts.Close()
 	opts.Sink = sink
 	return withStore(func(_ context.Context, st *store.Store) error {
 		ctx, cancel := context.WithTimeout(sctx, time.Duration(g.WallSeconds+120)*time.Second)

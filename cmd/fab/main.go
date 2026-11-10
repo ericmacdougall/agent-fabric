@@ -169,10 +169,11 @@ func usage() {
 }
 
 func withStore(f func(context.Context, *store.Store) error) error {
-	dsn := os.Getenv("FABRIC_DSN")
-	if dsn == "" {
-		return errors.New("FABRIC_DSN is not set")
+	dsn, credential, err := appConnection()
+	if err != nil {
+		return err
 	}
+	defer credential.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	st, err := store.Open(ctx, dsn)
@@ -188,10 +189,11 @@ func withStore(f func(context.Context, *store.Store) error) error {
 // cancels the context, and that is a clean shutdown (nil), not an error
 // (goodqa#15579: a fixed 60 s deadline used to end the daemon after a minute).
 func withStoreService(f func(context.Context, *store.Store) error) error {
-	dsn := os.Getenv("FABRIC_DSN")
-	if dsn == "" {
-		return errors.New("FABRIC_DSN is not set")
+	dsn, credential, err := appConnection()
+	if err != nil {
+		return err
 	}
+	defer credential.Close()
 	sctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// After the first signal, stop catching signals: a second Ctrl-C or SIGTERM

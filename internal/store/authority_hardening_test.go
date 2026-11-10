@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fabric/internal/connref"
 	"net/url"
 	"strconv"
 	"strings"
@@ -195,11 +196,19 @@ var authorityRunnerPassword = func() string {
 
 func openAuthorityRunner(t *testing.T, ctx context.Context, r Roles, extra url.Values) *Store {
 	t.Helper()
-	u, err := url.Parse(testDSN)
+	fixture, err := connref.NewFixture(testDSN, connref.Runner, r.Runner(), authorityRunnerPassword, privateCredentialFixtureDirectory(t))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("runner credential fixture failed")
 	}
-	u.User = url.UserPassword(r.Runner(), authorityRunnerPassword)
+	t.Cleanup(func() { fixture.Close() })
+	dsn, err := fixture.DSN()
+	if err != nil {
+		t.Fatal("runner credential fixture unavailable")
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal("runner credential fixture URL invalid")
+	}
 	q := u.Query()
 	q.Del("role")
 	q.Del("session_authorization")

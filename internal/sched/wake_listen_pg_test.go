@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"fabric/internal/connref"
 	"fabric/internal/store"
 )
 
@@ -15,9 +16,17 @@ import (
 // NOTIFY must arrive as a wake well inside a backoff that would otherwise
 // hide its loss. Changing the channel name on either side makes this fail.
 func TestWakeNotifyReachesListenerOverPostgres(t *testing.T) {
-	dsn := os.Getenv("FABRIC_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set FABRIC_TEST_DSN (a disposable PostgreSQL) to run the LISTEN test")
+	if os.Getenv("FABRIC_TEST_DSN") == "" && os.Getenv("FABRIC_TEST_DSN_FILE") == "" {
+		t.Skip("set FABRIC_TEST_DSN or FABRIC_TEST_DSN_FILE (a disposable PostgreSQL) to run the LISTEN test")
+	}
+	ref, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)
+	if err != nil {
+		t.Fatal("test credential reference unavailable")
+	}
+	defer ref.Close()
+	dsn, err := ref.DSN()
+	if err != nil {
+		t.Fatal("test credential reference unavailable")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -60,9 +69,17 @@ func TestWakeNotifyReachesListenerOverPostgres(t *testing.T) {
 // fail at once ("fabd: LISTEN wait failed") and sleep, so Run would quietly
 // fall back to polling; that shows here as a recorded sleep.
 func TestWakeListenerSurvivesIdleDeadlines(t *testing.T) {
-	dsn := os.Getenv("FABRIC_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set FABRIC_TEST_DSN (a disposable PostgreSQL) to run the LISTEN test")
+	if os.Getenv("FABRIC_TEST_DSN") == "" && os.Getenv("FABRIC_TEST_DSN_FILE") == "" {
+		t.Skip("set FABRIC_TEST_DSN or FABRIC_TEST_DSN_FILE (a disposable PostgreSQL) to run the LISTEN test")
+	}
+	ref, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)
+	if err != nil {
+		t.Fatal("test credential reference unavailable")
+	}
+	defer ref.Close()
+	dsn, err := ref.DSN()
+	if err != nil {
+		t.Fatal("test credential reference unavailable")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

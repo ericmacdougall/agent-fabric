@@ -40,10 +40,11 @@ func controlExportMain(args []string) error {
 	if fs.NArg() != 0 {
 		return usageError{fmt.Errorf("usage: fab control export [--since CURSOR] (unexpected argument)")}
 	}
-	dsn := os.Getenv("FABRIC_DSN")
-	if dsn == "" {
-		return errors.New("FABRIC_DSN is not set")
+	dsn, credential, err := appConnection()
+	if err != nil {
+		return err
 	}
+	defer credential.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	conn, err := pgx.Connect(ctx, dsn)

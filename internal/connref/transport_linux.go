@@ -58,7 +58,7 @@ func readProtected(path string) ([]byte, error) {
 	}
 	defer unix.Close(fd)
 	var before, after unix.Stat_t
-	if unix.Fstat(fd, &before) != nil || before.Mode&unix.S_IFMT != unix.S_IFREG || before.Uid != uint32(os.Geteuid()) || before.Mode&0077 != 0 || before.Nlink != 1 || before.Size <= 0 || before.Size > maxSource {
+	if unix.Fstat(fd, &before) != nil || before.Mode&unix.S_IFMT != unix.S_IFREG || before.Uid != uint32(os.Geteuid()) || (before.Mode&07777 != 0600 && before.Mode&07777 != 0400) || before.Nlink != 1 || before.Size <= 0 || before.Size > maxSource {
 		return nil, errReference
 	}
 	body := make([]byte, maxSource+1)
@@ -89,7 +89,7 @@ func parseMaterial(dsn string) (*material, error) {
 	}
 	password, ok := u.User.Password()
 	host, user, db := u.Hostname(), u.User.Username(), strings.TrimPrefix(u.Path, "/")
-	if !ok || !validField(host) || !validField(user) || !validField(db) || len(db) > 63 || strings.ContainsAny(password, "\x00\r\n") {
+	if !ok || !validField(host) || strings.Contains(host, ",") || !validField(user) || !validField(db) || len(db) > 63 || strings.ContainsAny(password, "\x00\r\n") {
 		return nil, errReference
 	}
 	port := u.Port()
@@ -121,7 +121,11 @@ func parseMaterial(dsn string) (*material, error) {
 				return nil, errReference
 			}
 		case "application_name":
-			if len(values[0]) > 64 || strings.ContainsAny(values[0], "\x00\r\n") {
+			// Only versioned caller profiles may select metadata copied into a
+			// returned DSN. An arbitrary value could itself be a credential.
+			switch values[0] {
+			case "fabd", "fabd-install", "fab-tui":
+			default:
 				return nil, errReference
 			}
 		default:

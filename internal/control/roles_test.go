@@ -2,8 +2,8 @@ package control
 
 import (
 	"context"
+	"fabric/internal/connref"
 	"fmt"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -423,12 +423,20 @@ func TestApplyRolesRefusesLoudLogging(t *testing.T) {
 	if _, err := p.Exec(ctx, "GRANT USAGE ON SCHEMA control TO "+adm+"; GRANT SELECT ON control.ingested_events TO "+adm); err != nil {
 		t.Fatal(err)
 	}
-	u, err := url.Parse(storetest.DSN)
+	fixtureDir, err := connref.NewFixtureDirectory(t.TempDir())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("create private credential fixture directory failed")
 	}
-	u.User = url.UserPassword(adm, admPassword)
-	np, err := pgxpool.New(ctx, u.String())
+	fixture, err := connref.NewFixture(storetest.DSN, connref.App, adm, admPassword, fixtureDir)
+	if err != nil {
+		t.Fatal("admin credential fixture failed")
+	}
+	defer fixture.Close()
+	dsn, err := fixture.DSN()
+	if err != nil {
+		t.Fatal("admin credential fixture unavailable")
+	}
+	np, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

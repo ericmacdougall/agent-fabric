@@ -76,10 +76,11 @@ func dbMain(args []string) error {
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		dsn := os.Getenv(*env)
-		if dsn == "" {
-			return fmt.Errorf("%s is not set", *env)
+		dsn, credential, err := runnerConnection(*env, true)
+		if err != nil {
+			return err
 		}
+		defer credential.Close()
 		ctx := context.Background()
 		st, err := store.Open(ctx, dsn)
 		if err != nil {

@@ -8,12 +8,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"net/url"
 	"os"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fabric/internal/connref"
 	"fabric/internal/store"
 )
 
@@ -28,44 +28,61 @@ const ChildDSNEnv = "FABRIC_STORETEST_CHILD_DSN"
 
 // Main creates and migrates fabric_<prefix>_<pid>, runs the tests and drops
 // it. Call it as os.Exit(storetest.Main(m, "imp")) from TestMain.
-func Main(m *testing.M, prefix string) int {
+func Main(m *testing.M, prefix string) (code int) {
 	if child := os.Getenv(ChildDSNEnv); child != "" {
-		DSN = child // a test's child process: the parent owns the database
+		DSN = child // the parent retains its reference until this child exits
 		return m.Run()
 	}
-	admin := os.Getenv("FABRIC_TEST_DSN")
-	if admin == "" {
-		fmt.Fprintln(os.Stderr, "FABRIC_TEST_DSN is not set: these tests require a disposable Postgres")
+	adminRef, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "test admin credential reference unavailable")
+		return 2
+	}
+	defer adminRef.Close()
+	admin, err := adminRef.DSN()
+	if err != nil || admin == "" {
+		fmt.Fprintln(os.Stderr, "FABRIC_TEST_DSN or FABRIC_TEST_DSN_FILE is required: these tests need a disposable Postgres")
 		return 2
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, admin)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "admin connect:", err)
+		fmt.Fprintln(os.Stderr, "test admin connection failed")
 		return 2
 	}
 	defer pool.Close()
 	name := fmt.Sprintf("fabric_%s_%d", prefix, os.Getpid())
-	pool.Exec(ctx, `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`) //nolint:errcheck // leftover from a killed run
+	pool.Exec(ctx, `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`) //nolint:errcheck // owned leftover from a killed run
 	if _, err := pool.Exec(ctx, `CREATE DATABASE "`+name+`"`); err != nil {
-		fmt.Fprintln(os.Stderr, "create database:", err)
+		fmt.Fprintln(os.Stderr, "create test database failed")
 		return 2
 	}
-	defer pool.Exec(context.Background(), `DROP DATABASE "`+name+`" WITH (FORCE)`) //nolint:errcheck
-	u, err := url.Parse(admin)
+	var dbRef *connref.Ref
+	defer func() {
+		if _, err := pool.Exec(context.Background(), `DROP DATABASE "`+name+`" WITH (FORCE)`); err != nil {
+			fmt.Fprintln(os.Stderr, "drop test database failed")
+			code = 2
+		}
+		if dbRef != nil {
+			dbRef.Close()
+		}
+	}()
+	dbRef, err = connref.ForTestDatabase(adminRef, name)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "dsn does not parse")
+		fmt.Fprintln(os.Stderr, "derive test database credential reference failed")
 		return 2
 	}
-	u.Path = "/" + name
-	DSN = u.String()
+	DSN, err = dbRef.DSN()
+	if err != nil {
+		return 2
+	}
 	st, err := store.Open(ctx, DSN)
 	if err == nil {
 		err = st.Migrate(ctx)
 		st.Close()
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "migrate:", err)
+		fmt.Fprintln(os.Stderr, "migrate test database failed")
 		return 2
 	}
 	return m.Run()
@@ -77,7 +94,7 @@ func Open(t *testing.T) *store.Store {
 	t.Helper()
 	st, err := store.Open(context.Background(), DSN)
 	if err != nil {
-		t.Fatalf("open: %v", err)
+		t.Fatal("open test database failed")
 	}
 	t.Cleanup(st.Close)
 	if err := st.Truncate(context.Background()); err != nil {
@@ -104,30 +121,39 @@ func AppRunnerDSNs(t *testing.T, st *store.Store) (string, string) {
 	}
 	appPassword, runnerPassword := randomPassword(), randomPassword()
 	if err := st.ApplyRoles(context.Background(), r, appPassword, runnerPassword); err != nil {
-		t.Fatalf("roles: %v", err)
+		t.Fatal("apply test roles failed")
 	}
+	fixtureDir, err := connref.NewFixtureDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal("create private credential fixture directory failed")
+	}
+	appRef, err := connref.NewFixture(DSN, connref.App, r.App(), appPassword, fixtureDir)
+	if err != nil {
+		t.Fatal("create app credential fixture failed")
+	}
+	t.Cleanup(func() { appRef.Close() })
+	runnerRef, err := connref.NewFixture(DSN, connref.Runner, r.Runner(), runnerPassword, fixtureDir)
+	if err != nil {
+		t.Fatal("create runner credential fixture failed")
+	}
+	t.Cleanup(func() { runnerRef.Close() })
+	// Cleanup is LIFO: roles still have their authenticated stores/fixtures;
+	// then fixtures close, then the private directory and caller's store.
 	t.Cleanup(func() {
 		for _, n := range []string{r.App(), r.Runner(), r.Scheduler()} {
 			st.Pool().Exec(context.Background(), "DROP OWNED BY "+n) //nolint:errcheck
 			st.Pool().Exec(context.Background(), "DROP ROLE "+n)     //nolint:errcheck
 		}
 	})
-	dsn := func(role, password string) string {
-		u, err := url.Parse(DSN)
-		if err != nil {
-			t.Fatal(err)
-		}
-		u.User = url.UserPassword(role, password)
-		q := u.Query()
-		q.Del("role")
-		q.Del("session_authorization")
-		q.Del("options")
-		q.Del("user")
-		q.Del("password")
-		u.RawQuery = q.Encode()
-		return u.String()
+	app, err := appRef.DSN()
+	if err != nil {
+		t.Fatal("app credential fixture unavailable")
 	}
-	return dsn(r.App(), appPassword), dsn(r.Runner(), runnerPassword)
+	runner, err := runnerRef.DSN()
+	if err != nil {
+		t.Fatal("runner credential fixture unavailable")
+	}
+	return app, runner
 }
 
 // RunnerDSN retains the original runner-only test helper.

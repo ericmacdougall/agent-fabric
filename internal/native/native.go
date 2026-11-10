@@ -169,11 +169,23 @@ type Options struct {
 	// ReviewDSN authenticates the separate trusted app-role review pool. It
 	// must never be the runner DSN or be inherited by a tool worker.
 	ReviewDSN string
+	// ReviewClose releases an optional owned file reference after all Run and
+	// review-pool use. The caller that resolved Options must defer Close.
+	ReviewClose func() error
 	// Sink, when set, receives the run as harness events (turns, messages,
 	// tool calls, usage, one final). It observes only: the loop, its tools and
 	// its guard are unchanged, and a sink that cannot record stops the run
 	// (see internal/harness/native). Used by `fab harness run`.
 	Sink harness.Sink
+}
+
+// Close releases caller-owned review credential transport. References are
+// idempotent; copied Options must not be closed before their Run finishes.
+func (o Options) Close() error {
+	if o.ReviewClose != nil {
+		return o.ReviewClose()
+	}
+	return nil
 }
 
 // Receipt is the run summary printed for the live-test record.

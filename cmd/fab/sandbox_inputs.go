@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"fabric/internal/connref"
 )
 
 // workerTCPPorts is the outbound TCP allow-list for a worker: 443 plus the
@@ -33,10 +35,18 @@ func workerTCPPorts() []int {
 	if runnerEnv == "" {
 		runnerEnv = "FABRIC_RUNNER_DSN"
 	}
-	for _, dsn := range []string{os.Getenv("FABRIC_DSN"), os.Getenv(runnerEnv)} {
+	for _, input := range []struct {
+		name    string
+		purpose connref.Purpose
+	}{{"FABRIC_DSN", connref.App}, {runnerEnv, connref.Runner}} {
+		dsn, credential, err := connectionDSN(input.name, input.purpose, false)
+		if err != nil {
+			continue // no database port is granted for an invalid reference; its owner refuses connection
+		}
 		for _, p := range dsnPorts(dsn) {
 			add(p)
 		}
+		credential.Close()
 	}
 	return ports
 }

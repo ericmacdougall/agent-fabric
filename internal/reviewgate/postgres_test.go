@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -15,50 +14,70 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fabric/internal/connref"
 	fabricstore "fabric/internal/store"
 )
 
 var testDSN string
 
-func TestMain(m *testing.M) {
-	admin := os.Getenv("FABRIC_TEST_DSN")
-	if admin == "" {
-		os.Exit(m.Run()) // pure tests still run; each PostgreSQL test skips loudly
+func TestMain(m *testing.M) { os.Exit(reviewGateTestMain(m)) }
+
+func reviewGateTestMain(m *testing.M) (code int) {
+	if os.Getenv("FABRIC_TEST_DSN") == "" && os.Getenv("FABRIC_TEST_DSN_FILE") == "" {
+		return m.Run() // pure tests still run; PostgreSQL tests skip loudly
+	}
+	adminRef, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "test admin credential reference unavailable")
+		return 2
+	}
+	defer adminRef.Close()
+	admin, err := adminRef.DSN()
+	if err != nil || admin == "" {
+		fmt.Fprintln(os.Stderr, "FABRIC_TEST_DSN or FABRIC_TEST_DSN_FILE is required for disposable database tests")
+		return 2
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, admin)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "admin connect:", err)
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "test admin connection failed")
+		return 2
 	}
+	defer pool.Close()
 	name := fmt.Sprintf("reviewgate_t_%d_%d", os.Getpid(), time.Now().UnixNano())
 	if _, err := pool.Exec(ctx, `CREATE DATABASE "`+name+`"`); err != nil {
-		fmt.Fprintln(os.Stderr, "create database:", err)
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "create test database failed")
+		return 2
 	}
-	u, err := url.Parse(admin)
+	var dbRef *connref.Ref
+	defer func() {
+		if _, err := pool.Exec(context.Background(), `DROP DATABASE "`+name+`" WITH (FORCE)`); err != nil {
+			fmt.Fprintln(os.Stderr, "drop test database failed")
+			code = 2
+		}
+		if dbRef != nil {
+			dbRef.Close()
+		}
+	}()
+	dbRef, err = connref.ForTestDatabase(adminRef, name)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "parse DSN:", err)
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "derive test database reference failed")
+		return 2
 	}
-	u.Path = "/" + name
-	testDSN = u.String()
+	testDSN, err = dbRef.DSN()
+	if err != nil {
+		return 2
+	}
 	st, err := fabricstore.Open(ctx, testDSN)
 	if err == nil {
 		err = st.Migrate(ctx)
 		st.Close()
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "migrate:", err)
-		pool.Exec(ctx, `DROP DATABASE "`+name+`" WITH (FORCE)`) //nolint:errcheck
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "migrate test database failed")
+		return 2
 	}
-	code := m.Run()
-	if _, err := pool.Exec(ctx, `DROP DATABASE "`+name+`" WITH (FORCE)`); err != nil {
-		fmt.Fprintln(os.Stderr, "drop database:", err)
-	}
-	pool.Close()
-	os.Exit(code)
+	return m.Run()
 }
 
 type reviewerFunc func(context.Context, ReviewInput) (ModelDecision, error)

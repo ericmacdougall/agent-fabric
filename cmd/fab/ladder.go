@@ -24,7 +24,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -116,10 +115,11 @@ func ladderStatusDB(task, policyPath string, asJSON bool) error {
 	if err != nil {
 		return usageError{err}
 	}
-	dsn := os.Getenv("FABRIC_DSN")
-	if dsn == "" {
-		return errors.New("FABRIC_DSN is not set")
+	dsn, credential, err := appConnection()
+	if err != nil {
+		return err
 	}
+	defer credential.Close()
 	// The same read-only pool the TUI uses: every statement runs in a READ ONLY
 	// transaction, so this path cannot write whatever role the DSN names.
 	pool, err := tui.OpenPool(dsn)

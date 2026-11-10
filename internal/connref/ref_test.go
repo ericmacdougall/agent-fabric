@@ -250,3 +250,40 @@ func TestConcurrentReferencesRemainIndependent(t *testing.T) {
 		child.Close()
 	}
 }
+
+func TestConnectionMetadataCannotTransportCredential(t *testing.T) {
+	for _, encoded := range []bool{false, true} {
+		t.Run(fmt.Sprint(encoded), func(t *testing.T) {
+			const marker = "SYNTHETIC_LONG_CANARY"
+			u, _ := url.Parse(fixtureURL())
+			u.User = url.UserPassword("fixture_admin", marker)
+			value := marker
+			if encoded {
+				value = "%53YNTHETIC_LONG_CANARY"
+			}
+			u.RawQuery = "sslmode=disable&application_name=" + value
+			t.Setenv("FABRIC_DSN", "")
+			t.Setenv("FABRIC_DSN_FILE", source(t, u.String()))
+			r, err := ResolveEnv("FABRIC_DSN", App)
+			if r != nil {
+				r.Close()
+			}
+			if err == nil {
+				t.Fatal("credential-bearing connection metadata accepted")
+			}
+			if strings.Contains(err.Error(), marker) {
+				t.Fatal("credential-bearing metadata echoed")
+			}
+		})
+	}
+	t.Setenv("FABRIC_DSN", "")
+	u, _ := url.Parse(fixtureURL())
+	u.RawQuery = "sslmode=disable&application_name=fabd"
+	t.Setenv("FABRIC_DSN_FILE", source(t, u.String()))
+	r, err := ResolveEnv("FABRIC_DSN", App)
+	if err != nil {
+		t.Fatal("reviewed static daemon application name refused")
+	}
+	defer r.Close()
+	config(t, r, "postgres")
+}

@@ -39,10 +39,11 @@ func controlIngestMain(args []string) error {
 	if err := ingest.ValidSource(*source); err != nil {
 		return usageError{err}
 	}
-	dsn := os.Getenv("FABRIC_DSN")
-	if dsn == "" {
-		return errors.New("FABRIC_DSN is not set")
+	dsn, credential, err := appConnection()
+	if err != nil {
+		return err
 	}
+	defer credential.Close()
 	// The same absolute budget covers stdin, parsing, connection and storage.
 	// Restore stdin flags and close our duplicate before opening a connection.
 	input, err := newIngestInput(ctx, os.Stdin)

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"fabric/internal/connref"
 	"fabric/internal/domain"
 	"fabric/internal/host"
 	"fabric/internal/probe"
@@ -37,7 +38,19 @@ func liveEnv(t *testing.T) (app, runner, fab, fake, worker, root string) {
 	if os.Getenv("FABRIC_LIVE_GATE") == "" {
 		t.Skip("set FABRIC_LIVE_GATE=1 on t2-dev")
 	}
-	app, runner = os.Getenv("FABRIC_DSN"), os.Getenv("FABRIC_RUNNER_DSN")
+	load := func(name string, purpose connref.Purpose) string {
+		ref, err := connref.ResolveEnv(name, purpose)
+		if err != nil {
+			t.Fatal("live test credential reference unavailable")
+		}
+		t.Cleanup(func() { ref.Close() })
+		dsn, err := ref.DSN()
+		if err != nil {
+			t.Fatal("live test credential reference unavailable")
+		}
+		return dsn
+	}
+	app, runner = load("FABRIC_DSN", connref.App), load("FABRIC_RUNNER_DSN", connref.Runner)
 	fab, fake = os.Getenv("FABRIC_FAB_BIN"), os.Getenv("FABRIC_FAKE_PROVIDER")
 	worker, root = os.Getenv("FABRIC_WORKER_USER"), os.Getenv("FABRIC_WORKER_ROOT")
 	if app == "" || runner == "" || fab == "" || fake == "" || worker == "" || root == "" {
