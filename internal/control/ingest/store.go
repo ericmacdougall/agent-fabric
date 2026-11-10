@@ -27,7 +27,7 @@ type Stored struct {
 const insertSQL = `INSERT INTO control.ingested_events
 	(id, ts, kind, source, host, actor, initiative, repo, branch, ref, ticket, summary, severity, count, tenant)
 	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-	ON CONFLICT (id) DO NOTHING`
+	ON CONFLICT DO NOTHING` // no conflict target: a target needs SELECT, which the ingest role does not have
 
 // Column limits of control.ingested_events (migration 0039) that are tighter
 // than the mc.event/1 schema. A value over its limit is cut (never refused), so
