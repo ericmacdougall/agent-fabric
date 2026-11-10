@@ -77,15 +77,15 @@ func TestBootstrapLeavesFabricAlone(t *testing.T) {
 	if n := publicTables(); n != beforeTables {
 		t.Fatalf("%d public tables after bootstrap, want %d", n, beforeTables)
 	}
-	if n := count(t, p, ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'control' AND table_name <> 'bootstrap_ledger'`); n != 5 {
-		t.Fatalf("%d control tables, want 5 (2 source, 3 projection)", n)
+	if n := count(t, p, ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'control' AND table_name <> 'bootstrap_ledger'`); n != 10 {
+		t.Fatalf("%d control tables, want 10 (4 source tables, 3 projection tables, 2 reference tables, 1 view)", n)
 	}
 	if n := count(t, p, ctx, `SELECT count(*) FROM control.bootstrap_ledger`); n != 1 {
 		t.Fatalf("%d ledger rows, want 1", n)
 	}
 	if n := count(t, p, ctx, `SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname = 'control' AND NOT t.tgisinternal`); n != 4 {
-		t.Fatalf("%d triggers, want 4", n)
+		WHERE n.nspname = 'control' AND NOT t.tgisinternal`); n != 10 {
+		t.Fatalf("%d triggers, want 10", n)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestSourceTablesAppendOnly(t *testing.T) {
 	if _, err := p.Exec(ctx, ins, "harness:e1", "harness", "first"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Exec(ctx, `INSERT INTO control.mc_chat_mirror (id, ts, sender, body) VALUES ('mc:c1', now(), 'main', 'hello')`); err != nil {
+	if _, err := p.Exec(ctx, `INSERT INTO control.mc_chat_mirror (id, state, ts, mc_ts, sender, body) VALUES ('mc:c1', 'queued', now(), now(), 'main', 'hello')`); err != nil {
 		t.Fatal(err)
 	}
 	for _, q := range []string{
@@ -192,10 +192,10 @@ func TestConstraints(t *testing.T) {
 		`INSERT INTO control.ingested_events (id, ts, kind, source, summary, actor) VALUES ('harness:a', now(), 'wal', 'harness', 's', E'x\x1b]8;;http://e\x07y')`,
 		`INSERT INTO control.ingested_events (id, ts, kind, source, summary, initiative) VALUES ('harness:i', now(), 'wal', 'harness', 's', E'a\nb')`,
 		`INSERT INTO control.ingested_events (id, ts, kind, source, summary, tenant) VALUES ('harness:t', now(), 'wal', 'harness', 's', E'a\x01')`,
-		`INSERT INTO control.mc_chat_mirror (id, origin, ts, sender, body) VALUES ('c:fab', 'fabric', now(), 'main', 'b')`,
-		`INSERT INTO control.mc_chat_mirror (id, ts, sender, body) VALUES ('c:big', now(), 'main', repeat('b', 4001))`,
-		`INSERT INTO control.mc_chat_mirror (id, ts, sender, body) VALUES ('c:esc', now(), 'main', E'a\x1b[2Jb')`,
-		`INSERT INTO control.mc_chat_mirror (id, ts, sender, body) VALUES ('c:snd', now(), E'ma\nin', 'b')`,
+		`INSERT INTO control.mc_chat_mirror (id, state, origin, ts, mc_ts, sender, body) VALUES ('c:fab', 'queued', 'fabric', now(), now(), 'main', 'b')`,
+		`INSERT INTO control.mc_chat_mirror (id, state, ts, mc_ts, sender, body) VALUES ('c:big', 'queued', now(), now(), 'main', repeat('b', 4001))`,
+		`INSERT INTO control.mc_chat_mirror (id, state, ts, mc_ts, sender, body) VALUES ('c:esc', 'queued', now(), now(), 'main', E'a\x1b[2Jb')`,
+		`INSERT INTO control.mc_chat_mirror (id, state, ts, mc_ts, sender, body) VALUES ('c:snd', 'queued', now(), now(), E'ma\nin', 'b')`,
 		`INSERT INTO control.initiative_state (initiative, state, as_of) VALUES ('i1', 'exploding', now())`,
 		`INSERT INTO control.initiative_state (initiative, state, as_of) VALUES (E'i\x1b1', 'idle', now())`,
 		`INSERT INTO control.proj_cursor (consumer, last_id) VALUES ('control.proj', -1)`,
@@ -205,7 +205,7 @@ func TestConstraints(t *testing.T) {
 		}
 	}
 	// Controls: a line feed is allowed in a chat body, nothing else is.
-	if _, err := p.Exec(ctx, `INSERT INTO control.mc_chat_mirror (id, ts, sender, body) VALUES ('c:nl', now(), 'main', E'line one\nline two')`); err != nil {
+	if _, err := p.Exec(ctx, `INSERT INTO control.mc_chat_mirror (id, state, ts, mc_ts, sender, body) VALUES ('c:nl', 'queued', now(), now(), 'main', E'line one\nline two')`); err != nil {
 		t.Errorf("chat body with a line feed: %v, want accepted", err)
 	}
 }

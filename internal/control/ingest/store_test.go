@@ -54,13 +54,13 @@ func ingested(t *testing.T, ctx context.Context, c *pgx.Conn) int {
 }
 
 func ev(i int) string {
-	return fmt.Sprintf(`{"schema":"mc.event/1","id":"wal-x:%d","ts":"2026-11-09T12:30:45.123Z","kind":"wal","host":"h","actor":{"agent":"a1"},"subject":{"initiative":"i1","ticket":"goodqa#1","repo":"r"},"summary":"did %d","count":2}`+"\n", i, i)
+	return fmt.Sprintf(`{"schema":"mc.event/1","id":"harness:%d","ts":"2026-11-09T12:30:45.123Z","kind":"wal","host":"h","actor":{"agent":"a1"},"subject":{"initiative":"i1","ticket":"goodqa#1","repo":"r"},"summary":"did %d","count":2}`+"\n", i, i)
 }
 
 func run(t *testing.T, ctx context.Context, c *pgx.Conn, in string) (Result, string, error) {
 	t.Helper()
 	var errb bytes.Buffer
-	res, err := Run(ctx, c, strings.NewReader(in), "wal-x", &errb)
+	res, err := Run(ctx, c, strings.NewReader(in), "harness", &errb)
 	return res, errb.String(), err
 }
 
@@ -106,7 +106,7 @@ func TestIngestIdempotent(t *testing.T) {
 	}
 	var summary, actor, initiative, ticket string
 	var count int
-	if err := c.QueryRow(ctx, `SELECT summary, actor, initiative, ticket, count FROM control.ingested_events WHERE id = 'wal-x:1'`).Scan(&summary, &actor, &initiative, &ticket, &count); err != nil {
+	if err := c.QueryRow(ctx, `SELECT summary, actor, initiative, ticket, count FROM control.ingested_events WHERE id = 'harness:1'`).Scan(&summary, &actor, &initiative, &ticket, &count); err != nil {
 		t.Fatal(err)
 	}
 	if summary != "did 1" || actor != "a1" || initiative != "i1" || ticket != "goodqa#1" || count != 2 {
@@ -135,7 +135,7 @@ func TestNeverWritesFabricEvents(t *testing.T) {
 	}
 	before := snap()
 	// a hostile mix: valid, fabric: ids, wrong source, junk
-	in := ev(1) + ev(2) + strings.Replace(ev(3), "wal-x:3", "fabric:3", 1) + `{"schema":"mc.event/1","id":"fabric:9","ts":"2026-11-09T12:30:45Z","kind":"wal","source":"fabric"}` + "\nnot json\n"
+	in := ev(1) + ev(2) + strings.Replace(ev(3), "harness:3", "fabric:3", 1) + `{"schema":"mc.event/1","id":"fabric:9","ts":"2026-11-09T12:30:45Z","kind":"wal","source":"fabric"}` + "\nnot json\n"
 	res, _, err := run(t, ctx, c, in)
 	if err != nil || res.Stored.Inserted != 2 {
 		t.Fatalf("%+v %v", res.Stored, err)
@@ -151,7 +151,7 @@ func TestNeverWritesFabricEvents(t *testing.T) {
 // NEG-2: an external line claiming a fabric: id is rejected (and counted), the rest still land.
 func TestExternalFabricIDRejected(t *testing.T) {
 	c, ctx := open(t)
-	in := strings.Replace(ev(1), "wal-x:1", "fabric:1", 1) + ev(2)
+	in := strings.Replace(ev(1), "harness:1", "fabric:1", 1) + ev(2)
 	res, errs, err := run(t, ctx, c, in)
 	if err != nil || len(res.Batch.Rejected) != 1 || res.Batch.Rejected[0].Reason != "reserved-id-prefix" || res.Stored.Inserted != 1 {
 		t.Fatalf("%+v %v", res, err)
@@ -170,7 +170,7 @@ func TestExternalFabricIDRejected(t *testing.T) {
 // row, and a database error mid-batch leaves nothing behind (one transaction).
 func TestStoreAtomicAndDBBackstop(t *testing.T) {
 	c, ctx := open(t)
-	good := Event{ID: "wal-x:g", TS: time.Now().UTC().Truncate(time.Millisecond), Kind: "wal", Source: "wal-x", Summary: "ok", Severity: "info", Count: 1}
+	good := Event{ID: "harness:g", TS: time.Now().UTC().Truncate(time.Millisecond), Kind: "wal", Source: "harness", Summary: "ok", Severity: "info", Count: 1}
 	bad := Event{ID: "fabric:1", TS: good.TS, Kind: "wal", Source: "fabric", Summary: "forged", Severity: "info", Count: 1}
 	if _, err := Store(ctx, c, []Event{good, bad}); err == nil {
 		t.Fatal("a forged fabric row was stored")
@@ -180,13 +180,13 @@ func TestStoreAtomicAndDBBackstop(t *testing.T) {
 	}
 	// source other than the id prefix is refused by the table
 	bad2 := good
-	bad2.ID, bad2.Source = "wal-x:h", "other"
+	bad2.ID, bad2.Source = "harness:h", "other"
 	if _, err := Store(ctx, c, []Event{bad2}); err == nil {
 		t.Fatal("source differing from the id prefix was stored")
 	}
 	// an over-long field is cut to the column limit, not an error that aborts a batch
 	long := good
-	long.ID = "wal-x:long"
+	long.ID = "harness:long"
 	long.Actor = map[string]string{"agent": strings.Repeat("a", 160)}
 	long.Subject = map[string]string{"initiative": strings.Repeat("i", 160), "ticket": strings.Repeat("t", 160)}
 	long.Count = 1_000_000_000
@@ -225,9 +225,9 @@ func TestIngestLimitsEndToEnd(t *testing.T) {
 // partial write of a bad line; valid neighbours still land; counts on stderr.
 func TestHostileInputNoPartialWrite(t *testing.T) {
 	c, ctx := open(t)
-	big := `{"schema":"mc.event/1","id":"wal-x:big","ts":"2026-11-09T12:30:45Z","kind":"wal","host":"` + strings.Repeat("a", MaxLineBytes) + `"}` + "\n"
-	in := ev(1) + big + ev(2)[:60] + "\n" + `{"schema":"mc.event/7","id":"wal-x:v7","ts":"2026-11-09T12:30:45Z","kind":"wal"}` + "\n" +
-		"\xff\xfe\x00{}\n" + `{"schema":"mc.event/1","id":"wal-x:nonutf8","ts":"2026-11-09T12:30:45Z","kind":"wal","summary":"a` + "\xff" + `b"}` + "\n" + ev(3)
+	big := `{"schema":"mc.event/1","id":"harness:big","ts":"2026-11-09T12:30:45Z","kind":"wal","host":"` + strings.Repeat("a", MaxLineBytes) + `"}` + "\n"
+	in := ev(1) + big + ev(2)[:60] + "\n" + `{"schema":"mc.event/7","id":"harness:v7","ts":"2026-11-09T12:30:45Z","kind":"wal"}` + "\n" +
+		"\xff\xfe\x00{}\n" + `{"schema":"mc.event/1","id":"harness:nonutf8","ts":"2026-11-09T12:30:45Z","kind":"wal","summary":"a` + "\xff" + `b"}` + "\n" + ev(3)
 	res, errs, err := run(t, ctx, c, in)
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestHostileInputNoPartialWrite(t *testing.T) {
 	if res.Stored.Inserted != 2 || len(res.Batch.Rejected) != 5 || ingested(t, ctx, c) != 2 {
 		t.Fatalf("inserted=%d rejected=%+v rows=%d", res.Stored.Inserted, res.Batch.Rejected, ingested(t, ctx, c))
 	}
-	for _, id := range []string{"wal-x:big", "wal-x:v7", "wal-x:nonutf8"} {
+	for _, id := range []string{"harness:big", "harness:v7", "harness:nonutf8"} {
 		if n := rows(t, ctx, c, fmt.Sprintf(`SELECT count(*) FROM control.ingested_events WHERE id = '%s'`, id)); n != 0 {
 			t.Errorf("%s was stored", id)
 		}
@@ -254,14 +254,14 @@ func TestHostileInputNoPartialWrite(t *testing.T) {
 func TestSecretsNeverStored(t *testing.T) {
 	c, ctx := open(t)
 	f := fakes()
-	in := `{"schema":"mc.event/1","id":"wal-x:s1","ts":"2026-11-09T12:30:45Z","kind":"wal","host":"` + f["bearer"] + `","actor":{"agent":"` + f["slack"] +
+	in := `{"schema":"mc.event/1","id":"harness:s1","ts":"2026-11-09T12:30:45Z","kind":"wal","host":"` + f["bearer"] + `","actor":{"agent":"` + f["slack"] +
 		`"},"subject":{"ref":"` + f["aws-key"] + `"},"summary":"token ` + f["github"] + ` leaked"}` + "\n"
 	res, errs, err := run(t, ctx, c, in)
 	if err != nil || res.Stored.Inserted != 1 || !strings.Contains(errs, "redacted-fields=4") {
 		t.Fatalf("%+v %v\n%s", res.Stored, err, errs)
 	}
 	var all string
-	if err := c.QueryRow(ctx, `SELECT summary || '|' || host || '|' || actor || '|' || ref FROM control.ingested_events WHERE id = 'wal-x:s1'`).Scan(&all); err != nil {
+	if err := c.QueryRow(ctx, `SELECT summary || '|' || host || '|' || actor || '|' || ref FROM control.ingested_events WHERE id = 'harness:s1'`).Scan(&all); err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"github", "bearer", "slack", "aws-key"} {
@@ -295,7 +295,7 @@ func TestConcurrentIngestNoDeadlock(t *testing.T) {
 		go func() { _, _, e := run(t, ctx, c, fwd.String()); errs <- e }()
 		go func() {
 			var b bytes.Buffer
-			_, e := Run(ctx, c2, strings.NewReader(rev.String()), "wal-x", &b)
+			_, e := Run(ctx, c2, strings.NewReader(rev.String()), "harness", &b)
 			errs <- e
 		}()
 		for i := 0; i < 2; i++ {
