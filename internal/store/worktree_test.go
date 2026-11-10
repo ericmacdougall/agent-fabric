@@ -12,7 +12,6 @@ import (
 
 const migration0037 = "migrations/0037_review_gate_call_once.sql"
 const migration0038 = "migrations/0038_attempt_worktree.sql"
-const migration0039 = "migrations/0039_control_schema.sql"
 
 func pgCode(err error) string {
 	var pe *pgconn.PgError
@@ -170,9 +169,8 @@ func TestMigrate0038FromLevel37(t *testing.T) {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("migrate 37 -> 38: %v", err)
 	}
-	// Migrate applies 0038 and then 0039 (the control schema, goodqa#15586).
-	if n, latest := level(t, st, ctx); n != n37+2 || latest != migration0039 {
-		t.Fatalf("level %d at %s, want %d at %s", n, latest, n37+2, migration0039)
+	if n, latest := level(t, st, ctx); n != n37+1 || latest != migration0038 {
+		t.Fatalf("level %d at %s, want %d at %s", n, latest, n37+1, migration0038)
 	}
 	if n := count(t, st, ctx, `SELECT count(*) FROM attempts`); n != 2 {
 		t.Fatalf("%d attempts after migrate, want 2", n)
@@ -191,8 +189,8 @@ func TestMigrate0038FromLevel37(t *testing.T) {
 	if _, err := st.pool.Exec(ctx, string(sql)); err != nil {
 		t.Fatalf("re-applying 0038: %v", err)
 	}
-	if n, _ := level(t, st, ctx); n != n37+2 {
-		t.Fatalf("level %d after re-apply, want %d", n, n37+2)
+	if n, _ := level(t, st, ctx); n != n37+1 {
+		t.Fatalf("level %d after re-apply, want %d", n, n37+1)
 	}
 	if n := count(t, st, ctx, `SELECT count(*) FROM pg_trigger WHERE tgname = 'attempts_worktree_immutable'`); n != 1 {
 		t.Fatalf("%d immutability triggers after re-apply, want 1", n)
