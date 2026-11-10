@@ -8,7 +8,7 @@ import (
 )
 
 func TestNonLinuxFixtureEmptyReferenceNeverUsesRawCompatibility(t *testing.T) {
-	for _, suffix := range []string{"_FILE", "_PASSWORD_FILE", "_FILE_KEY"} {
+	for _, suffix := range []string{"_FILE", "_PASSWORD_FILE", "_FILE_KEY", "_DATABASE"} {
 		t.Run(suffix, func(t *testing.T) {
 			clearFixtureReferenceEnv(t)
 			t.Setenv("FABRIC_TEST_DSN"+suffix, "")

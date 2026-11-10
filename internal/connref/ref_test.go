@@ -37,6 +37,7 @@ func load(t *testing.T) *Ref {
 	unsetEnv(t, "FABRIC_TEST_DSN")
 	unsetEnv(t, "FABRIC_TEST_DSN_FILE_KEY")
 	unsetEnv(t, "FABRIC_TEST_DSN_PASSWORD_FILE")
+	unsetEnv(t, "FABRIC_TEST_DSN_DATABASE")
 	t.Setenv("FABRIC_TEST_DSN_FILE", source(t, fixtureURL()))
 	r, err := ResolveEnv("FABRIC_TEST_DSN", TestAdmin)
 	if err != nil {
@@ -132,6 +133,7 @@ func TestSealedPassfileAndClose(t *testing.T) {
 func TestPurposeIndependentOfConfigName(t *testing.T) {
 	unsetEnv(t, "CUSTOM_RUNNER_PASSWORD_FILE")
 	unsetEnv(t, "CUSTOM_RUNNER_FILE_KEY")
+	unsetEnv(t, "CUSTOM_RUNNER_DATABASE")
 	p := source(t, "FABRIC_DSN="+fixtureURL()+"\nFABRIC_RUNNER_DSN="+fixtureURL()+"\n")
 	unsetEnv(t, "CUSTOM_RUNNER")
 	t.Setenv("CUSTOM_RUNNER_FILE", p)
@@ -148,7 +150,7 @@ func TestPurposeIndependentOfConfigName(t *testing.T) {
 }
 
 func TestUnsafeInputsRefuseWithoutEcho(t *testing.T) {
-	for _, suffix := range []string{"", "_FILE", "_PASSWORD_FILE", "_FILE_KEY"} {
+	for _, suffix := range []string{"", "_FILE", "_PASSWORD_FILE", "_FILE_KEY", "_DATABASE"} {
 		unsetEnv(t, "FABRIC_DSN"+suffix)
 	}
 	for name, body := range map[string]string{
@@ -263,7 +265,7 @@ func TestConcurrentReferencesRemainIndependent(t *testing.T) {
 }
 
 func TestConnectionMetadataCannotTransportCredential(t *testing.T) {
-	for _, suffix := range []string{"", "_FILE", "_PASSWORD_FILE", "_FILE_KEY"} {
+	for _, suffix := range []string{"", "_FILE", "_PASSWORD_FILE", "_FILE_KEY", "_DATABASE"} {
 		unsetEnv(t, "FABRIC_DSN"+suffix)
 	}
 	for _, encoded := range []bool{false, true} {
@@ -303,10 +305,10 @@ func TestConnectionMetadataCannotTransportCredential(t *testing.T) {
 }
 
 func TestConfiguredEmptyReferenceNeverUsesLegacy(t *testing.T) {
-	for _, suffix := range []string{"_FILE", "_PASSWORD_FILE", "_FILE_KEY"} {
+	for _, suffix := range []string{"_FILE", "_PASSWORD_FILE", "_FILE_KEY", "_DATABASE"} {
 		for _, legacy := range []bool{false, true} {
 			t.Run(suffix+fmt.Sprint(legacy), func(t *testing.T) {
-				for _, name := range []string{"FABRIC_DSN", "FABRIC_DSN_FILE", "FABRIC_DSN_PASSWORD_FILE", "FABRIC_DSN_FILE_KEY"} {
+				for _, name := range []string{"FABRIC_DSN", "FABRIC_DSN_FILE", "FABRIC_DSN_PASSWORD_FILE", "FABRIC_DSN_FILE_KEY", "FABRIC_DSN_DATABASE"} {
 					unsetEnv(t, name)
 				}
 				if legacy {
@@ -326,7 +328,7 @@ func TestConfiguredEmptyReferenceNeverUsesLegacy(t *testing.T) {
 }
 
 func TestPasswordFileSourceReuse(t *testing.T) {
-	for _, name := range []string{"FABRIC_TEST_DSN", "FABRIC_TEST_DSN_FILE", "FABRIC_TEST_DSN_PASSWORD_FILE", "FABRIC_TEST_DSN_FILE_KEY"} {
+	for _, name := range []string{"FABRIC_TEST_DSN", "FABRIC_TEST_DSN_FILE", "FABRIC_TEST_DSN_PASSWORD_FILE", "FABRIC_TEST_DSN_FILE_KEY", "FABRIC_TEST_DSN_DATABASE"} {
 		unsetEnv(t, name)
 	}
 	u, _ := url.Parse(fixtureURL())

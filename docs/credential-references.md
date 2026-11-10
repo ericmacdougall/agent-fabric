@@ -23,6 +23,14 @@ inside its own process. It does not construct a password-bearing URL or write
 another operational credential file. This also applies to test, runner and
 review connection names and to configurable runner variable names.
 
+An explicit nonsecret target such as `FABRIC_DSN_DATABASE` derives a new exact
+reference before the first connection. It requires a declared file or
+password-file source; an empty target or a target alongside only the legacy
+raw variable is refused. The source database is never opened first. Host,
+port, user and purpose are preserved, and the selected reference remains open
+through pool shutdown and cleanup. This selector supplies no authority to
+connect to a database: an operation still needs its own reviewed target scope.
+
 The password-only mode is exclusive with the full DSN file and field selector.
 It trims surrounding whitespace exactly as the role password loader does,
 then refuses an empty effective password or embedded NUL/CR/LF. Connection
@@ -39,8 +47,8 @@ ambient `PG*` settings are refused. The trusted operation launcher must establis
 its clean environment **before** interpreter and dynamic-loader startup;
 client-side checks do not replace that boundary.
 
-Reference configuration is presence-aware. Setting `_FILE`, `_PASSWORD_FILE`
-or `_FILE_KEY` to an empty value is an error and never falls back to a raw
+Reference configuration is presence-aware. Setting `_FILE`, `_PASSWORD_FILE`,
+`_FILE_KEY` or `_DATABASE` to an empty value is an error and never falls back to a raw
 variable or skips a required test. Unset a mode to disable it. A full DSN file
 cannot be combined with any raw variable presence; password-only mode requires
 the nonempty, password-free metadata variable.
@@ -71,6 +79,12 @@ passfiles with only the runner credential. This does not provide live worker
 credential provisioning or change the deployed no-dispatch configuration.
 Do not grant a worker access to an application/admin source or a combined
 live environment file.
+
+Child process boundaries remove source metadata, target selectors and raw
+connection values before appending the child’s already resolved canonical
+connection. A custom runner variable name does not exempt that variable or
+its reference metadata from removal. This connection-specific cleanup is not
+a replacement for the trusted launcher's clean environment boundary.
 
 Operational credential sources and their contents belong outside the public
 repository. Review packets identify code, executable inputs and opaque source

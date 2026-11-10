@@ -63,7 +63,7 @@ func (p Purpose) field() string {
 // HasReferenceConfig distinguishes an explicitly configured empty reference
 // from an absent mode. Optional tests and compatibility paths must use presence.
 func HasReferenceConfig(name string) bool {
-	for _, suffix := range []string{"_FILE", "_PASSWORD_FILE", "_FILE_KEY"} {
+	for _, suffix := range []string{"_FILE", "_PASSWORD_FILE", "_FILE_KEY", "_DATABASE"} {
 		if _, set := os.LookupEnv(name + suffix); set {
 			return true
 		}
@@ -81,12 +81,14 @@ func ResolveEnv(name string, purpose Purpose) (*Ref, error) {
 	path, fileSet := os.LookupEnv(name + "_FILE")
 	passwordPath, passwordSet := os.LookupEnv(name + "_PASSWORD_FILE")
 	key, keySet := os.LookupEnv(name + "_FILE_KEY")
-	if !fileSet && !passwordSet && !keySet {
+	database, targetSet := os.LookupEnv(name + "_DATABASE")
+	if !fileSet && !passwordSet && !keySet && !targetSet {
 		return &Ref{dsn: raw, purpose: purpose}, nil // pre-existing raw-variable compatibility only
 	}
 	// Explicitly empty modes never become legacy raw inputs. A key is only
 	// meaningful with a full DSN file; password mode takes nonsecret metadata.
-	if (fileSet && (path == "" || rawSet || passwordSet)) ||
+	if (targetSet && ((!fileSet && !passwordSet) || !validField(database) || len(database) > 63)) ||
+		(fileSet && (path == "" || rawSet || passwordSet)) ||
 		(passwordSet && (passwordPath == "" || !rawSet || raw == "" || fileSet || keySet)) ||
 		(keySet && (!fileSet || key == "" || key != purpose.field())) {
 		return nil, errReference
@@ -114,7 +116,11 @@ func ResolveEnv(name string, purpose Purpose) (*Ref, error) {
 		}
 		m.password = password
 		m.purpose = purpose
-		return makeRef(m, strings.TrimPrefix(m.base.Path, "/"))
+		ref, err := makeRef(m, strings.TrimPrefix(m.base.Path, "/"))
+		if err != nil {
+			return nil, err
+		}
+		return selectedTarget(ref, database, targetSet)
 	}
 	body, err := readProtected(path)
 	if err != nil {
@@ -124,7 +130,29 @@ func ResolveEnv(name string, purpose Purpose) (*Ref, error) {
 	if err != nil {
 		return nil, errReference
 	}
-	return fromDSN(dsn, purpose)
+	ref, err := fromDSN(dsn, purpose)
+	if err != nil {
+		return nil, err
+	}
+	return selectedTarget(ref, database, targetSet)
+}
+
+// The source reference is never connected. The selected child owns the
+// material before its parent is closed, and lives through caller cleanup.
+func selectedTarget(ref *Ref, database string, declared bool) (*Ref, error) {
+	if !declared {
+		return ref, nil
+	}
+	child, err := ref.ForDatabase(database)
+	closeErr := ref.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		child.Close()
+		return nil, closeErr
+	}
+	return child, nil
 }
 
 func sourceDSN(body []byte, key string) (string, error) {
