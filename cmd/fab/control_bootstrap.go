@@ -21,7 +21,7 @@ func controlBootstrapMain(args []string) error {
 		if err := control.Bootstrap(ctx, st.Pool()); err != nil {
 			return err
 		}
-		fmt.Printf("control schema ready (version %d, definition %s)\n", control.SchemaVersion, control.SchemaSHA256()[:12])
+		fmt.Printf("control schema ready (version %d, definition %s)\n", control.SchemaVersion(), control.SchemaSHA256()[:12])
 		return nil
 	})
 }

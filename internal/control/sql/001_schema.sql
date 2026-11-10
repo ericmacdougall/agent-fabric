@@ -61,20 +61,119 @@ CREATE TABLE control.ingested_events (
 );
 CREATE INDEX ingested_events_initiative_ts ON control.ingested_events (initiative, ts);
 
--- Source: Mission Control's chat, mirrored read-only. origin is always 'mc'; a
--- row of Fabric origin is not representable here. The body is stored after the
--- ingest has redacted secrets (the ingest enforces that, not this table); only
--- line feeds are allowed among control characters.
-CREATE TABLE control.mc_chat_mirror (
-    seq         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    id          text        NOT NULL UNIQUE CHECK (id ~ '^[^[:cntrl:]]{1,200}$'),
-    origin      text        NOT NULL DEFAULT 'mc' CHECK (origin = 'mc'),
-    ts          timestamptz NOT NULL,
-    sender      text        NOT NULL CHECK (char_length(sender) BETWEEN 1 AND 128 AND sender !~ '[[:cntrl:]]'),
-    recipient   text        NOT NULL DEFAULT '' CHECK (char_length(recipient) <= 128 AND recipient !~ '[[:cntrl:]]'),
-    body        text        NOT NULL CHECK (char_length(body) <= 4000 AND translate(body, E'\n', '') !~ '[[:cntrl:]]'),
-    received_at timestamptz NOT NULL DEFAULT now()
+-- The content hash of a mirrored chat message: one IMMUTABLE function used by
+-- both the generated column and the guard trigger (a stored generated column is
+-- computed after BEFORE triggers run, so NEW.content_sha256 is NULL inside the
+-- trigger and the trigger must call this function on NEW's base columns).
+-- octet_length counts bytes in the server encoding, and the IMMUTABLE marking is
+-- honest only because Bootstrap refuses a server_encoding other than UTF8
+-- (convert_to alone is STABLE and a generation expression must be immutable).
+CREATE FUNCTION control.mirror_hash(sender text, recipient text, body text) RETURNS text
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path = pg_catalog AS $$
+    SELECT encode(sha256(convert_to(
+        octet_length(sender)::text || ':' || sender || '|' ||
+        octet_length(recipient)::text || ':' || recipient || '|' ||
+        octet_length(body)::text || ':' || body, 'UTF8')), 'hex')
+$$;
+
+-- The sources the ingest may name. The ingest code checks the same list; this
+-- table and the trigger below are the database-side backstop for direct SQL with
+-- the ingest credential. Owned by the schema owner and changed only by a new
+-- numbered schema file run by the owner.
+CREATE TABLE control.allowed_sources (
+    source text PRIMARY KEY CHECK (source ~ '^[a-z][a-z0-9_-]{0,31}$' AND source <> 'fabric')
 );
+INSERT INTO control.allowed_sources (source) VALUES ('harness'), ('mission-control');
+
+CREATE FUNCTION control.check_source() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM control.allowed_sources a WHERE a.source = NEW.source) THEN
+        RAISE EXCEPTION 'source % is not allowed', NEW.source USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER ingested_events_allowed_source BEFORE INSERT ON control.ingested_events
+    FOR EACH ROW EXECUTE FUNCTION control.check_source();
+
+-- Delivery states of a mirrored Mission Control message (the statuses of
+-- mc.chat/1 as hooks/mc_chat.py defines them), ranked; a sticky state (forged)
+-- is never superseded by a later or higher-ranked one.
+CREATE TABLE control.mirror_states (
+    state  text    PRIMARY KEY CHECK (state ~ '^[a-z]{1,32}$'),
+    rank   integer NOT NULL UNIQUE CHECK (rank > 0),
+    sticky boolean NOT NULL DEFAULT false
+);
+INSERT INTO control.mirror_states (state, rank, sticky) VALUES
+    ('queued', 1, false), ('unavailable', 2, false), ('failed', 3, false),
+    ('delivered', 4, false), ('answered', 5, false), ('forged', 100, true);
+
+-- Source: Mission Control's chat, mirrored read-only. One row per message id
+-- and state; origin is always 'mc'; a row of Fabric origin is not representable.
+-- The body is stored after the ingest has redacted secrets (the ingest enforces
+-- that, not this table; a direct-SQL insert skips it); only line feeds are
+-- allowed among control characters. content_sha256 is computed by the database.
+CREATE TABLE control.mc_chat_mirror (
+    seq            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id             text        NOT NULL CHECK (id ~ '^[^[:cntrl:]]{1,200}$'),
+    state          text        NOT NULL REFERENCES control.mirror_states (state),
+    origin         text        NOT NULL DEFAULT 'mc' CHECK (origin = 'mc'),
+    ts             timestamptz NOT NULL,
+    mc_ts          timestamptz NOT NULL,
+    sender         text        NOT NULL CHECK (char_length(sender) BETWEEN 1 AND 128 AND sender !~ '[[:cntrl:]]'),
+    recipient      text        NOT NULL DEFAULT '' CHECK (char_length(recipient) <= 128 AND recipient !~ '[[:cntrl:]]'),
+    body           text        NOT NULL CHECK (char_length(body) <= 4000 AND translate(body, E'\n', '') !~ '[[:cntrl:]]'),
+    content_sha256 text        GENERATED ALWAYS AS (control.mirror_hash(sender, recipient, body)) STORED,
+    received_at    timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (id, state)
+);
+
+-- The first content seen for each message id; every later row for the id must
+-- carry the same hash. One row per id also serialises concurrent inserts.
+CREATE TABLE control.mirror_content (
+    id             text        PRIMARY KEY CHECK (id ~ '^[^[:cntrl:]]{1,200}$'),
+    content_sha256 text        NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
+    first_seen     timestamptz NOT NULL DEFAULT now()
+);
+
+-- A refused (changed-content) insert is skipped and counted here. Never a body.
+CREATE TABLE control.mirror_refusals (
+    seq             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id              text        NOT NULL CHECK (id ~ '^[^[:cntrl:]]{1,200}$'),
+    state           text        NOT NULL CHECK (state ~ '^[a-z]{1,32}$'),
+    attempted_sha256 text       NOT NULL,
+    recorded_sha256  text       NOT NULL,
+    seen_at         timestamptz NOT NULL DEFAULT now()
+);
+
+-- SECURITY DEFINER (owned by the schema owner, fixed search_path): the ingest
+-- role has INSERT only, so the comparison against earlier rows runs with the
+-- owner's rights. NEW.content_sha256 is NULL here (generated after BEFORE
+-- triggers), so the hash is computed with control.mirror_hash on the base columns.
+CREATE FUNCTION control.mirror_guard() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE h text; recorded text;
+BEGIN
+    h := control.mirror_hash(NEW.sender, NEW.recipient, NEW.body);
+    INSERT INTO control.mirror_content (id, content_sha256) VALUES (NEW.id, h) ON CONFLICT (id) DO NOTHING;
+    SELECT c.content_sha256 INTO recorded FROM control.mirror_content c WHERE c.id = NEW.id;
+    IF recorded IS NULL THEN
+        -- possible under REPEATABLE READ: never treat a missing row as accept
+        RAISE EXCEPTION 'mirror content record for % not visible', NEW.id USING ERRCODE = 'serialization_failure';
+    END IF;
+    IF recorded <> h THEN
+        INSERT INTO control.mirror_refusals (id, state, attempted_sha256, recorded_sha256) VALUES (NEW.id, NEW.state, h, recorded);
+        RETURN NULL; -- skipped and counted
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER mc_chat_mirror_guard BEFORE INSERT ON control.mc_chat_mirror
+    FOR EACH ROW EXECUTE FUNCTION control.mirror_guard();
+
+-- Latest state per message: a sticky (forged) state wins, else the highest rank,
+-- then the latest Mission Control timestamp. Runs with the caller's rights.
+CREATE VIEW control.mc_chat_latest WITH (security_invoker = true) AS
+SELECT DISTINCT ON (m.id) m.id, m.state, m.mc_ts, m.ts, m.sender, m.recipient, m.body
+FROM control.mc_chat_mirror m JOIN control.mirror_states s ON s.state = m.state
+ORDER BY m.id, s.sticky DESC, s.rank DESC, m.mc_ts DESC;
 
 -- Projection: the projector's position in the outbox (and in each source
 -- table), one row per consumer. A rebuild resets it.
@@ -122,7 +221,17 @@ CREATE TRIGGER mc_chat_mirror_append_only BEFORE UPDATE OR DELETE ON control.mc_
 CREATE TRIGGER mc_chat_mirror_no_truncate BEFORE TRUNCATE ON control.mc_chat_mirror
     FOR EACH STATEMENT EXECUTE FUNCTION control.reject_mutation();
 
+CREATE TRIGGER mirror_content_append_only BEFORE UPDATE OR DELETE ON control.mirror_content
+    FOR EACH ROW EXECUTE FUNCTION control.reject_mutation();
+CREATE TRIGGER mirror_content_no_truncate BEFORE TRUNCATE ON control.mirror_content
+    FOR EACH STATEMENT EXECUTE FUNCTION control.reject_mutation();
+CREATE TRIGGER mirror_refusals_append_only BEFORE UPDATE OR DELETE ON control.mirror_refusals
+    FOR EACH ROW EXECUTE FUNCTION control.reject_mutation();
+CREATE TRIGGER mirror_refusals_no_truncate BEFORE TRUNCATE ON control.mirror_refusals
+    FOR EACH STATEMENT EXECUTE FUNCTION control.reject_mutation();
+
 -- Nothing in `control` is readable or writable by PUBLIC.
 REVOKE ALL ON SCHEMA control FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA control FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA control FROM PUBLIC;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA control FROM PUBLIC;
