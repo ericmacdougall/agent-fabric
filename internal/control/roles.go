@@ -174,7 +174,7 @@ func ApplyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, pw Passwords) 
 		return false, fmt.Errorf("apply control roles: %w", redactErr(err))
 	}
 	if pw.Export != "" || pw.Ingest != "" || pw.Service != "" {
-		if err := refuseStatementTracking(ctx, tx); err != nil {
+		if err := requireQuietLogging(ctx, tx); err != nil {
 			return false, err
 		}
 	}
@@ -213,11 +213,38 @@ func rolesDigest(ctx context.Context, conn *pgx.Conn, r Roles) (string, error) {
 	return d, err
 }
 
-// refuseStatementTracking keeps a password literal out of pg_stat_statements:
-// when the extension tracks utility statements it tries to turn that off for
-// this transaction (the setting is superuser-only) and refuses to go on when it
-// cannot, until the SCRAM verifier change (goodqa#15594) removes plaintext.
-func refuseStatementTracking(ctx context.Context, tx pgx.Tx) error {
+// requireQuietLogging keeps a password literal out of the server log and out of
+// pg_stat_statements until the SCRAM verifier change (goodqa#15594) removes
+// plaintext: a failing ALTER ROLE ... PASSWORD is logged with its statement text
+// when log_min_error_statement is error or lower. A superuser sets the logging
+// settings for this transaction; any other caller must already run with
+// log_min_error_statement=panic, log_statement=none and
+// log_min_duration_statement=-1 (for example through PGOPTIONS). When pg_stat_statements
+// tracks utility statements it must be turned off for the transaction, or the run
+// is refused. A refusal sends no password.
+func requireQuietLogging(ctx context.Context, tx pgx.Tx) error {
+	var super bool
+	if err := tx.QueryRow(ctx, "SELECT rolsuper FROM pg_roles WHERE rolname = current_user").Scan(&super); err != nil {
+		return err
+	}
+	if super {
+		for _, q := range []string{
+			"SET LOCAL log_min_error_statement = panic",
+			"SET LOCAL log_statement = none",
+			"SET LOCAL log_min_duration_statement = -1",
+		} {
+			if _, err := tx.Exec(ctx, q); err != nil {
+				return errors.New("apply control roles: cannot set the logging parameters for this transaction")
+			}
+		}
+	}
+	var lmes, ls, lmd string
+	if err := tx.QueryRow(ctx, "SELECT current_setting('log_min_error_statement'), current_setting('log_statement'), current_setting('log_min_duration_statement')").Scan(&lmes, &ls, &lmd); err != nil {
+		return err
+	}
+	if lmes != "panic" || ls != "none" || lmd != "-1" {
+		return fmt.Errorf("apply control roles: refusing to send a password: log_min_error_statement=%s log_statement=%s log_min_duration_statement=%s would let the server log a failing ALTER ROLE statement with the password in it; connect with PGOPTIONS='-c log_min_error_statement=panic -c log_statement=none -c log_min_duration_statement=-1' (or wait for the SCRAM verifier change goodqa#15594)", lmes, ls, lmd)
+	}
 	var v *string
 	if err := tx.QueryRow(ctx, "SELECT current_setting('pg_stat_statements.track_utility', true)").Scan(&v); err != nil {
 		return err

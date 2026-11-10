@@ -41,7 +41,7 @@ func TestRoleSafetyCoversControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		owner.pool.Exec(context.Background(), `REVOKE ac7_member FROM `+r.Runner()) //nolint:errcheck
+		owner.pool.Exec(context.Background(), `REVOKE ac7_member FROM `+r.Runner()+`; REVOKE ALL ON SCHEMA control FROM ac7_member; DROP ROLE IF EXISTS ac7_member`) //nolint:errcheck
 	})
 	if err := runner.CheckRunnerRole(ctx); err == nil || !strings.Contains(err.Error(), "control schema") {
 		t.Errorf("inherited: CheckRunnerRole = %v, want a refusal naming the control schema", err)

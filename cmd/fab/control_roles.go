@@ -12,12 +12,15 @@ import (
 // controlRolesMain runs `fab db roles --control-only` (goodqa#15623): it applies,
 // verifies or removes the three Control Room roles, never the fabric roles. The
 // password files are read here and never printed.
-func controlRolesMain(prefix, exportFile, ingestFile, serviceFile string, verify, remove, confirm bool) error {
+func controlRolesMain(prefix, exportFile, ingestFile, serviceFile string, verify, remove, confirm, allowNologin bool) error {
 	if confirm && !remove {
 		return usageError{errors.New("--confirm needs --remove")}
 	}
 	if verify && remove {
 		return usageError{errors.New("--verify and --remove are separate runs")}
+	}
+	if prefix == "" {
+		return usageError{errors.New("fab db roles --control-only needs an explicit --prefix (fabric_svc on live): there is no default")}
 	}
 	r := control.Roles{Prefix: prefix}
 	switch {
@@ -53,6 +56,11 @@ func controlRolesMain(prefix, exportFile, ingestFile, serviceFile string, verify
 			}
 			return nil
 		})
+	}
+	for what, f := range map[string]string{"export": exportFile, "ingest": ingestFile, "service": serviceFile} {
+		if f == "" && !allowNologin {
+			return usageError{fmt.Errorf("--%s-password-file is empty: that role would become NOLOGIN (an outage for its transport); pass --allow-nologin to confirm", what)}
+		}
 	}
 	var pw control.Passwords
 	var err error

@@ -104,7 +104,9 @@ func RemoveRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, confirm bool)
 }
 
 // VerifyRoles reports every way the control roles differ from the design, read
-// only and without connecting to any other database: role attributes, owned
+// only and without connecting to any other database: every cell of the privilege
+// matrix (tables, columns, sequences, functions, schemas, database, default
+// privileges; matrixProblems), role attributes, owned
 // objects, memberships (the creating admin's own membership is allowed),
 // CREATE on schemas public and control, CREATE on the database, and for every
 // other database the CONNECT right read from the shared catalog (such databases
@@ -117,7 +119,7 @@ func VerifyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles) (problems, no
 	if err := pool.QueryRow(ctx, "SELECT current_database()").Scan(&db); err != nil {
 		return nil, nil, err
 	}
-	for _, n := range r.Names() {
+	for kind, n := range map[string]string{"export": r.Export(), "ingest": r.Ingest(), "service": r.Service()} {
 		var super, createdb, createrole, repl, bypass, inherit bool
 		err := pool.QueryRow(ctx, `SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls, rolinherit FROM pg_roles WHERE rolname = $1`, n).
 			Scan(&super, &createdb, &createrole, &repl, &bypass, &inherit)
@@ -154,6 +156,11 @@ func VerifyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles) (problems, no
 				problems = append(problems, fmt.Sprintf("role %s may %s in schema %s", n, s.priv, s.schema))
 			}
 		}
+		mp, err := matrixProblems(ctx, pool, kind, n)
+		if err != nil {
+			return nil, nil, err
+		}
+		problems = append(problems, mp...)
 		var dbcreate bool
 		if err := pool.QueryRow(ctx, "SELECT has_database_privilege($1, $2, 'CREATE')", n, db).Scan(&dbcreate); err != nil {
 			return nil, nil, err

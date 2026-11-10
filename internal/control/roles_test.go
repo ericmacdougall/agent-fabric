@@ -2,30 +2,15 @@ package control
 
 import (
 	"context"
-	_ "embed"
-	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"fabric/internal/storetest"
 )
-
-//go:embed testdata/control-roles-matrix.json
-var matrixJSON []byte
-
-type matrixFile struct {
-	Tables        map[string]map[string]string
-	InsertColumns map[string]map[string][]string `json:"insert_columns"`
-	SchemaUsage   map[string][]string            `json:"schema_usage"`
-	Database      struct{ Connect, Create, Temp bool }
-	// Functions in schema public: the matrix expects EXECUTE on every function
-	// except a SECURITY DEFINER one and the ones with an explicit revoke, plus
-	// the two literal exceptions below (the known existing state of Fabric).
-	DefinerPublicExecute []string            `json:"definer_public_execute"`
-	NondefinerDenied     []string            `json:"nondefiner_denied"`
-	ControlExecute       map[string][]string `json:"control_function_execute"`
-}
 
 // setupRoles bootstraps control, applies the three roles under a unique
 // prefix (roles are cluster-wide) and removes them when the test ends.
@@ -65,181 +50,28 @@ func execAs(t *testing.T, p *pgxpool.Pool, ctx context.Context, role, sql string
 	return err
 }
 
-func contains(l []string, s string) bool {
-	for _, v := range l {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
-
 func kinds(r Roles) map[string]string {
 	return map[string]string{"export": r.Export(), "ingest": r.Ingest(), "service": r.Service()}
 }
 
-func has(privs string, want string) bool {
-	for _, p := range strings.Split(privs, ",") {
-		if p == want {
-			return true
-		}
-	}
-	return false
-}
-
 // goodqa#15623 AC-1 to AC-3: every cell of the privilege matrix, against the
-// committed literal.
+// committed literal (roles-matrix.json, compared by matrixProblems, the same code
+// `fab db roles --control-only --verify` runs).
 func TestControlRolesPrivilegeMatrix(t *testing.T) {
 	p, ctx, r := setupRoles(t)
-	var m matrixFile
-	if err := json.Unmarshal(matrixJSON, &m); err != nil {
-		t.Fatal(err)
-	}
-	rels := func(kindsIn string) [][3]string { // schema, name, oid
-		rows, err := p.Query(ctx, `SELECT n.nspname, c.relname, c.oid::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-			WHERE n.nspname IN ('public', 'control') AND c.relkind = ANY(string_to_array($1, ','))`, kindsIn)
+	for kind, role := range kinds(r) {
+		problems, err := matrixProblems(ctx, p, kind, role)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer rows.Close()
-		var out [][3]string
-		for rows.Next() {
-			var a, b, c string
-			if err := rows.Scan(&a, &b, &c); err != nil {
-				t.Fatal(err)
-			}
-			out = append(out, [3]string{a, b, c})
+		for _, pr := range problems {
+			t.Errorf("%s", pr)
 		}
-		return out
-	}
-	tablePrivs := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"}
-	for kind, role := range kinds(r) {
-		t.Run(kind, func(t *testing.T) {
-			for _, rel := range rels("r,v,p") {
-				full := rel[0] + "." + rel[1]
-				want := m.Tables[kind][full]
-				for _, priv := range tablePrivs {
-					var got bool
-					if err := p.QueryRow(ctx, "SELECT has_table_privilege($1, $2::oid, $3)", role, rel[2], priv).Scan(&got); err != nil {
-						t.Fatal(err)
-					}
-					if got != has(want, priv) {
-						t.Errorf("%s %s on %s: got %t, want %t", kind, priv, full, got, has(want, priv))
-					}
-				}
-				// columns: a table-level privilege covers them; INSERT may also be granted per column
-				cols, err := p.Query(ctx, `SELECT attnum, attname FROM pg_attribute WHERE attrelid = $1::oid AND attnum > 0 AND NOT attisdropped`, rel[2])
-				if err != nil {
-					t.Fatal(err)
-				}
-				type col struct {
-					n    int
-					name string
-				}
-				var cs []col
-				for cols.Next() {
-					var c col
-					if err := cols.Scan(&c.n, &c.name); err != nil {
-						t.Fatal(err)
-					}
-					cs = append(cs, c)
-				}
-				cols.Close()
-				ins := map[string]bool{}
-				for _, c := range m.InsertColumns[kind][full] {
-					ins[c] = true
-				}
-				for _, c := range cs {
-					for _, priv := range []string{"SELECT", "INSERT", "UPDATE", "REFERENCES"} {
-						var got bool
-						if err := p.QueryRow(ctx, "SELECT has_column_privilege($1, $2::oid, $3::smallint, $4)", role, rel[2], c.n, priv).Scan(&got); err != nil {
-							t.Fatal(err)
-						}
-						wantCol := has(want, priv) || (priv == "INSERT" && ins[c.name])
-						if got != wantCol {
-							t.Errorf("%s %s on column %s.%s: got %t, want %t", kind, priv, full, c.name, got, wantCol)
-						}
-					}
-				}
-			}
-			for _, rel := range rels("S") {
-				for _, priv := range []string{"USAGE", "SELECT", "UPDATE"} {
-					var got bool
-					if err := p.QueryRow(ctx, "SELECT has_sequence_privilege($1, $2::oid, $3)", role, rel[2], priv).Scan(&got); err != nil {
-						t.Fatal(err)
-					}
-					if got {
-						t.Errorf("%s has %s on sequence %s.%s, want none", kind, priv, rel[0], rel[1])
-					}
-				}
-			}
-			// functions: none in control; no SECURITY DEFINER function in public.
-			frows, err := p.Query(ctx, `SELECT n.nspname, p.proname, p.oid::text, p.prosecdef FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-				WHERE n.nspname IN ('public', 'control') AND p.prokind = 'f'`)
-			if err != nil {
-				t.Fatal(err)
-			}
-			type fn struct {
-				schema, name, oid string
-				definer           bool
-			}
-			var fns []fn
-			for frows.Next() {
-				var f fn
-				if err := frows.Scan(&f.schema, &f.name, &f.oid, &f.definer); err != nil {
-					t.Fatal(err)
-				}
-				fns = append(fns, f)
-			}
-			frows.Close()
-			for _, f := range fns {
-				var got bool
-				if err := p.QueryRow(ctx, "SELECT has_function_privilege($1, $2::oid, 'EXECUTE')", role, f.oid).Scan(&got); err != nil {
-					t.Fatal(err)
-				}
-				want := f.schema == "public" && !f.definer && !contains(m.NondefinerDenied, f.name)
-				if f.schema == "public" && f.definer && contains(m.DefinerPublicExecute, f.name) {
-					want = true
-				}
-				if f.schema == "control" && contains(m.ControlExecute[kind], f.name) {
-					want = true
-				}
-				if got != want {
-					t.Errorf("%s EXECUTE on %s.%s (security definer %t): got %t, want %t", kind, f.schema, f.name, f.definer, got, want)
-				}
-			}
-			usage := map[string]bool{}
-			for _, s := range m.SchemaUsage[kind] {
-				usage[s] = true
-			}
-			for _, s := range []string{"public", "control"} {
-				var u, c bool
-				if err := p.QueryRow(ctx, "SELECT has_schema_privilege($1, $2, 'USAGE'), has_schema_privilege($1, $2, 'CREATE')", role, s).Scan(&u, &c); err != nil {
-					t.Fatal(err)
-				}
-				if u != usage[s] || c {
-					t.Errorf("%s schema %s: USAGE %t (want %t), CREATE %t (want false)", kind, s, u, usage[s], c)
-				}
-			}
-			var conn, create, temp bool
-			if err := p.QueryRow(ctx, "SELECT has_database_privilege($1, current_database(), 'CONNECT'), has_database_privilege($1, current_database(), 'CREATE'), has_database_privilege($1, current_database(), 'TEMP')", role).Scan(&conn, &create, &temp); err != nil {
-				t.Fatal(err)
-			}
-			if conn != m.Database.Connect || create != m.Database.Create || temp != m.Database.Temp {
-				t.Errorf("%s database: CONNECT %t CREATE %t TEMP %t, want %t %t %t", kind, conn, create, temp, m.Database.Connect, m.Database.Create, m.Database.Temp)
-			}
-		})
-	}
-	// no default privileges for these roles or in schema control
-	if n := count(t, p, ctx, `SELECT count(*) FROM pg_default_acl d WHERE d.defaclnamespace = 'control'::regnamespace
-		OR d.defaclrole IN (SELECT oid FROM pg_roles WHERE rolname = ANY($1))`, r.Names()); n != 0 {
-		t.Errorf("%d default privilege entries for the control roles or schema, want 0", n)
 	}
 	problems, _, err := VerifyRoles(ctx, p, r)
 	if err != nil || len(problems) > 0 {
 		t.Errorf("VerifyRoles: %v %v, want clean", problems, err)
 	}
-	// write attempts per role, as the role
 	t.Run("export-writes", func(t *testing.T) {
 		for _, q := range []string{
 			`INSERT INTO outbox (mission_id, seq, kind, payload) VALUES ('m', 1, 'K', '{}')`,
@@ -516,11 +348,99 @@ func TestControlRolesPasswordHygiene(t *testing.T) {
 		}
 	}
 	// the error path never echoes the statement
-	_, err := ApplyRoles(ctx, p, Roles{Prefix: "ctt_pw_bad"}, Passwords{Export: "x'; DROP"})
+	_, err := ApplyRoles(ctx, p, Roles{Prefix: r.Prefix + "_bad"}, Passwords{Export: "x'; DROP"})
 	if err != nil && strings.Contains(err.Error(), "DROP") {
 		t.Errorf("an error echoed a password-bearing statement: %v", err)
 	}
-	if _, err := RemoveRoles(ctx, p, Roles{Prefix: "ctt_pw_bad"}, true); err != nil {
+	if _, err := RemoveRoles(ctx, p, Roles{Prefix: r.Prefix + "_bad"}, true); err != nil {
 		t.Errorf("cleanup of the bad-prefix roles: %v", err)
+	}
+}
+
+// goodqa#15623 AC-7 and H2 of the code review: VerifyRoles compares the live
+// grants with the matrix, so extra privileges (which the role attribute checks do
+// not see) are reported.
+func TestVerifyRolesDetectsGrantDrift(t *testing.T) {
+	p, ctx, r := setupRoles(t)
+	problems, _, err := VerifyRoles(ctx, p, r)
+	if err != nil || len(problems) != 0 {
+		t.Fatalf("clean roles: %v %v", problems, err)
+	}
+	for name, c := range map[string]struct{ grant, revoke, want string }{
+		"ingest-select-mirror":    {"GRANT SELECT ON control.mc_chat_mirror TO " + r.Ingest(), "REVOKE SELECT ON control.mc_chat_mirror FROM " + r.Ingest(), "ingest SELECT on control.mc_chat_mirror"},
+		"ingest-mirror-content":   {"GRANT SELECT, INSERT ON control.mirror_content TO " + r.Ingest(), "REVOKE ALL ON control.mirror_content FROM " + r.Ingest(), "ingest INSERT on control.mirror_content"},
+		"export-missions":         {"GRANT SELECT ON public.missions TO " + r.Export(), "REVOKE SELECT ON public.missions FROM " + r.Export(), "export SELECT on public.missions"},
+		"export-control-usage":    {"GRANT USAGE ON SCHEMA control TO " + r.Export(), "REVOKE USAGE ON SCHEMA control FROM " + r.Export(), "export schema control"},
+		"service-allowed-sources": {"GRANT INSERT ON control.allowed_sources TO " + r.Service(), "REVOKE INSERT ON control.allowed_sources FROM " + r.Service(), "service INSERT on control.allowed_sources"},
+		"service-sequence":        {"GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO " + r.Service(), "REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM " + r.Service(), "service has USAGE on sequence"},
+	} {
+		if _, err := p.Exec(ctx, c.grant); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		problems, _, err := VerifyRoles(ctx, p, r)
+		found := false
+		for _, pr := range problems {
+			if strings.Contains(pr, c.want) {
+				found = true
+			}
+		}
+		if err != nil || !found {
+			t.Errorf("%s: VerifyRoles did not report %q (problems %v, err %v)", name, c.want, problems, err)
+		}
+		if _, err := p.Exec(ctx, c.revoke); err != nil {
+			t.Fatalf("%s revoke: %v", name, err)
+		}
+	}
+	if problems, _, err := VerifyRoles(ctx, p, r); err != nil || len(problems) != 0 {
+		t.Fatalf("after reverting the drift: %v %v", problems, err)
+	}
+}
+
+// goodqa#15623 AC-13 and H1 of the code review: a caller that cannot silence the
+// server log (a non-superuser) is refused before any password is sent when the log
+// would record a failing ALTER ROLE statement.
+func TestApplyRolesRefusesLoudLogging(t *testing.T) {
+	p, ctx := open(t)
+	var lmes, ls, lmd string
+	if err := p.QueryRow(ctx, "SELECT current_setting('log_min_error_statement'), current_setting('log_statement'), current_setting('log_min_duration_statement')").Scan(&lmes, &ls, &lmd); err != nil {
+		t.Fatal(err)
+	}
+	if lmes == "panic" && ls == "none" && lmd == "-1" {
+		t.Skip("the cluster already runs quiet logging: the refusal path cannot be reached")
+	}
+	var suffix string
+	if err := p.QueryRow(ctx, "SELECT substr(md5(random()::text), 1, 8)").Scan(&suffix); err != nil {
+		t.Fatal(err)
+	}
+	adm := "ctt_adm_" + suffix
+	const admPassword = "AdmPw-0123456789-abcdef"
+	if _, err := p.Exec(ctx, fmt.Sprintf("CREATE ROLE %s LOGIN CREATEROLE PASSWORD '%s'", adm, admPassword)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.Exec(context.Background(), "REVOKE ALL ON SCHEMA control FROM "+adm+"; DROP ROLE IF EXISTS "+adm) }) //nolint:errcheck
+	if _, err := p.Exec(ctx, "GRANT USAGE ON SCHEMA control TO "+adm+"; GRANT SELECT ON control.ingested_events TO "+adm); err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(storetest.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword(adm, admPassword)
+	np, err := pgxpool.New(ctx, u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer np.Close()
+	r := Roles{Prefix: "ctt_" + suffix}
+	const secret = "Zq9-refused-0123456789abcdef"
+	_, err = ApplyRoles(ctx, np, r, Passwords{Export: secret})
+	if err == nil || !strings.Contains(err.Error(), "refusing to send a password") {
+		t.Fatalf("ApplyRoles as a non-superuser under loud logging: %v, want a refusal", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatal("the refusal echoed the password")
+	}
+	if n := count(t, p, ctx, `SELECT count(*) FROM pg_roles WHERE rolname LIKE $1`, r.Prefix+"%"); n != 0 {
+		t.Fatalf("%d roles were created despite the refusal", n)
 	}
 }
