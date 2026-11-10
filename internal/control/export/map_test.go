@@ -172,10 +172,10 @@ func TestMapEvents(t *testing.T) {
 	if s := MapRow(rows[5]).Summary; s != "mission m_c: stream held, event withheld (seq 9)" {
 		t.Errorf("held summary %q", s)
 	}
-	if s := MapRow(rows[8]); strings.Contains(s.Summary, "\x1b") || s.Subject.Initiative != "invalid" || strings.Contains(s.Summary, "summary") {
+	if s := MapRow(rows[8]); strings.Contains(s.Summary, "\x1b") || !strings.HasPrefix(s.Subject.Initiative, "invalid-") || strings.Contains(s.Summary, "summary") {
 		t.Errorf("hostile text must not be echoed: %+v", s)
 	}
-	if s := MapRow(rows[7]); s.Subject.Initiative != "invalid" {
+	if s := MapRow(rows[7]); !strings.HasPrefix(s.Subject.Initiative, "invalid-") {
 		t.Errorf("over-long mission id echoed: %+v", s)
 	}
 }

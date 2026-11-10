@@ -23,7 +23,7 @@ func controlExportMain(args []string) error {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
-		return err
+		return usageError{err}
 	}
 	if fs.NArg() != 0 {
 		return usageError{fmt.Errorf("usage: fab control export [--since CURSOR] (unexpected argument)")}
@@ -45,6 +45,9 @@ func controlExportMain(args []string) error {
 	}
 	if err != nil {
 		return err
+	}
+	if res.Lagging > 0 {
+		fmt.Fprintf(os.Stderr, "fab control export: LAGGING: %d committed event(s) are held back by an older open transaction; \"no new events\" does not mean caught up, retry later\n", res.Lagging)
 	}
 	if res.More {
 		fmt.Fprintf(os.Stderr, "fab control export: output capped at %d bytes after %d events; call again with the printed cursor\n", export.MaxOutput, res.Events)

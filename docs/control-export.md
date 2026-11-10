@@ -25,11 +25,22 @@ One JSON object per line, then exactly one `{"cursor":"OPAQUE"}` line.
 
 - Omit `--since` to start at the beginning. The first page of a long history is capped:
   output is at most 1 MiB, never cut mid-line, and stderr says so; call again with the
-  printed cursor until a call prints no event lines.
+  printed cursor until a call prints no event lines and stderr shows no LAGGING line.
 - A call with no new events exits 0 with only the cursor line (the same cursor).
 - A cursor is refused with exit 3 and nothing on stdout when it is malformed, was minted
-  for another database (recreated or restored: the database oid differs), or names an
-  outbox row this store does not have (stale).
+  for another database (different name or oid), names an outbox row this store does not
+  have (stale), or names a row whose content differs (a rebuilt store or another cluster
+  with the same database name and oid: the cursor carries a hash of the row's mission,
+  seq and insert time).
+- Lagging: a committed row is held back while any older transaction in the cluster is
+  open (this is the same visibility rule the scheduler uses). "No event lines" therefore
+  does not always mean caught up. When rows are held back, stderr says `LAGGING: N ...`
+  and the exit code stays 0; the cursor does not move past them, so a later call returns
+  them in order.
+- A held-stream placeholder (`stream held, event withheld`) is exported once under its
+  `fabric:<id>`. If the hold is later released, the same id is not re-exported with the
+  real kind; a consumer that dedupes on id keeps the placeholder.
+- No `historic` flag is set on a first backfill (open point for goodqa#15585).
 - Rows come from one `REPEATABLE READ, READ ONLY` transaction and only when their
   transaction is older than every in-progress one (`o.xid < pg_snapshot_xmin(...)`),
   which with the xid-ordered `outboxOrderLock` (#15577) means a late commit is never

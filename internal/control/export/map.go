@@ -6,6 +6,8 @@
 package export
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"strconv"
 	"strings"
@@ -77,7 +79,9 @@ var warnKinds = map[domain.EventKind]bool{
 func MapRow(r Row) Event {
 	mission := r.Mission
 	if !idShape.MatchString(mission) {
-		mission = "invalid"
+		// A stable, distinct stand-in: malformed ids neither collide with each other nor with a real mission.
+		sum := sha256.Sum256([]byte(mission))
+		mission = "invalid-" + hex.EncodeToString(sum[:4])
 	}
 	ev := Event{
 		Schema:  Schema,
@@ -93,6 +97,9 @@ func MapRow(r Row) Event {
 	case r.Held:
 		ev.Kind, ev.Severity = "system", "warn"
 		ev.Summary = prefix + "stream held, event withheld" + suffix
+	case r.Kind == "":
+		ev.Kind = "system"
+		ev.Summary = prefix + "outbox row has no event record" + suffix
 	case !domain.KnownEventKind(k):
 		ev.Kind = "system"
 		ev.Summary = prefix + "event of an unrecognized kind withheld" + suffix

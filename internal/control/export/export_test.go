@@ -312,12 +312,12 @@ func TestStaleCursor(t *testing.T) {
 	c := conn(t, ctx, storetest.DSN)
 	seed(t, st, ctx, "st", 5)
 	_, cur, _ := run(t, ctx, c, "")
-	_, id, err := decodeCursor(cur)
+	_, id, rh, err := decodeCursor(cur)
 	if err != nil || id < 2 {
 		t.Fatalf("cursor %q: id %d %v", cur, id, err)
 	}
-	dbid, _, _ := decodeCursor(cur)
-	foreign := encodeCursor("0123456789abcdef", id)
+	dbid, _, _, _ := decodeCursor(cur)
+	foreign := encodeCursor("0123456789abcdef", id, rh)
 	if dbid == "0123456789abcdef" {
 		t.Fatal("collision")
 	}
@@ -552,5 +552,65 @@ func TestMapEventsFromStore(t *testing.T) {
 			ev["subject"].(map[string]any)["initiative"] != mission {
 			t.Errorf("row %d mapped to %v", id, ev)
 		}
+	}
+}
+
+// Review F2: a store that has a row with the same id but other content (same
+// database name and oid, rebuilt or a different cluster) must refuse the cursor.
+func TestCursorBoundToRowContent(t *testing.T) {
+	st, ctx := fresh(t)
+	c := conn(t, ctx, storetest.DSN)
+	seed(t, st, ctx, "a", 3)
+	_, cur, _ := run(t, ctx, c, "")
+	if err := st.Truncate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	seed(t, st, ctx, "b", 3) // same row count and ids, different missions
+	var buf bytes.Buffer
+	_, err := Export(ctx, c, cur, &buf)
+	if !errors.Is(err, ErrBadCursor) || !strings.Contains(err.Error(), "different content") || buf.Len() != 0 {
+		t.Fatalf("err %v, %d bytes", err, buf.Len())
+	}
+}
+
+// Review F1: rows held back by an older open transaction (here in another
+// database of the cluster) are reported, so a stall is not read as caught up.
+func TestLaggingReported(t *testing.T) {
+	st, ctx := fresh(t)
+	c := conn(t, ctx, storetest.DSN)
+	seed(t, st, ctx, "l", 1)
+	_, cur, _ := run(t, ctx, c, "")
+	blocker := conn(t, ctx, storetest.DSN)
+	if _, err := blocker.Exec(ctx, `BEGIN`); err != nil {
+		t.Fatal(err)
+	}
+	var x string
+	if err := blocker.QueryRow(ctx, `SELECT pg_current_xact_id()::text`).Scan(&x); err != nil {
+		t.Fatal(err)
+	}
+	seed(t, st, ctx, "m", 2)
+	evs, cur2, res := run(t, ctx, c, cur)
+	if len(evs) != 0 || cur2 != cur || res.Lagging < 2 {
+		t.Fatalf("events=%d cursor same=%v lagging=%d", len(evs), cur2 == cur, res.Lagging)
+	}
+	if _, err := blocker.Exec(ctx, `ROLLBACK`); err != nil {
+		t.Fatal(err)
+	}
+	evs, _, res = run(t, ctx, c, cur)
+	if len(evs) == 0 || res.Lagging != 0 {
+		t.Fatalf("after the blocker ended: events=%d lagging=%d", len(evs), res.Lagging)
+	}
+}
+
+// Review F6/F8: distinct malformed mission ids stay distinct; a missing event record is named as such.
+func TestMapMalformedAndOrphan(t *testing.T) {
+	a := MapRow(Row{ID: 1, Mission: "bad id 1", Seq: 1, Kind: "MISSION_ADMITTED", At: at})
+	b := MapRow(Row{ID: 2, Mission: "bad id 2", Seq: 1, Kind: "MISSION_ADMITTED", At: at})
+	if a.Subject.Initiative == b.Subject.Initiative || a.Subject.Initiative == "invalid" {
+		t.Fatalf("%q %q", a.Subject.Initiative, b.Subject.Initiative)
+	}
+	o := MapRow(Row{ID: 3, Mission: "m_o", Seq: 1, Kind: "", At: at})
+	if o.Kind != "system" || !strings.Contains(o.Summary, "no event record") {
+		t.Fatalf("%+v", o)
 	}
 }
