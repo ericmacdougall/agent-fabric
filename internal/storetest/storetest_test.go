@@ -3,6 +3,7 @@ package storetest
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 
 	"fabric/internal/connref"
 	"fabric/internal/store"
+	"github.com/jackc/pgx/v5"
 )
 
 // This package's regression is intentionally a real disposable-Postgres test.
@@ -28,6 +30,42 @@ func TestMain(m *testing.M) {
 const failureChildEnv = "FABRIC_FIXTURE_FAILURE_CHILD"
 const failureRootEnv = "FABRIC_FIXTURE_FAILURE_ROOT"
 
+func TestFixtureRoleClaimPreservesPreexistingRole(t *testing.T) {
+	st := Open(t)
+	roles := store.Roles{Prefix: fmt.Sprintf("fabric_collision_%d", os.Getpid())}
+	identifier := pgx.Identifier{roles.Scheduler()}.Sanitize()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := st.Pool().Exec(ctx, "CREATE ROLE "+identifier+" NOLOGIN"); err != nil {
+		t.Fatal("create collision control role failed")
+	}
+	// This test owns only this successful CREATE, regardless of the marker
+	// claim under test. It never recovers any other PID-derived role.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := st.Pool().Exec(ctx, "DROP ROLE "+identifier); err != nil {
+			t.Error("remove collision control role failed")
+		}
+	})
+	var before uint32
+	if err := st.Pool().QueryRow(ctx, "SELECT oid FROM pg_roles WHERE rolname=$1", roles.Scheduler()).Scan(&before); err != nil {
+		t.Fatal("read collision control identity failed")
+	}
+	claim := fixtureRoles{roles: roles, marker: "fabric-storetest:11111111111111111111111111111111"}
+	if err := claim.claim(ctx, st.Pool()); err == nil {
+		t.Fatal("accepted preexisting role collision")
+	}
+	if err := claim.cleanup(ctx, st.Pool()); err != nil {
+		t.Fatal("failed claim cleanup refused unexpectedly")
+	}
+	var unchanged bool
+	if err := st.Pool().QueryRow(ctx, `SELECT count(*)=1 AND bool_and(oid=$2::oid AND NOT rolcanlogin)
+		FROM pg_roles WHERE rolname=ANY($1)`, claim.names(), before).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatal("preexisting role changed or partial fixture roles survived")
+	}
+}
+
 func TestAppRunnerFixtureFailureCleansOwnedRoles(t *testing.T) {
 	if phase := os.Getenv(failureChildEnv); phase != "" {
 		runFixtureFailureChild(t, phase)
@@ -41,7 +79,7 @@ func TestAppRunnerFixtureFailureCleansOwnedRoles(t *testing.T) {
 		t.Fatal("open cleanup-control database failed")
 	}
 	defer parent.Close()
-	for _, phase := range []string{"directory", "app", "runner"} {
+	for _, phase := range []string{"directory", "app", "runner", "apply-after-commit"} {
 		t.Run(phase, func(t *testing.T) {
 			root := t.TempDir()
 			fixtureRoot := filepath.Join(root, "fixtures")
@@ -58,16 +96,6 @@ func TestAppRunnerFixtureFailureCleansOwnedRoles(t *testing.T) {
 				t.Fatal("start cleanup fault child failed")
 			}
 			roles := store.Roles{Prefix: fmt.Sprintf("fabric_s%d", child.Process.Pid)}
-			// Recovery is scoped to this exact child, and runs only after the
-			// zero-role assertion has observed whether helper cleanup worked.
-			t.Cleanup(func() {
-				recoveryCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-				defer stop()
-				for _, role := range []string{roles.App(), roles.Runner(), roles.Scheduler()} {
-					parent.Pool().Exec(recoveryCtx, "DROP OWNED BY "+role)       //nolint:errcheck
-					parent.Pool().Exec(recoveryCtx, "DROP ROLE IF EXISTS "+role) //nolint:errcheck
-				}
-			})
 			waitErr := child.Wait()
 			if ctx.Err() != nil {
 				t.Fatal("cleanup fault child exceeded its owned deadline")
@@ -77,9 +105,10 @@ func TestAppRunnerFixtureFailureCleansOwnedRoles(t *testing.T) {
 				t.Fatal("cleanup fault child did not report its intended test failure")
 			}
 			message := map[string]string{
-				"directory": "create private credential fixture directory failed",
-				"app":       "create app credential fixture failed",
-				"runner":    "create runner credential fixture failed",
+				"directory":          "create private credential fixture directory failed",
+				"app":                "create app credential fixture failed",
+				"runner":             "create runner credential fixture failed",
+				"apply-after-commit": "apply test roles failed",
 			}[phase]
 			if !bytes.Contains(output.Bytes(), []byte(message)) {
 				t.Fatal("cleanup fault did not reach the intended fixture failure")
@@ -131,6 +160,16 @@ func runFixtureFailureChild(t *testing.T, phase string) {
 		}
 	}
 	factories := fixtureFactories{
+		applyRoles: func(ctx context.Context, roles store.Roles, app, runner string) error {
+			if err := owner.ApplyRoles(ctx, roles, app, runner); err != nil {
+				return err
+			}
+			if phase == "apply-after-commit" {
+				proveProvisioned("", 0)
+				return errors.New("synthetic post-commit failure")
+			}
+			return nil
+		},
 		directory: func(string) (string, error) {
 			if phase == "directory" {
 				proveProvisioned("", 0)
@@ -150,7 +189,7 @@ func runFixtureFailureChild(t *testing.T, phase string) {
 			return connref.NewFixture(base, purpose, user, password, directory)
 		},
 	}
-	if phase != "directory" && phase != "app" && phase != "runner" {
+	if phase != "directory" && phase != "app" && phase != "runner" && phase != "apply-after-commit" {
 		t.Fatal("unknown cleanup fault phase")
 	}
 	appRunnerDSNs(t, owner, factories)

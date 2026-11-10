@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -52,14 +53,16 @@ func Main(m *testing.M, prefix string) (code int) {
 	}
 	defer pool.Close()
 	name := fmt.Sprintf("fabric_%s_%d", prefix, os.Getpid())
-	pool.Exec(ctx, `DROP DATABASE IF EXISTS "`+name+`" WITH (FORCE)`) //nolint:errcheck // owned leftover from a killed run
-	if _, err := pool.Exec(ctx, `CREATE DATABASE "`+name+`"`); err != nil {
+	drop, err := createFixtureDatabase(ctx, pool, name)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "create test database failed")
 		return 2
 	}
 	var dbRef *connref.Ref
 	defer func() {
-		if _, err := pool.Exec(context.Background(), `DROP DATABASE "`+name+`" WITH (FORCE)`); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := drop(ctx); err != nil {
 			fmt.Fprintln(os.Stderr, "drop test database failed")
 			code = 2
 		}
@@ -108,6 +111,7 @@ func Open(t *testing.T) *store.Store {
 type fixtureFactories struct {
 	directory  func(string) (string, error)
 	credential func(string, connref.Purpose, string, string, string) (*connref.Fixture, error)
+	applyRoles func(context.Context, store.Roles, string, string) error
 }
 
 // AppRunnerDSNs gives the test database least-privilege roles and returns
@@ -135,23 +139,22 @@ func appRunnerDSNs(t *testing.T, st *store.Store, factories fixtureFactories) (s
 		return hex.EncodeToString(b)
 	}
 	appPassword, runnerPassword := randomPassword(), randomPassword()
-	if err := st.ApplyRoles(context.Background(), r, appPassword, runnerPassword); err != nil {
-		t.Fatal("apply test roles failed")
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal("generate test role ownership marker failed")
 	}
-	// This registration is deliberately the first action after provisioning:
-	// a fatal directory/app/runner setup error must still remove owned roles.
+	owned := fixtureRoles{roles: r, marker: "fabric-storetest:" + hex.EncodeToString(nonce[:])}
 	var fixtureDir string
 	var appRef, runnerRef *connref.Fixture
+	// Register before CREATE. A lost commit acknowledgement or an ApplyRoles
+	// error after commit still leaves the atomic creation marker for cleanup.
 	t.Cleanup(func() {
 		// Callers register connection/pool cleanup after this helper returns,
 		// so LIFO closes those users first. These refs live through role cleanup.
-		for _, n := range []string{r.App(), r.Runner(), r.Scheduler()} {
-			if _, err := st.Pool().Exec(context.Background(), "DROP OWNED BY "+n); err != nil {
-				t.Error("cleanup test role ownership failed")
-			}
-			if _, err := st.Pool().Exec(context.Background(), "DROP ROLE "+n); err != nil {
-				t.Error("cleanup test role failed")
-			}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := owned.cleanup(ctx, st.Pool()); err != nil {
+			t.Error("cleanup test role ownership failed")
 		}
 		if runnerRef != nil {
 			if err := runnerRef.Close(); err != nil {
@@ -169,6 +172,18 @@ func appRunnerDSNs(t *testing.T, st *store.Store, factories fixtureFactories) (s
 			}
 		}
 	})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := owned.claim(ctx, st.Pool()); err != nil {
+		t.Fatal("claim test roles failed")
+	}
+	applyRoles := factories.applyRoles
+	if applyRoles == nil {
+		applyRoles = st.ApplyRoles
+	}
+	if err := applyRoles(ctx, r, appPassword, runnerPassword); err != nil {
+		t.Fatal("apply test roles failed")
+	}
 	fixtureDir, err := factories.directory(fixtureParent)
 	if err != nil {
 		t.Fatal("create private credential fixture directory failed")
