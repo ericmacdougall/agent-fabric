@@ -317,7 +317,7 @@ def close_unrelated(keep):
                 pass  # the directory iterator FD may already have closed
 
 
-def execute(args, items):
+def execute(args, items, validate_connection=None):
     # This check cannot undo loader/interpreter startup. The managed caller
     # must already have established the clean pre-start environment.
     if any(name.startswith(("PG", "LD_", "PYTHON")) or name in ("BASH_ENV", "ENV") for name in os.environ):
@@ -327,6 +327,10 @@ def execute(args, items):
         client_fd, tool = verified_client(args.client, args.client_sha256)
         client_arguments(tool, items, "")  # reject unsupported flags before reading credentials
         connection, password = load_connection(args)
+        if validate_connection is not None:
+            # A manifest-bound trusted caller may add exact operation metadata
+            # checks without receiving the password or reopening the source.
+            validate_connection(connection)
         argv = [args.client] + client_arguments(tool, items, connection.database)
         auth_fd = authentication_fd(connection, password)
         env = child_environment(connection, auth_fd, args.session)

@@ -449,6 +449,28 @@ class AdapterControls(unittest.TestCase):
             self.run_refusal(self.arguments(source, client=broken, digest=digest))
             self.assertFalse(backend.connected.is_set(), "non-profile executable reached authentication")
 
+    def test_expected_operation_profile_refuses_source_drift_before_network(self):
+        with FakePostgres() as backend:
+            source = self.source(self.dsn(backend.port))
+            helper = ROOT / "exec_failure_control.py"
+            result = subprocess.run([PYTHON, "-I", "-S", str(helper), str(source), "profile-reject"],
+                                    env=dict(CLEAN_ENV), capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, b"TRUSTED_PROFILE_REFUSAL_OK\n")
+            self.assertFalse(backend.connected.is_set(), "metadata drift reached an authentication endpoint")
+
+    def test_trusted_operation_validator_accepts_metadata_and_real_client_semantics(self):
+        with FakePostgres() as backend:
+            source = self.source(self.dsn(backend.port))
+            helper = ROOT / "exec_failure_control.py"
+            result = subprocess.run([PYTHON, "-I", "-S", str(helper), str(source), "profile-allow"],
+                                    env=dict(CLEAN_ENV), capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, b"1\n")
+            self.assertTrue(backend.authenticated and backend.query_seen)
+            self.assertFalse(SYNTHETIC_PASSWORD.encode() in result.stdout + result.stderr)
+            self.assertFalse(urllib.parse.quote(SYNTHETIC_PASSWORD, safe="").encode() in result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

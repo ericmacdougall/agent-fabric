@@ -108,10 +108,42 @@ def owner_control():
     sys.stdout.write("OWNER_METADATA_REFUSAL_OK\n")
 
 
+def profile_control(allow):
+    module = load_adapter()
+    arguments = module.parser().parse_args([
+        "--client", CLIENT, "--client-sha256", CLIENT_SHA256,
+        "--purpose", "test", "--dsn-file", sys.argv[1],
+    ])
+    observed = []
+    def validate(connection):
+        # Operation metadata only: callback never receives password/raw source.
+        if set(vars(connection)) != {"host", "port", "database", "user", "sslmode", "timeout", "application"}:
+            raise AssertionError
+        observed.append(True)
+        expected = (("127.0.0.1", "fabric_fixture", "fixture_user") if allow
+                    else ("127.0.0.1", "fixture_expected_database", "fixture_expected_user"))
+        if (connection.host, connection.database, connection.user) != expected:
+            if allow:
+                raise AssertionError
+            raise module.Refusal("profile_mismatch")
+        if not allow:
+            raise AssertionError
+    try:
+        module.execute(arguments, ["-X", "-A", "-t", "-q", "--command", "SELECT 1"], validate)
+    except module.Refusal:
+        if allow or observed != [True]:
+            raise AssertionError
+    else:
+        raise AssertionError
+    sys.stdout.write("TRUSTED_PROFILE_REFUSAL_OK\n")
+
+
 if __name__ == "__main__":
     try:
         if len(sys.argv) == 3 and sys.argv[2] == "owner":
             owner_control()
+        elif len(sys.argv) == 3 and sys.argv[2] in ("profile-reject", "profile-allow"):
+            profile_control(sys.argv[2] == "profile-allow")
         else:
             control()
     except Exception:

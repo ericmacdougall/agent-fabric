@@ -73,3 +73,17 @@ a unit fault control; it does not claim an actual account/chown integration test
 These controls are Linux/profile-specific. They do not certify real database
 authentication, full pg_dump/pg_restore flows, copied-data rehearsal, deployment,
 platform runtime or live release. Those checks remain separate gates.
+
+Trusted operation code can pass a `validate_connection` callback to `execute`.
+It receives only the immutable `Connection` metadata object (host, port,
+database, user, TLS mode, timeout and approved application name), after source
+parsing and before auth descriptor creation or exec. It never receives the
+password, raw URL or source contents. The callback and its imports must be part
+of the frozen caller code closure; no CLI-selected module or callback is loaded.
+Use it to compare separately approved operation metadata, then prove actual
+authenticated identity and privileges through the operation's later checks.
+
+This repository contains the product reference code and reusable fixed-client
+transport. Site deployment scripts, machine profiles, runtime sources and
+operational receipts are supplied and reviewed separately outside this tree.
+Building the public source does not reproduce or approve a site's release.
