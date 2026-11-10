@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,7 +22,7 @@ var checkable = regexp.MustCompile(`^(fabric_live|fabric_r15299_[a-z0-9_]+|fabte
 
 // otherDatabases implements the code part of spec AC-14 (goodqa#15623): for each
 // allowlisted other database it connects read-only and checks that no control role
-// may CREATE in schema public or in the database; for the rest it only reports
+// may CREATE in any non-system schema or in the database; for the rest it only reports
 // that they were not checked. It returns problems (real findings) and notes.
 func otherDatabases(ctx context.Context, pool *pgxpool.Pool, r Roles, current string) (problems, notes []string, err error) {
 	rows, err := pool.Query(ctx, `SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate AND datname <> $1 ORDER BY datname`, current)
@@ -50,6 +51,7 @@ func otherDatabases(ctx context.Context, pool *pgxpool.Pool, r Roles, current st
 		ps, note, err := checkOneDatabase(ctx, pool, r, n)
 		if err != nil {
 			notes = append(notes, fmt.Sprintf("other_db_rights: database %s: unchecked, cannot connect read-only (%s)", n, redactErr(err)))
+			problems = append(problems, fmt.Sprintf("other_db_rights: database %s could not be checked", n))
 			continue
 		}
 		problems = append(problems, ps...)
@@ -76,30 +78,54 @@ func otherDatabases(ctx context.Context, pool *pgxpool.Pool, r Roles, current st
 func checkOneDatabase(ctx context.Context, pool *pgxpool.Pool, r Roles, name string) ([]string, string, error) {
 	cfg := pool.Config().ConnConfig.Copy()
 	cfg.Database = name
+	cfg.ConnectTimeout = 5 * time.Second
+	cfg.RuntimeParams["default_transaction_read_only"] = "on"
+	cfg.RuntimeParams["statement_timeout"] = "5s"
+	cfg.RuntimeParams["lock_timeout"] = "5s"
 	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, "", err
 	}
 	defer conn.Close(context.Background()) //nolint:errcheck
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, "", err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck
 	var problems []string
 	for _, role := range r.Names() {
 		var exists bool
-		if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)", role).Scan(&exists); err != nil {
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)", role).Scan(&exists); err != nil {
 			return nil, "", err
 		}
 		if !exists {
 			continue
 		}
-		var schemaCreate, dbCreate bool
-		if err := conn.QueryRow(ctx, "SELECT has_schema_privilege($1, 'public', 'CREATE'), has_database_privilege($1, current_database(), 'CREATE')", role).Scan(&schemaCreate, &dbCreate); err != nil {
+		var dbCreate bool
+		if err := tx.QueryRow(ctx, "SELECT has_database_privilege($1, current_database(), 'CREATE')", role).Scan(&dbCreate); err != nil {
 			return nil, "", err
 		}
-		if schemaCreate {
-			problems = append(problems, fmt.Sprintf("role %s may CREATE in schema public of database %s", role, name))
+		rows, err := tx.Query(ctx, `SELECT nspname FROM pg_namespace
+			WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'
+			AND has_schema_privilege($1, oid, 'CREATE') ORDER BY nspname`, role)
+		if err != nil {
+			return nil, "", err
+		}
+		for rows.Next() {
+			var schema string
+			if err := rows.Scan(&schema); err != nil {
+				rows.Close()
+				return nil, "", err
+			}
+			problems = append(problems, fmt.Sprintf("role %s may CREATE in schema %s of database %s", role, schema, name))
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, "", err
 		}
 		if dbCreate {
 			problems = append(problems, fmt.Sprintf("role %s may CREATE in database %s", role, name))
 		}
 	}
-	return problems, fmt.Sprintf("other_db_rights: database %s: checked (schema public and database CREATE), %d problem(s)", name, len(problems)), nil
+	return problems, fmt.Sprintf("other_db_rights: database %s: checked read-only (all non-system schemas and database CREATE), %d problem(s)", name, len(problems)), tx.Commit(ctx)
 }

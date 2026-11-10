@@ -104,13 +104,15 @@ func RemoveRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, confirm bool)
 }
 
 // VerifyRoles reports every way the control roles differ from the design, read
-// only and without connecting to any other database: every cell of the privilege
+// only: every cell of the privilege
 // matrix (tables, columns, sequences, functions, schemas, database, default
 // privileges; matrixProblems), role attributes, owned
 // objects, memberships (the creating admin's own membership is allowed),
 // CREATE on schemas public and control, CREATE on the database, and for every
-// other database the CONNECT right read from the shared catalog (such databases
-// are reported as "unchecked, not connected"). An empty result means clean.
+// allowlisted other database a read-only check of CREATE in all non-system
+// schemas and the database. Databases outside the allowlist are never connected
+// to, and their CONNECT rights are only read from the shared catalog. A failed
+// allowlisted check is a problem, never a clean result.
 func VerifyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles) (problems, notes []string, err error) {
 	if !rolePrefix.MatchString(r.Prefix) {
 		return nil, nil, fmt.Errorf("role prefix %q", r.Prefix)

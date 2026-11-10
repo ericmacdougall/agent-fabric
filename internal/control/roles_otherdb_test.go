@@ -7,7 +7,26 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// failDatabaseConnect simulates a database becoming unreachable after catalog
+// discovery, using a cancelled real connection attempt rather than fake rows.
+type failDatabaseConnect struct{ database string }
+
+func (f failDatabaseConnect) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	return ctx
+}
+func (f failDatabaseConnect) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+func (f failDatabaseConnect) TraceConnectStart(ctx context.Context, data pgx.TraceConnectStartData) context.Context {
+	if data.ConnConfig.Database == f.database {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		return cancelled
+	}
+	return ctx
+}
+func (f failDatabaseConnect) TraceConnectEnd(context.Context, pgx.TraceConnectEndData) {}
 
 // goodqa#15623 AC-14 (code part): the other-database check connects only to the
 // allowlist (fabric_live, rehearsal copies, scratch databases), finds a CREATE right on
@@ -69,4 +88,51 @@ func TestControlRolesOtherDatabases(t *testing.T) {
 	if _, err := conn.Exec(ctx, "REVOKE CREATE ON SCHEMA public FROM "+quoteID(r.Ingest())); err != nil {
 		t.Fatal(err)
 	}
+	// Legacy or application schemas can grant CREATE independently of public.
+	// Probe both a direct grant and PUBLIC; neither is safe for a control role.
+	if _, err := conn.Exec(ctx, "CREATE SCHEMA application_data"); err != nil {
+		t.Fatal(err)
+	}
+	for _, grantee := range []string{quoteID(r.Ingest()), "PUBLIC"} {
+		t.Run("application-schema-"+grantee, func(t *testing.T) {
+			if _, err := conn.Exec(ctx, "GRANT CREATE ON SCHEMA application_data TO "+grantee); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if _, err := conn.Exec(ctx, "REVOKE CREATE ON SCHEMA application_data FROM "+grantee); err != nil {
+					t.Error(err)
+				}
+			})
+			problems, _, err := VerifyRoles(ctx, p, r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "role " + r.Ingest() + " may CREATE in schema application_data of database " + scratch
+			for _, problem := range problems {
+				if problem == want {
+					return
+				}
+			}
+			t.Errorf("CREATE through %s went unreported: %v", grantee, problems)
+		})
+	}
+	t.Run("unreachable-allowlisted-database", func(t *testing.T) {
+		cfg := p.Config()
+		cfg.ConnConfig.Tracer = failDatabaseConnect{database: scratch}
+		probe, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer probe.Close()
+		problems, _, err := VerifyRoles(ctx, probe, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, problem := range problems {
+			if strings.Contains(problem, "database "+scratch+" could not be checked") {
+				return
+			}
+		}
+		t.Errorf("unreachable allowlisted database was reported clean: %v", problems)
+	})
 }
