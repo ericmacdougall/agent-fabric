@@ -30,7 +30,7 @@ func TestExportRoleJoinedColumns(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		mission := fmt.Sprintf("metadata_%d", i)
-		if _, err := p.Exec(ctx, `INSERT INTO missions(id,ticket,state) VALUES($1,'GoodQA goodqa#15623','{}');`, mission); err != nil {
+		if _, err := p.Exec(ctx, `INSERT INTO missions(id,ticket,state,provider) VALUES($1,'GoodQA goodqa#15623','{}','claude-code');`, mission); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := p.Exec(ctx, `INSERT INTO events(mission_id,seq,kind,actor,command_id,payload) VALUES($1,1,'MISSION_ADMITTED','test','metadata','{}')`, mission); err != nil {
