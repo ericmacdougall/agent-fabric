@@ -389,7 +389,8 @@ func TestHeldAndUnknownNeverLeak(t *testing.T) {
 			normal++
 		}
 	}
-	if unknown != 1 || held != 1 || normal < 4 {
+	// m_h1 has no scheduler cursor yet, so all of its rows (2) are held.
+	if unknown != 1 || held != 2 || normal != 3 {
 		t.Fatalf("unknown=%d held=%d normal=%d; nothing may be dropped:\n%s", unknown, held, normal, buf.String())
 	}
 	var total int
@@ -505,5 +506,51 @@ func TestNoSkipUnderConcurrentWriters(t *testing.T) {
 	}
 	if len(seen) != total {
 		t.Fatalf("exported %d of %d outbox rows: rows were skipped", len(seen), total)
+	}
+}
+
+// AC-1 end to end: every line a real store produces validates against the
+// pinned schema, carries a fabric: id, the event time and the mission as the
+// stream, a summary of at most 280 characters, and none of the payload text.
+func TestMapEventsFromStore(t *testing.T) {
+	schema := loadSchema(t)
+	st, ctx := fresh(t)
+	c := conn(t, ctx, storetest.DSN)
+	seed(t, st, ctx, "ae", 3)
+	long := `{"note":"` + secret + strings.Repeat("y", 600) + `"}`
+	rawEvents(t, st, ctx, "m_ae0", [2]string{"EVIDENCE_RECORDED", long}, [2]string{"DELIVERED", long})
+	var buf bytes.Buffer
+	if _, err := Export(ctx, c, "", &buf); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), secret) {
+		t.Fatalf("payload text in the output:\n%s", buf.String())
+	}
+	evs, _ := parseOutput(t, buf.Bytes())
+	if len(evs) != 5 {
+		t.Fatalf("%d events, want 5", len(evs))
+	}
+	rows, err := st.Pool().Query(ctx, `SELECT o.id, o.mission_id, e.at FROM outbox o JOIN events e USING (mission_id, seq) ORDER BY o.id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	i := 0
+	for rows.Next() {
+		var id int64
+		var mission string
+		var at time.Time
+		if err := rows.Scan(&id, &mission, &at); err != nil {
+			t.Fatal(err)
+		}
+		ev := evs[i]
+		i++
+		if bad := validate(schema, any(ev), "$"); len(bad) > 0 {
+			t.Errorf("%v: %v", ev, bad)
+		}
+		if ev["id"] != fmt.Sprintf("fabric:%d", id) || ev["ts"] != at.UTC().Format("2006-01-02T15:04:05.000Z") ||
+			ev["subject"].(map[string]any)["initiative"] != mission {
+			t.Errorf("row %d mapped to %v", id, ev)
+		}
 	}
 }

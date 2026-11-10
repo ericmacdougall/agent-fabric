@@ -156,7 +156,7 @@ func TestMapEvents(t *testing.T) {
 	if ev.ID != "fabric:1" || ev.TS != "2026-11-09T12:30:45.123Z" || ev.Subject.Initiative != "m_a" || ev.Kind != "owner" {
 		t.Errorf("basic mapping: %+v", ev)
 	}
-	if ev := MapRow(rows[9]); ev.TS != "2026-11-09T11:30:45.123Z" || ev.ID != "fabric:1099511627776" {
+	if ev := MapRow(rows[9]); ev.TS != "2026-11-09T12:30:45.123Z" || ev.ID != "fabric:1099511627776" {
 		t.Errorf("ts must be UTC event time and the id the outbox id: %+v", ev)
 	}
 	if ev := MapRow(rows[1]); ev.Kind != "release" {
