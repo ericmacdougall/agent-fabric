@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,6 +123,10 @@ func (s *session) run() {
 			s.handle(ev)
 		case <-s.timerC:
 			s.timerC = nil
+			if s.requirementsPhase {
+				s.fail("codex: requirements refused")
+				continue
+			}
 			s.fail(fmt.Sprintf("codex did not answer %s within %s", s.timerKind, s.reqTimeout))
 		}
 		if !s.finished && s.em.Err() != nil {
@@ -173,6 +178,17 @@ func (s *session) request(method string, params any, kind string) error {
 	s.nextReq++
 	id := s.nextReq
 	s.pend[id] = kind
+	if kind == "controlled_requirements" {
+		s.disarm()
+		s.timerKind = kind
+		s.timer = time.NewTimer(5 * time.Second)
+		s.timerC = s.timer.C
+		b, err := json.Marshal(map[string]any{"id": id, "method": method, "params": params})
+		if err != nil {
+			return errRequirements
+		}
+		return s.p.write(append(b, '\n'), 5*time.Second)
+	}
 	if kind != "interrupt" {
 		s.arm(kind)
 	}
@@ -266,6 +282,10 @@ func (s *session) sendInterrupt(t *turn) {
 // ---- inbound ----
 
 func (s *session) onLine(l line) {
+	if s.requirementsPhase {
+		s.requirementsFrame(l)
+		return
+	}
 	if l.over {
 		s.unknown(fmt.Sprintf("protocol line of %d bytes exceeds the %d byte limit", l.size, s.maxLine), "")
 		return
@@ -328,8 +348,13 @@ func (s *session) onResponse(pk packet, raw []byte) {
 			return
 		}
 		if s.control != nil {
-			if err := s.request("hooks/list", map[string]any{"cwds": []string{s.spec.Dir}}, "controlled_hooks"); err != nil {
-				s.fail("codex: hook metadata unavailable")
+			// Mark sensitive BEFORE the request write. The only exit from this phase
+			// is a verified private reduction or session failure/teardown.
+			s.requirementsPhase = true
+			s.requirementsID = strconv.FormatUint(s.nextReq+1, 10)
+			if err := s.request("config/requirements/read", map[string]any{}, "controlled_requirements"); err != nil {
+				s.fail("codex: requirements refused")
+				return
 			}
 		} else {
 			s.startThread()

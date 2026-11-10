@@ -68,7 +68,7 @@ func runCodexFileEdit(ctx context.Context, bin, dir string, wait time.Duration, 
 	if err != nil {
 		return err
 	}
-	env := map[string]string{"PATH": "/usr/bin:/bin", "HOME": home, "LANG": "C.UTF-8", "LC_ALL": "C", "SHELL": "/bin/sh", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+	env := map[string]string{"PATH": "/usr/bin:/bin", "HOME": home, "LANG": "C.UTF-8", "LC_ALL": "C", "SHELL": "/bin/sh", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1", "RUST_LOG": "off"}
 	featureArgs := append(append([]string(nil), argv[1:len(argv)-1]...), "features", "list")
 	featureCmd := exec.CommandContext(checkCtx, bin, featureArgs...)
 	featureCmd.Dir = dir

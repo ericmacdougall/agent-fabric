@@ -209,6 +209,10 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 					if v != "/bin/sh" {
 						return nil, errors.New("codex: controlled shell rejected")
 					}
+				case "RUST_LOG":
+					if v != "off" {
+						return nil, errors.New("codex: diagnostic trace override refused")
+					}
 				case "PYTHONNOUSERSITE", "PYTHONDONTWRITEBYTECODE":
 					if v != "1" {
 						return nil, errors.New("codex: controlled Python startup rejected")
@@ -260,6 +264,9 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 	if spec.Prompt != "" {
 		s.queue = append(s.queue, spec.Prompt)
 	}
+	if control != nil && s.maxLine > RequirementsMaxBytes {
+		s.maxLine = RequirementsMaxBytes
+	}
 	p, err := spawn(argv, env, spec.Dir, &cappedWriter{})
 	if err != nil {
 		return nil, err
@@ -294,15 +301,17 @@ func orDur(v, d time.Duration) time.Duration {
 // session implements harness.Session. All protocol state lives in the run
 // goroutine (the actor); other goroutines only post events to it.
 type session struct {
-	control       *Control
-	pendingHooks  map[string]bool
-	hooksObserved bool
-	id            string
-	em            *harness.Emitter
-	opts          options
-	spec          harness.StartSpec
-	ctx           context.Context
-	p             *proc
+	control           *Control
+	pendingHooks      map[string]bool
+	hooksObserved     bool
+	requirementsPhase bool
+	requirementsID    string
+	id                string
+	em                *harness.Emitter
+	opts              options
+	spec              harness.StartSpec
+	ctx               context.Context
+	p                 *proc
 
 	maxLine    int
 	maxTotal   int64

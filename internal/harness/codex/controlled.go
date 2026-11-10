@@ -31,7 +31,9 @@ func FileEditSettings() map[string]any {
 	return map[string]any{
 		"approval_policy": "never", "web_search": "disabled", "allow_login_shell": false,
 		"model_provider": "openai", "forced_login_method": "chatgpt", "notify": []any{},
-		"model": DemoModel, "model_reasoning_effort": "low",
+		"openai_base_url": InferenceBootstrapURL, "chatgpt_base_url": ChatGPTBootstrapURL,
+		"analytics": map[string]any{"enabled": false},
+		"model":     DemoModel, "model_reasoning_effort": "low",
 		"skills":    map[string]any{"include_instructions": false, "bundled": map[string]any{"enabled": false}},
 		"code_mode": map[string]any{"disable_in_process_fallback": false},
 		"features": map[string]any{
