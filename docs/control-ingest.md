@@ -74,6 +74,21 @@ table only: never fabric `events`, `outbox` or any other table.
   leaves nothing behind. After the commit, and only when a row was inserted, the call sends
   an empty `NOTIFY control_events`.
 
+## Platform scope
+
+The deadline-enforced input implementation currently uses Unix descriptors;
+its runtime controls were tested on Linux. The non-Unix path refuses input
+before database access. **Native Windows ingest remains unsupported**, tracked
+as GoodQA goodqa#15651. This Linux server slice does not complete the retained
+cross-platform target or establish full F19 support out of the box.
+
+Windows `cmd/fab` compilation also has inherited blockers in secure-file,
+process-control, provider settings and fake-host code, tracked separately as
+GoodQA goodqa#15652. Both the pre-ingest baseline and current integration fail
+at those same Unix-specific calls. Preserve their security and cleanup
+semantics when implementing Windows alternatives. Cross-compilation is only
+compile evidence; native Windows and Darwin runtime acceptance remain separate.
+
 ## Tests
 
 `FABRIC_TEST_DSN=<admin dsn of a disposable instance> go test ./internal/control/ingest/`
