@@ -1,0 +1,2 @@
+on start ignoreterm
+on start sleep 30000

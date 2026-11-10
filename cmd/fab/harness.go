@@ -29,7 +29,7 @@ func usageErr(msg string) error { return usageError{errors.New(msg)} }
 
 func harnessMain(args []string) error {
 	if len(args) == 0 || args[0] != "run" {
-		return usageErr("usage: fab harness run --adapter native|claude-code --events FILE ...")
+		return usageErr("usage: fab harness run --adapter native|claude-code|codex --events FILE ...")
 	}
 	return harnessRunMain(args[1:])
 }
@@ -84,7 +84,7 @@ func parsePassEnv(list string) (env map[string]string, secrets []string, err err
 
 func harnessRunMain(args []string) error {
 	fs := flag.NewFlagSet("harness run", flag.ContinueOnError)
-	adapter := fs.String("adapter", "", "harness adapter (native, claude-code)")
+	adapter := fs.String("adapter", "", "harness adapter (native, claude-code, codex preflight)")
 	grantFile := fs.String("grant", "", "native: grant file")
 	events := fs.String("events", "", "new file to write the event trace to (JSONL, mode 0600)")
 	fake := fs.Bool("unconfined-fake-host", false, "tests only: run native tools without containment (needs FABRIC_ALLOW_FAKE_HOST=1)")
@@ -97,6 +97,9 @@ func harnessRunMain(args []string) error {
 	wait := fs.Duration("wait", 120*time.Second, "claude-code: how long to wait for replies before Stop")
 	passEnv := fs.String("pass-env", "", "claude-code: comma-separated variable NAMES to pass in addition to PATH and HOME (allow-listed: USER LOGNAME TMPDIR LANG LC_ALL SHELL TERM ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN)")
 	unconfined := fs.Bool("unconfined", false, "claude-code: acknowledge that claude runs with your user's files and no sandbox (a test tool)")
+	codexBin := fs.String("codex-bin", codexDemoBinary, "codex: reviewed executable (identity pinned)")
+	codexDir := fs.String("codex-dir", "", "codex: new empty mode-0700 workspace")
+	codexPreflight := fs.Bool("codex-preflight", false, "codex: verify controls without a model turn")
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err.Error())
 	}
@@ -106,6 +109,9 @@ func harnessRunMain(args []string) error {
 	if *events == "" {
 		return usageErr("--events is required")
 	}
+	if *adapter != "codex" && (*codexPreflight || *codexDir != "" || *codexBin != codexDemoBinary) {
+		return usageErr("--codex-* flags require the codex adapter")
+	}
 	switch *adapter {
 	case "native":
 		if *passEnv != "" || *prompt != "" || *input != "" || *cancelInput || *unconfined {
@@ -113,6 +119,16 @@ func harnessRunMain(args []string) error {
 		}
 		if *grantFile == "" {
 			return usageErr("--grant is required for native")
+		}
+	case "codex":
+		if !*codexPreflight {
+			return usageErr("codex model execution is gated; use --codex-preflight")
+		}
+		if *codexDir == "" || *wait <= 0 || *wait > 120*time.Second {
+			return usageErr("codex requires --codex-dir and 0 < --wait <= 120s")
+		}
+		if *grantFile != "" || *fake || *passEnv != "" || *prompt != "" || *input != "" || *cancelInput || *unconfined || *model != "" || *slow != 0 || *claudeBin != "claude" {
+			return usageErr("codex preflight rejects other-adapter, prompt, model, environment and sink-delay flags")
 		}
 	case "claude-code":
 		if *prompt == "" {
@@ -144,7 +160,9 @@ func harnessRunMain(args []string) error {
 	defer stop()
 	red := harness.ChainRedactor(harness.LiteralRedactor(secrets), harness.PatternRedactor())
 	var runErr error
-	if *adapter == "native" {
+	if *adapter == "codex" {
+		runErr = runCodexPreflight(sctx, *codexBin, *codexDir, *wait, out)
+	} else if *adapter == "native" {
 		runErr = runNative(sctx, *grantFile, *fake, out)
 	} else {
 		runErr = runClaudeCode(sctx, *claudeBin, *model, *prompt, *input, extra, red, *cancelInput, *wait, out)
@@ -155,6 +173,9 @@ func harnessRunMain(args []string) error {
 	evs, rerr := harness.ReadJSONL(*events)
 	if rerr != nil {
 		return errors.Join(runErr, rerr)
+	}
+	if *adapter == "codex" {
+		return errors.Join(runErr, harness.CheckStream(evs))
 	}
 	return errors.Join(runErr, judge(*adapter, evs))
 }

@@ -203,3 +203,22 @@ func TestHarnessRunSignalFailsTheRun(t *testing.T) {
 		t.Fatalf("the signal did not stop the session promptly (%v)", d)
 	}
 }
+
+func TestCodexPreflightRejectsModelAndAmbientFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--adapter", "codex"},
+		{"--adapter", "codex", "--codex-preflight", "--codex-dir", "/owned", "--unconfined"},
+		{"--adapter", "codex", "--codex-preflight", "--codex-dir", "/owned", "--pass-env", "USER"},
+		{"--adapter", "codex", "--codex-preflight", "--codex-dir", "/owned", "--prompt", "history"},
+		{"--adapter", "codex", "--codex-preflight", "--codex-dir", "/owned", "--wait", "121s"},
+		{"--adapter", "native", "--grant", "x", "--codex-preflight"},
+	} {
+		ev := filepath.Join(t.TempDir(), "events.jsonl")
+		if err := harnessMain(append([]string{"run", "--events", ev}, args...)); err == nil {
+			t.Fatal("unsafe Codex flags accepted")
+		}
+		if _, err := os.Stat(ev); err == nil {
+			t.Fatal("usage refusal created output")
+		}
+	}
+}

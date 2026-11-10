@@ -1,0 +1,7 @@
+# scripted codex app-server session; see fake_test.go
+on initialize reply {"userAgent":"fake-codex/0"}
+on thread/resume reply {"thread":{"id":"thr_old"}}
+on turn/start reply {"turn":{"id":"turn_{{seq}}","status":"inProgress","items":[]}}
+on turn/start send {"method":"turn/started","params":{"threadId":"thr_old","turn":{"id":"turn_{{seq}}","status":"inProgress"}}}
+on turn/start send {"method":"item/completed","params":{"threadId":"thr_old","turnId":"turn_{{seq}}","completedAtMs":1,"item":{"type":"agentMessage","id":"msg_{{seq}}","text":"resume:{{params}}"}}}
+on turn/start send {"method":"turn/completed","params":{"threadId":"thr_old","turn":{"id":"turn_{{seq}}","status":"completed"}}}

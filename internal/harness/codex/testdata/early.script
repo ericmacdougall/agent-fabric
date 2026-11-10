@@ -1,0 +1,11 @@
+# scripted codex app-server session; see fake_test.go
+on initialize reply {"userAgent":"fake-codex/0"}
+on thread/start reply {"thread":{"id":"{{thread}}"}}
+on turn/start send {"method":"turn/started","params":{"threadId":"{{thread}}","turn":{"id":"turn_{{seq}}","status":"inProgress"}}}
+on turn/start send {"method":"item/started","params":{"threadId":"{{thread}}","turnId":"turn_{{seq}}","item":{"type":"commandExecution","id":"cmd_{{seq}}","command":"echo hi","status":"inProgress"}}}
+on turn/start send {"method":"item/commandExecution/outputDelta","params":{"threadId":"{{thread}}","turnId":"turn_{{seq}}","itemId":"cmd_{{seq}}","delta":"hi"}}
+on turn/start send {"method":"item/completed","params":{"threadId":"{{thread}}","turnId":"turn_{{seq}}","completedAtMs":1,"item":{"type":"commandExecution","id":"cmd_{{seq}}","command":"echo hi","aggregatedOutput":"hi\n","exitCode":0,"status":"completed"}}}
+on turn/start send {"method":"item/completed","params":{"threadId":"{{thread}}","turnId":"turn_{{seq}}","completedAtMs":1,"item":{"type":"agentMessage","id":"msg_{{seq}}","text":"early"}}}
+on turn/start send {"method":"thread/tokenUsage/updated","params":{"threadId":"{{thread}}","turnId":"turn_{{seq}}","tokenUsage":{"last":{"inputTokens":120,"cachedInputTokens":20,"cacheWriteInputTokens":5,"outputTokens":30,"reasoningOutputTokens":10,"totalTokens":150},"total":{"inputTokens":120,"cachedInputTokens":20,"cacheWriteInputTokens":5,"outputTokens":30,"reasoningOutputTokens":10,"totalTokens":150}}}}
+on turn/start send {"method":"turn/completed","params":{"threadId":"{{thread}}","turn":{"id":"turn_{{seq}}","status":"completed"}}}
+on turn/start reply {"turn":{"id":"turn_{{seq}}","status":"inProgress","items":[]}}
