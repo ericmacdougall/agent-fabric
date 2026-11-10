@@ -47,6 +47,7 @@ type Event struct {
 	Subject  Subject `json:"subject"`
 	Summary  string  `json:"summary"`
 	Severity string  `json:"severity,omitempty"`
+	Historic bool    `json:"historic,omitempty"`
 }
 
 // Subject names the stream: the initiative is the fabric mission.

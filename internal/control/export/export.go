@@ -46,34 +46,38 @@ type Result struct {
 
 // Cursor is "fx1." + base64url("<dbid>:<outbox id>") + "." + 8 hex of a digest,
 // so a typo or a cursor from another database is refused rather than guessed.
-func encodeCursor(dbid string, id int64, rowhash string) string {
-	body := dbid + ":" + strconv.FormatInt(id, 10) + ":" + rowhash
+func encodeCursor(dbid string, id int64, rowhash string, backfill bool) string {
+	mode := "l"
+	if backfill {
+		mode = "b"
+	}
+	body := dbid + ":" + strconv.FormatInt(id, 10) + ":" + rowhash + ":" + mode
 	sum := sha256.Sum256([]byte("fx1|" + body))
 	return "fx1." + base64.RawURLEncoding.EncodeToString([]byte(body)) + "." + hex.EncodeToString(sum[:4])
 }
 
-func decodeCursor(c string) (dbid string, id int64, rowhash string, err error) {
+func decodeCursor(c string) (dbid string, id int64, rowhash string, backfill bool, err error) {
 	parts := strings.Split(c, ".")
 	if len(parts) != 3 || parts[0] != "fx1" {
-		return "", 0, "", fmt.Errorf("%w: not an export cursor", ErrBadCursor)
+		return "", 0, "", false, fmt.Errorf("%w: not an export cursor", ErrBadCursor)
 	}
 	raw, e := base64.RawURLEncoding.DecodeString(parts[1])
 	if e != nil {
-		return "", 0, "", fmt.Errorf("%w: malformed", ErrBadCursor)
+		return "", 0, "", false, fmt.Errorf("%w: malformed", ErrBadCursor)
 	}
 	sum := sha256.Sum256([]byte("fx1|" + string(raw)))
 	if hex.EncodeToString(sum[:4]) != parts[2] {
-		return "", 0, "", fmt.Errorf("%w: checksum mismatch", ErrBadCursor)
+		return "", 0, "", false, fmt.Errorf("%w: checksum mismatch", ErrBadCursor)
 	}
 	f := strings.Split(string(raw), ":")
-	if len(f) != 3 || f[0] == "" || f[2] == "" {
-		return "", 0, "", fmt.Errorf("%w: malformed", ErrBadCursor)
+	if len(f) != 4 || f[0] == "" || f[2] == "" || (f[3] != "b" && f[3] != "l") {
+		return "", 0, "", false, fmt.Errorf("%w: malformed", ErrBadCursor)
 	}
 	id, e = strconv.ParseInt(f[1], 10, 64)
 	if e != nil || id < 0 {
-		return "", 0, "", fmt.Errorf("%w: malformed", ErrBadCursor)
+		return "", 0, "", false, fmt.Errorf("%w: malformed", ErrBadCursor)
 	}
-	return f[0], id, f[2], nil
+	return f[0], id, f[2], f[3] == "b", nil
 }
 
 // rowHashSQL binds a cursor to the content of the outbox row it names (mission,
@@ -103,8 +107,11 @@ func Export(ctx context.Context, db DB, since string, w io.Writer) (Result, erro
 	}
 	var after int64
 	lastHash := "0"
+	// A backfill (no cursor, or a cursor chain that began without one and has not
+	// yet caught up) is marked historic so Mission Control never pulses old events.
+	backfill := true
 	if since != "" {
-		d, id, h, err := decodeCursor(since)
+		d, id, h, bf, err := decodeCursor(since)
 		if err != nil {
 			return Result{}, err
 		}
@@ -125,7 +132,7 @@ func Export(ctx context.Context, db DB, since string, w io.Writer) (Result, erro
 		} else if h != "0" {
 			return Result{}, fmt.Errorf("%w: malformed", ErrBadCursor)
 		}
-		after, lastHash = id, h
+		after, lastHash, backfill = id, h, bf
 	}
 
 	var buf bytes.Buffer
@@ -163,7 +170,9 @@ page:
 			return Result{}, err
 		}
 		for i, r := range page {
-			line, err := json.Marshal(MapRow(r))
+			ev := MapRow(r)
+			ev.Historic = backfill
+			line, err := json.Marshal(ev)
 			if err != nil {
 				return Result{}, err
 			}
@@ -187,7 +196,7 @@ page:
 			return Result{}, err
 		}
 	}
-	res.Cursor = encodeCursor(dbid, last, lastHash)
+	res.Cursor = encodeCursor(dbid, last, lastHash, res.More && backfill)
 	line, err := json.Marshal(struct {
 		Cursor string `json:"cursor"`
 	}{res.Cursor})

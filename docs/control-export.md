@@ -40,7 +40,9 @@ One JSON object per line, then exactly one `{"cursor":"OPAQUE"}` line.
 - A held-stream placeholder (`stream held, event withheld`) is exported once under its
   `fabric:<id>`. If the hold is later released, the same id is not re-exported with the
   real kind; a consumer that dedupes on id keeps the placeholder.
-- No `historic` flag is set on a first backfill (open point for goodqa#15585).
+- A backfill is marked `"historic":true` on every event: a call without `--since`, and
+  each following call of that cursor chain until a call catches up (the cursor records
+  the mode). Events after that are live and carry no `historic` field.
 - Rows come from one `REPEATABLE READ, READ ONLY` transaction and only when their
   transaction is older than every in-progress one (`o.xid < pg_snapshot_xmin(...)`),
   which with the xid-ordered `outboxOrderLock` (#15577) means a late commit is never

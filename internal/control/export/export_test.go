@@ -223,6 +223,11 @@ func TestOutputCap(t *testing.T) {
 			t.Fatalf("output %d bytes exceeds the %d cap", buf.Len(), MaxOutput)
 		}
 		evs, cursor := parseOutput(t, buf.Bytes()) // fails on a cut line
+		for _, e := range evs {
+			if e["historic"] != true {
+				t.Fatalf("backfill chain event %v lacks historic=true (page %d)", e["id"], pages+1)
+			}
+		}
 		for _, id := range idsOf(evs) {
 			if seen[id] {
 				t.Fatalf("%s repeated across pages", id)
@@ -312,12 +317,12 @@ func TestStaleCursor(t *testing.T) {
 	c := conn(t, ctx, storetest.DSN)
 	seed(t, st, ctx, "st", 5)
 	_, cur, _ := run(t, ctx, c, "")
-	_, id, rh, err := decodeCursor(cur)
+	_, id, rh, _, err := decodeCursor(cur)
 	if err != nil || id < 2 {
 		t.Fatalf("cursor %q: id %d %v", cur, id, err)
 	}
-	dbid, _, _, _ := decodeCursor(cur)
-	foreign := encodeCursor("0123456789abcdef", id, rh)
+	dbid, _, _, _, _ := decodeCursor(cur)
+	foreign := encodeCursor("0123456789abcdef", id, rh, false)
 	if dbid == "0123456789abcdef" {
 		t.Fatal("collision")
 	}
@@ -599,6 +604,32 @@ func TestLaggingReported(t *testing.T) {
 	evs, _, res = run(t, ctx, c, cur)
 	if len(evs) == 0 || res.Lagging != 0 {
 		t.Fatalf("after the blocker ended: events=%d lagging=%d", len(evs), res.Lagging)
+	}
+}
+
+// A backfill without --since is historic; once caught up, new events are live.
+func TestHistoricOnBackfillOnly(t *testing.T) {
+	st, ctx := fresh(t)
+	c := conn(t, ctx, storetest.DSN)
+	seed(t, st, ctx, "hb", 3)
+	first, cur, res := run(t, ctx, c, "")
+	if res.More || len(first) == 0 {
+		t.Fatalf("setup: more=%v events=%d", res.More, len(first))
+	}
+	for _, e := range first {
+		if e["historic"] != true {
+			t.Fatalf("backfill event not historic: %v", e)
+		}
+	}
+	seed(t, st, ctx, "hc", 1)
+	next, _, _ := run(t, ctx, c, cur)
+	if len(next) == 0 {
+		t.Fatal("no new event")
+	}
+	for _, e := range next {
+		if _, ok := e["historic"]; ok {
+			t.Fatalf("live event marked historic: %v", e)
+		}
 	}
 }
 
