@@ -82,6 +82,8 @@ func main() {
 		err = harnessMain(os.Args[2:])
 	case "tui":
 		err = tuiMain(os.Args[2:])
+	case "control":
+		err = controlMain(os.Args[2:])
 	case "version":
 		err = versionMain(os.Args[2:])
 	case "migrate":
@@ -96,10 +98,15 @@ func main() {
 	}
 }
 
-// exitCode: 3 is a refusal (nothing changed), 1 an error of unknown effect.
+// exitCode: 3 is a refusal (nothing changed), 4 a completed call that rejected
+// some input lines (fab control ingest), 1 an error of unknown effect.
 func exitCode(err error) int {
 	if err == nil {
 		return 0
+	}
+	var pr partialRejects
+	if errors.As(err, &pr) {
+		return 4
 	}
 	var ref *store.Refusal
 	var ue usageError
@@ -134,6 +141,8 @@ func usage() {
   metrics [--timeout D]                health metrics (Prometheus text format, read-only)
   serve-metrics [--listen 127.0.0.1:9464] [--allow-remote] [--timeout D]   GET /metrics; loopback only by default
   tui [--interval 2s] [--timeout 1s] [--no-color] [--keys on|off]   read-only terminal view (fab tui -h: keys)
+  control export [--since CURSOR]      mc.event/1 lines + cursor for Mission Control (read-only)
+  control ingest --source NAME         validate mc.event/1 lines on stdin, store in control.ingested_events
   version                              build revision
   harness run --adapter native --grant F --events F   run a native mission through the harness seam; record and check its event trace
   ladder status --state F --policy F [--json]   model ladder from an escalation.py state file (read-only)
