@@ -13,7 +13,7 @@ table only: never fabric `events`, `outbox` or any other table.
   with `NAME:` and match the schema pattern. A line with an `id` starting `fabric:` (any
   case) is rejected as `reserved-id-prefix`. A `source` field in a line must equal NAME.
 - A line is rejected, with a reason code and its line number, when: it is not one JSON
-  object, has trailing data or a duplicate key, is not valid UTF-8, exceeds 64 KiB, has a
+  object, has trailing data or a duplicate key, is not valid UTF-8, exceeds 8 KiB, has a
   version other than `mc.event/1`, an unknown top-level, `actor` or `subject` field, a bad
   `id`, `ts`, `kind`, `severity` or `count`, a string over its limit, or any control
   character (ESC and so ANSI, NUL, newline, C1), line or paragraph separator, bidi override
@@ -31,8 +31,12 @@ table only: never fabric `events`, `outbox` or any other table.
   rejected (`bad-type:<field>`).
 - Rows are inserted in id order, so two concurrent calls with overlapping ids cannot
   deadlock.
-- The CLI reads and validates stdin before it connects, so a stalled pipe never holds a
-  database connection.
+- The CLI reads and validates stdin before it connects. One absolute 30-second
+  session budget starts at handler entry and covers input, parsing, connection and
+  storage. A slow/open SSH pipe is cut off by the server even while bytes keep
+  arriving; it never holds a database connection. The Unix reader uses nonblocking
+  polling without a background read goroutine, restores stdin flags and closes only
+  its owned duplicate before connecting. Cleanup failure refuses the operation.
 - Not enforced here: that the caller may write as `--source`. Anyone holding `FABRIC_DSN`
   can claim any producer name, and the first write of an id is permanent. The grants
   slice must bind source to the database role (tracked in the B3 follow-up ticket).
@@ -45,8 +49,18 @@ table only: never fabric `events`, `outbox` or any other table.
 
 ## Limits and results
 
-- Per call: 1 MiB, 2000 lines, 64 KiB per line. Over the byte or line limit the whole call
+- Per call: 1 MiB, 2000 lines, 8 KiB per physical line, 30 seconds total. The byte
+  and line-count caps are deliberately tighter than F19's maximum 4 MiB/5000;
+  this implementation does not claim those exact larger limits. Over the total byte or line-count limit the whole call
   is refused (exit 3) before anything is written. Empty lines count toward the line limit.
+- The 8192-byte line check runs before blank skipping or CRLF normalization.
+  LF separates lines and does not count toward that line's size; a CR before LF
+  counts. Oversized whitespace-only lines are rejected and counted too.
+- An input-stage timeout refuses the whole call with exit3 and nothing stored.
+  A later database timeout stays exit1 because its outcome may be uncertain;
+  the deadline is never restarted after input. Regular-file reads retain the
+  byte cap and context checks between reads; Unix nonblocking mode cannot
+  interrupt a kernel-stalled regular-file read. The forced SSH session uses a pipe.
 - A malformed line is rejected alone; the rest continue. Counts go to stderr:
   `ingest: source=S lines=N accepted=A inserted=I existing=E duplicate-in-input=D rejected=R`,
   then a count per reason and up to 20 `line L rejected: reason` lines.

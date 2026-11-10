@@ -21,7 +21,7 @@ type Result struct {
 // whole (ErrCallTooLarge) before anything is written; a bad line is rejected on
 // its own and the rest continue. Reasons printed are fixed codes, never input text.
 func Run(ctx context.Context, db DB, in io.Reader, source string, stderr io.Writer) (Result, error) {
-	b, err := Parse(in, source)
+	b, err := ParseContext(ctx, in, source)
 	if err != nil {
 		return Result{}, err
 	}
@@ -29,8 +29,8 @@ func Run(ctx context.Context, db DB, in io.Reader, source string, stderr io.Writ
 }
 
 // Finish stores a parsed batch and reports. The CLI parses stdin first and only
-// then connects, so a slow or stalled producer never holds a database connection
-// or eats the connection deadline.
+// then connects, so a slow or stalled producer never holds a database connection.
+// The CLI uses the same absolute session deadline for parsing and storage.
 func Finish(ctx context.Context, db DB, b Batch, source string, stderr io.Writer) (Result, error) {
 	st, err := Store(ctx, db, b.Accepted)
 	if err != nil {

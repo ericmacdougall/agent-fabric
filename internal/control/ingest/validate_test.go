@@ -105,7 +105,7 @@ func TestIngestLimits(t *testing.T) {
 	if b, err := Parse(strings.NewReader(strings.Repeat("\n", 100)), "wal-x"); err != nil || b.Lines != 0 {
 		t.Fatalf("blank lines: %v %+v", err, b)
 	}
-	// a 64 KiB line passes the size gate only up to the limit; one byte over is rejected alone
+	// An 8 KiB line passes the size gate up to the limit; one byte over is rejected alone.
 	pad := func(n int) string {
 		head := `{"schema":"mc.event/1","id":"wal-x:p","ts":"2026-11-09T12:30:45Z","kind":"wal","host":"`
 		tail := `"}`

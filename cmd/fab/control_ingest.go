@@ -20,7 +20,11 @@ import (
 // with nothing written; a bad line is rejected alone and the rest continue:
 // exit 0 when nothing was rejected, exit 4 when some lines were (counts on stderr). The source is pinned by the flag, never by the
 // lines, and "fabric" is reserved for `fab control export`.
+const ingestSessionLimit = 30 * time.Second
+
 func controlIngestMain(args []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), ingestSessionLimit)
+	defer cancel()
 	fs := flag.NewFlagSet("control ingest", flag.ContinueOnError)
 	source := fs.String("source", "", "producer name, ^[a-z][a-z0-9_-]{0,31}$ (not \"fabric\"); every id must start with NAME:")
 	if err := fs.Parse(args); err != nil {
@@ -39,17 +43,29 @@ func controlIngestMain(args []string) error {
 	if dsn == "" {
 		return errors.New("FABRIC_DSN is not set")
 	}
-	// Read and validate stdin first, then connect: a stalled pipe never holds a
-	// database connection, and a slow producer cannot use up the 60 s deadline.
-	batch, err := ingest.Parse(os.Stdin, *source)
+	// The same absolute budget covers stdin, parsing, connection and storage.
+	// Restore stdin flags and close our duplicate before opening a connection.
+	input, err := newIngestInput(ctx, os.Stdin)
+	if err != nil {
+		return err
+	}
+	defer input.Close() //nolint:errcheck // explicitly checked before DB access below
+	batch, err := ingest.ParseContext(ctx, input, *source)
+	closeErr := input.Close()
+	if closeErr != nil {
+		return fmt.Errorf("ingest stdin cleanup: %w", closeErr)
+	}
+	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return usageError{errors.New("ingest session exceeded 30s wall-clock limit before database access")}
+	}
 	if errors.Is(err, ingest.ErrCallTooLarge) {
 		return usageError{err}
 	}
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
+	// No budget reset here. A DB timeout may have an uncertain write outcome,
+	// so it remains an operational error, distinct from an input-only refusal.
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		return err

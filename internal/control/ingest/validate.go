@@ -8,6 +8,7 @@ package ingest
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,7 +24,7 @@ import (
 const (
 	MaxCallBytes = 1 << 20
 	MaxLines     = 2000
-	MaxLineBytes = 64 << 10
+	MaxLineBytes = 8 << 10
 	MaxSummary   = 280
 )
 
@@ -342,10 +343,31 @@ type Batch struct {
 // either limit is refused whole (ErrCallTooLarge) and nothing is returned for
 // writing; a bad line is rejected on its own and the rest continue.
 func Parse(r io.Reader, source string) (Batch, error) {
+	return ParseContext(context.Background(), r, source)
+}
+
+type contextReader struct {
+	ctx context.Context
+	in  io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.in.Read(p)
+}
+
+// ParseContext checks the call budget while reading and between bounded lines.
+// Blocking reads also require a cancellable input, supplied by the Unix CLI.
+func ParseContext(ctx context.Context, r io.Reader, source string) (Batch, error) {
+	if err := ctx.Err(); err != nil {
+		return Batch{}, err
+	}
 	if err := ValidSource(source); err != nil {
 		return Batch{}, err
 	}
-	data, err := io.ReadAll(io.LimitReader(r, MaxCallBytes+1))
+	data, err := io.ReadAll(io.LimitReader(contextReader{ctx: ctx, in: r}, MaxCallBytes+1))
 	if err != nil {
 		return Batch{}, err
 	}
@@ -362,6 +384,16 @@ func Parse(r io.Reader, source string) (Batch, error) {
 		return Batch{}, fmt.Errorf("%w: more than %d lines", ErrCallTooLarge, MaxLines)
 	}
 	for n, line := range lines {
+		if err := ctx.Err(); err != nil {
+			return Batch{}, err
+		}
+		// Count physical bytes before blank skipping or CRLF normalization.
+		// LF is the separator; a CR immediately before it counts toward 8192.
+		if len(line) > MaxLineBytes {
+			b.Lines++
+			b.Rejected = append(b.Rejected, Reject{Line: n + 1, Reason: "line-too-long"})
+			continue
+		}
 		line = bytes.TrimSuffix(line, []byte("\r"))
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
@@ -382,6 +414,9 @@ func Parse(r io.Reader, source string) (Batch, error) {
 		}
 		seen[ev.ID] = true
 		b.Accepted = append(b.Accepted, ev)
+	}
+	if err := ctx.Err(); err != nil {
+		return Batch{}, err
 	}
 	return b, nil
 }
