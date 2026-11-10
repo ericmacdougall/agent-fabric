@@ -353,6 +353,7 @@ func TestStaleCursor(t *testing.T) {
 		"tampered":  tampered,
 		"foreign":   foreign,
 		"numeric":   "42",
+		"zero":      "0",
 	}
 	for name, since := range cases {
 		var buf bytes.Buffer

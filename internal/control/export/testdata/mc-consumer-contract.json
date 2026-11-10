@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "cursor_max_bytes": 128,
+  "cursors": {
+    "backfill": "fx2.MDEyMzQ1Njc4OWFiY2RlZjoxOjExMTExMTExMTExMTpi.d52e496d",
+    "caught_up": "fx2.MDEyMzQ1Njc4OWFiY2RlZjoyOjIyMjIyMjIyMjIyMjps.840075f2",
+    "live": "fx2.MDEyMzQ1Njc4OWFiY2RlZjozOjMzMzMzMzMzMzMzMzps.877a491a"
+  },
+  "events": {
+    "old1": {"schema":"mc.event/1","id":"fabric:1","ts":"2026-11-09T12:30:45.123Z","kind":"owner","source":"fabric","subject":{"initiative":"m_fixture","ticket":"goodqa#15361"},"summary":"mission m_fixture: mission admitted (seq 1)","historic":true},
+    "old2": {"schema":"mc.event/1","id":"fabric:2","ts":"2026-11-09T12:30:45.123Z","kind":"owner","source":"fabric","subject":{"initiative":"m_fixture","ticket":"goodqa#15361"},"summary":"mission m_fixture: evidence recorded (seq 2)","historic":true},
+    "new3": {"schema":"mc.event/1","id":"fabric:3","ts":"2026-11-09T12:30:45.123Z","kind":"release","source":"fabric","subject":{"initiative":"m_fixture","ticket":"goodqa#15361"},"summary":"mission m_fixture: delivered (seq 3)"},
+    "lag": {"schema":"mc.event/1","id":"fabric:lag:2","ts":"2026-11-09T12:30:45.123Z","kind":"system","source":"fabric","subject":{},"summary":"fabric export lagging: 1 rows held back","severity":"warn","historic":true}
+  },
+  "cases": [
+    {"name":"initial_capped","since":null,"event_keys":["old1"],"next_cursor":"backfill","exit":0,"more":true,"lagging":0,"expected_new_ids":["fabric:1"],"expected_historic_ids":["fabric:1"]},
+    {"name":"resume_caught_up","since":"backfill","event_keys":["old2"],"next_cursor":"caught_up","exit":0,"more":false,"lagging":0,"expected_new_ids":["fabric:2"],"expected_historic_ids":["fabric:2"]},
+    {"name":"older_transaction_stall","since":"backfill","event_keys":["lag"],"next_cursor":"backfill","exit":0,"more":false,"lagging":1,"expected_new_ids":["fabric:lag:2"],"expected_historic_ids":["fabric:lag:2"]},
+    {"name":"repeat_stall","since":"backfill","event_keys":["lag"],"next_cursor":"backfill","exit":0,"more":false,"lagging":1,"seen_ids":["fabric:lag:2"],"expected_new_ids":[],"expected_historic_ids":[]},
+    {"name":"blocker_released","since":"backfill","event_keys":["old2"],"next_cursor":"caught_up","exit":0,"more":false,"lagging":0,"expected_new_ids":["fabric:2"],"expected_historic_ids":["fabric:2"]},
+    {"name":"new_live","since":"caught_up","event_keys":["new3"],"next_cursor":"live","exit":0,"more":false,"lagging":0,"expected_new_ids":["fabric:3"],"expected_historic_ids":[]},
+    {"name":"fetch_failure","since":"caught_up","event_keys":["new3"],"next_cursor":"live","exit":1,"expected_saved_cursor":"caught_up","expected_new_ids":[],"expected_historic_ids":[]},
+    {"name":"append_failure","since":"caught_up","event_keys":["new3"],"next_cursor":"live","exit":0,"append_error":true,"expected_saved_cursor":"caught_up","expected_new_ids":[],"expected_historic_ids":[]},
+    {"name":"explicit_reset_replay","since":null,"event_keys":["old1","old2"],"next_cursor":"caught_up","exit":0,"more":false,"lagging":0,"seen_ids":["fabric:1","fabric:2"],"expected_new_ids":[],"expected_historic_ids":[]}
+  ],
+  "refused_exporter_since": ["0"],
+  "unsafe_transport_cursors": ["bad;echo-no", "has space", "unicode-\u00e9"],
+  "overlong_cursor": {"character":"a","count":129}
+}
