@@ -100,6 +100,10 @@ func harnessRunMain(args []string) error {
 	codexBin := fs.String("codex-bin", codexDemoBinary, "codex: reviewed executable (identity pinned)")
 	codexDir := fs.String("codex-dir", "", "codex: new empty mode-0700 workspace")
 	codexPreflight := fs.Bool("codex-preflight", false, "codex: verify controls without a model turn")
+	disabledMCP := codexDisabledIDs{Kind: "mcp_servers"}
+	disabledPlugins := codexDisabledIDs{Kind: "plugins"}
+	fs.Var(&disabledMCP, "codex-disable-mcp", "codex: disable inherited MCP ID (repeatable)")
+	fs.Var(&disabledPlugins, "codex-disable-plugin", "codex: disable inherited plugin ID (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return usageErr(err.Error())
 	}
@@ -109,7 +113,7 @@ func harnessRunMain(args []string) error {
 	if *events == "" {
 		return usageErr("--events is required")
 	}
-	if *adapter != "codex" && (*codexPreflight || *codexDir != "" || *codexBin != codexDemoBinary) {
+	if *adapter != "codex" && (*codexPreflight || *codexDir != "" || *codexBin != codexDemoBinary || len(disabledMCP.Values) > 0 || len(disabledPlugins.Values) > 0) {
 		return usageErr("--codex-* flags require the codex adapter")
 	}
 	switch *adapter {
@@ -161,7 +165,7 @@ func harnessRunMain(args []string) error {
 	red := harness.ChainRedactor(harness.LiteralRedactor(secrets), harness.PatternRedactor())
 	var runErr error
 	if *adapter == "codex" {
-		runErr = runCodexPreflight(sctx, *codexBin, *codexDir, *wait, out)
+		runErr = runCodexPreflight(sctx, *codexBin, *codexDir, *wait, out, append(disabledMCP.Values, disabledPlugins.Values...))
 	} else if *adapter == "native" {
 		runErr = runNative(sctx, *grantFile, *fake, out)
 	} else {

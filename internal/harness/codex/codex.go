@@ -180,17 +180,39 @@ func (a *Adapter) environ(spec harness.StartSpec) ([]string, error) {
 
 // Start implements harness.Adapter.
 func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harness.Sink) (harness.Session, error) {
+	var control *Control
 	if a.Control != nil {
-		if err := a.Control.validate(); err != nil {
+		c := *a.Control
+		c.InstructionSources = append([]string(nil), c.InstructionSources...)
+		control = &c
+		if !control.PreflightOnly {
+			return nil, errors.New("codex: model execution remains gated")
+		}
+		if err := control.validate(); err != nil {
 			return nil, err
 		}
-		if len(spec.Extra) > 0 || a.KeepOpen {
+		if len(spec.Extra) > 0 || a.KeepOpen || spec.Model != "" {
 			return nil, errors.New("codex: controlled mode cannot resume or override options")
 		}
-		for _, env := range []map[string]string{a.BaseEnv, spec.Env} {
-			for k := range env {
+		if len(spec.Env) > 0 {
+			return nil, errors.New("codex: controlled environment rejected")
+		}
+		for _, env := range []map[string]string{a.BaseEnv} {
+			for k, v := range env {
 				switch k {
-				case "PATH", "HOME", "LANG", "LC_ALL":
+				case "HOME", "LANG", "LC_ALL":
+				case "PATH":
+					if v != "/usr/bin:/bin" {
+						return nil, errors.New("codex: controlled path rejected")
+					}
+				case "SHELL":
+					if v != "/bin/sh" {
+						return nil, errors.New("codex: controlled shell rejected")
+					}
+				case "PYTHONNOUSERSITE", "PYTHONDONTWRITEBYTECODE":
+					if v != "1" {
+						return nil, errors.New("codex: controlled Python startup rejected")
+					}
 				default:
 					return nil, errors.New("codex: controlled environment rejected")
 				}
@@ -204,7 +226,7 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 	if spec.Dir == "" {
 		return nil, errors.New("codex: StartSpec.Dir is required")
 	}
-	if spec.Prompt == "" && !o.keepOpen && o.resume == "" && !(a.Control != nil && a.Control.PreflightOnly) {
+	if spec.Prompt == "" && !o.keepOpen && o.resume == "" && !(control != nil && control.PreflightOnly) {
 		return nil, errors.New("codex: empty prompt for a session that is not keep_open")
 	}
 	if len(spec.Prompt) > MaxInputBytes {
@@ -227,7 +249,7 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 		argv = []string{"codex", "app-server"}
 	}
 	s := &session{
-		id: spec.SessionID, em: em, opts: o, spec: spec, control: a.Control,
+		id: spec.SessionID, em: em, opts: o, spec: spec, control: control,
 		maxLine: orInt(a.MaxLine, MaxLineBytes), maxTotal: orInt64(a.MaxTotal, MaxTotalBytes),
 		reqTimeout: orDur(a.RequestTimeout, defaultReqTimout), grace: orDur(a.KillGrace, defaultKillGrace),
 		in: make(chan any, 64), quit: make(chan struct{}), done: make(chan struct{}),

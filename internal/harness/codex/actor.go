@@ -328,15 +328,19 @@ func (s *session) onResponse(pk packet, raw []byte) {
 			return
 		}
 		if s.control != nil {
-			if err := s.request("config/read", map[string]any{"cwd": s.spec.Dir, "includeLayers": true}, "controlled_config"); err != nil {
-				s.fail("codex: configuration readback failed")
+			if err := s.request("permissionProfile/list", map[string]any{"cwd": s.spec.Dir, "limit": 100}, "controlled_profiles"); err != nil {
+				s.fail("codex: profile metadata unavailable")
 			}
 		} else {
 			s.startThread()
 		}
-	case "controlled_config":
-		if err := s.controlledConfig(pk.Result); err != nil {
+	case "controlled_profiles":
+		if err := s.controlledProfiles(pk.Result); err != nil {
 			s.fail(err.Error())
+			return
+		}
+		if s.control.CatalogOnly {
+			s.finish(harness.Final{Outcome: harness.OutcomeStopped, Reason: "controlled profile metadata checked; no thread or model turn", ExitCode: -1})
 			return
 		}
 		s.startThread()

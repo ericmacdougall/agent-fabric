@@ -3,6 +3,7 @@ package codex_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -48,48 +49,62 @@ func liveChild(pid int) bool {
 }
 func fmtInt(n int) string { return strconv.Itoa(n) }
 
-func TestFileEditOnlyConfigClosure(t *testing.T) {
-	good := codex.FileEditSettings()
-	if err := codex.CheckFileEditConfig(good); err != nil {
+func featureMetadata(overrides map[string]bool) []byte {
+	var b strings.Builder
+	for name, want := range codex.FileEditSettings()["features"].(map[string]any) {
+		enabled := want.(bool)
+		if name == "unified_exec" {
+			enabled = true
+		}
+		if v, ok := overrides[name]; ok {
+			enabled = v
+		}
+		fmt.Fprintf(&b, "%s stable %t\n", name, enabled)
+	}
+	return []byte(b.String())
+}
+
+func TestFileEditOnlyFeatureClosure(t *testing.T) {
+	if err := codex.CheckFileEditFeatures(featureMetadata(nil)); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"features.shell_tool", "features.hooks", "features.apps", "features.multi_agent", "memories.use_memories", "shell_environment_policy.inherit", "shell_environment_policy.set", "allow_login_shell"} {
-		b, _ := json.Marshal(good)
-		var bad map[string]any
-		_ = json.Unmarshal(b, &bad)
-		parts := strings.Split(path, ".")
-		m := bad
-		for _, p := range parts[:len(parts)-1] {
-			m = m[p].(map[string]any)
-		}
-		m[parts[len(parts)-1]] = "private-canary"
-		if err := codex.CheckFileEditConfig(bad); err == nil || strings.Contains(err.Error(), "private-canary") {
-			t.Errorf("unsafe %s was accepted or leaked", path)
+	for _, name := range []string{"shell_tool", "apps", "plugins", "multi_agent", "memories", "code_mode_host", "browser_use"} {
+		if err := codex.CheckFileEditFeatures(featureMetadata(map[string]bool{name: true})); err == nil {
+			t.Errorf("allowed %s", name)
 		}
 	}
-	for _, key := range []string{"developer_instructions", "instructions", "model_instructions_file", "compact_prompt"} {
-		b, _ := json.Marshal(good)
-		var bad map[string]any
-		_ = json.Unmarshal(b, &bad)
-		bad[key] = "historical-canary"
-		if err := codex.CheckFileEditConfig(bad); err == nil {
-			t.Errorf("accepted injected %s", key)
-		}
+	if err := codex.CheckFileEditFeatures(featureMetadata(map[string]bool{"hooks": false})); err == nil {
+		t.Fatal("allowed disabled hooks")
 	}
-	good["mcp_servers"] = map[string]any{"surprise": map[string]any{"command": "private-canary"}}
-	if err := codex.CheckFileEditConfig(good); err == nil {
-		t.Fatal("enabled MCP accepted")
+	if err := codex.CheckFileEditFeatures([]byte("shell_tool stable false\n")); err == nil {
+		t.Fatal("accepted incomplete metadata")
+	}
+}
+
+func TestDisableIDsAreValuesNotDottedOverrides(t *testing.T) {
+	argv, err := codex.FileEditCommand("/pinned/codex", "fabric_demo_test", "/owned", codex.DisabledIntegration{Kind: "mcp_servers", ID: `with.dot"quote`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, "\n")
+	if !strings.Contains(joined, `mcp_servers={"with.dot\"quote"={enabled=false}}`) || strings.Contains(joined, "mcp_servers.with.dot") {
+		t.Fatal("ID did not stay inside quoted TOML value")
+	}
+	if !strings.Contains(joined, `"/owned"="read"`) || !strings.Contains(joined, `"/owned/demo.txt"="write"`) || strings.Contains(joined, `.extends=`) {
+		t.Fatal("profile failed exact-file boundary")
+	}
+	if _, err := codex.FileEditCommand("/pinned/codex", "fabric_demo_test", "/owned", codex.DisabledIntegration{Kind: "command", ID: "bad"}); err == nil {
+		t.Fatal("accepted unapproved override kind")
 	}
 }
 
 func TestControlledProfileBeforeTurn(t *testing.T) {
-	for _, mut := range []string{"valid", "profile", "roots", "instructions", "config", "permission_rules"} {
+	for _, mut := range []string{"valid", "profile", "roots", "instructions", "unavailable", "paginated", "provider", "model", "catalog"} {
 		t.Run(mut, func(t *testing.T) {
 			spec := startSpec(t, "")
 			source := filepath.Join(spec.Dir, "AGENTS.md")
-			config := codex.FileEditSettings()
-			config["permissions"] = map[string]any{"fabric_demo_test": codex.FileEditPermissions(spec.Dir)}
-			reply := map[string]any{"thread": map[string]any{"id": "thr_1"}, "cwd": spec.Dir, "approvalPolicy": "never", "activePermissionProfile": map[string]any{"id": "fabric_demo_test"}, "runtimeWorkspaceRoots": []string{spec.Dir}, "instructionSources": []string{source}}
+			profiles := map[string]any{"data": []any{map[string]any{"id": "fabric_demo_test", "allowed": true}}, "nextCursor": nil}
+			reply := map[string]any{"thread": map[string]any{"id": "thr_1"}, "cwd": spec.Dir, "approvalPolicy": "never", "modelProvider": "openai", "model": codex.DemoModel, "activePermissionProfile": map[string]any{"id": "fabric_demo_test"}, "runtimeWorkspaceRoots": []string{spec.Dir}, "instructionSources": []string{source}}
 			switch mut {
 			case "profile":
 				reply["activePermissionProfile"] = map[string]any{"id": "widened"}
@@ -97,26 +112,33 @@ func TestControlledProfileBeforeTurn(t *testing.T) {
 				reply["runtimeWorkspaceRoots"] = []string{"/"}
 			case "instructions":
 				reply["instructionSources"] = []string{"/private/history"}
-			case "config":
-				config["features"].(map[string]any)["shell_tool"] = true
-			case "permission_rules":
-				config["permissions"].(map[string]any)["fabric_demo_test"].(map[string]any)["filesystem"] = map[string]any{":root": "read"}
+			case "unavailable":
+				profiles["data"] = []any{map[string]any{"id": "fabric_demo_test", "allowed": false}}
+			case "paginated":
+				profiles["nextCursor"] = "more"
+			case "provider":
+				reply["modelProvider"] = "other"
+			case "model":
+				reply["model"] = "unapproved"
 			}
-			cb, _ := json.Marshal(map[string]any{"config": config})
+			cb, _ := json.Marshal(profiles)
 			rb, _ := json.Marshal(reply)
 			scriptPath := filepath.Join(t.TempDir(), "controlled.script")
-			if err := os.WriteFile(scriptPath, []byte("on initialize reply {}\non config/read reply "+string(cb)+"\non thread/start reply "+string(rb)+"\non turn/start exit 99\n"), 0600); err != nil {
+			if err := os.WriteFile(scriptPath, []byte("on initialize reply {}\non config/read exit 98\non permissionProfile/list reply "+string(cb)+"\non thread/start reply "+string(rb)+"\non turn/start exit 99\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			a := &codex.Adapter{Command: []string{exe(t), "--fabric-test-script", scriptPath}, Control: &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{source}, PreflightOnly: true}, KillGrace: 300 * time.Millisecond, RequestTimeout: time.Second}
+			a := &codex.Adapter{Command: []string{exe(t), "--fabric-test-script", scriptPath}, Control: &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{source}, PreflightOnly: true, CatalogOnly: mut == "catalog"}, KillGrace: 300 * time.Millisecond, RequestTimeout: time.Second}
 			sess, rec := begin(t, a, spec)
 			f := finish(t, sess)
 			want := harness.OutcomeFailed
-			if mut == "valid" {
+			if mut == "valid" || mut == "catalog" {
 				want = harness.OutcomeStopped
 			}
 			if f.Outcome != want {
 				t.Fatalf("outcome %+v, want %s", f, want)
+			}
+			if mut == "catalog" && f.Reason != "controlled profile metadata checked; no thread or model turn" {
+				t.Fatal("catalog check started a thread")
 			}
 			if mut == "valid" && f.Reason != "controlled preflight complete; no model turn" {
 				t.Fatalf("valid preflight did not reach checked thread: %+v", f)
@@ -132,7 +154,9 @@ func TestControlledProfileBeforeTurn(t *testing.T) {
 
 func TestControlledModeRejectsAmbientEnvironmentAndResume(t *testing.T) {
 	a := adapter(t, "normal")
-	a.Control = &codex.Control{Profile: "fabric_demo_test", PreflightOnly: true}
+	a.Command = []string{exe(t), "--fabric-test-script", script(t, "normal")}
+	a.BaseEnv = nil
+	a.Control = &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{"/owned/AGENTS.md"}, PreflightOnly: true}
 	for _, spec := range []harness.StartSpec{
 		{SessionID: "x", Dir: t.TempDir(), Prompt: "x", Env: map[string]string{"OPENAI_API_KEY": "canary"}},
 		{SessionID: "x", Dir: t.TempDir(), Prompt: "x", Extra: json.RawMessage(`{"resume_thread":"history"}`)},
