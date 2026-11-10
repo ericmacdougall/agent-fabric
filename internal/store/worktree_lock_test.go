@@ -38,8 +38,8 @@ func TestMigrate0038LockTimeout(t *testing.T) {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("migrate once the lock is released: %v", err)
 	}
-	if _, latest := level(t, st, ctx); latest != migration0038 {
-		t.Fatalf("level %s after retry, want %s", latest, migration0038)
+	if _, latest := level(t, st, ctx); latest != migration0039 {
+		t.Fatalf("level %s after retry, want %s (0038 then 0039)", latest, migration0039)
 	}
 	if !strings.Contains(mustRead(t, migration0038), "SET LOCAL lock_timeout = '5s';") {
 		t.Fatal("0038 does not set its lock_timeout")

@@ -1076,7 +1076,8 @@ func (s *Store) Truncate(ctx context.Context) error {
 	for _, q := range []string{
 		"SET LOCAL fabric.allow_truncate = 'on'",
 		`TRUNCATE commands, events, outbox, outbox_cursors, attempts, stale_observations, missions,
-		dispatch_grants, usage_receipts, reservation_events, reservations, hold_commands, resource_capacities RESTART IDENTITY CASCADE`,
+		dispatch_grants, usage_receipts, reservation_events, reservations, hold_commands, resource_capacities,
+		control.ingested_events, control.mc_chat_mirror, control.proj_cursor, control.initiative_state, control.pulses RESTART IDENTITY CASCADE`,
 		"UPDATE slots SET cap = 4 WHERE id = 1",
 	} {
 		if _, err := tx.Exec(ctx, q); err != nil {
