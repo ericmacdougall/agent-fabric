@@ -87,7 +87,7 @@ func Store(ctx context.Context, db DB, events []Event) (Stored, error) {
 	if err != nil {
 		return s, err
 	}
-	defer tx.Rollback(context.Background()) //nolint:errcheck // no-op after commit
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
 	for _, e := range events {
 		tag, err := tx.Exec(ctx, insertSQL, args(e)...)
 		if err != nil {
@@ -104,7 +104,7 @@ func Store(ctx context.Context, db DB, events []Event) (Stored, error) {
 	}
 	if s.Inserted > 0 {
 		// A hint only: a failed notify is not an error, readers catch up from their cursor.
-		nctx, cancel := context.WithTimeout(context.Background(), 2*1e9)
+		nctx, cancel := context.WithTimeout(ctx, 2*1e9)
 		defer cancel()
 		db.Exec(nctx, "SELECT pg_notify($1, '')", NotifyChannel) //nolint:errcheck
 	}

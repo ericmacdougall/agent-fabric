@@ -87,14 +87,6 @@ func (r reason) Error() string { return string(r) }
 
 func bad(format string, a ...any) error { return reason(fmt.Sprintf(format, a...)) }
 
-// fieldName makes an unknown field name safe to print.
-func fieldName(k string) string {
-	if len(k) <= 40 && regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(k) {
-		return k
-	}
-	return "?"
-}
-
 // cleanText rejects invalid UTF-8, control characters (ESC and so ANSI
 // sequences, NUL, newlines), Unicode line separators and bidi overrides.
 func cleanText(s string) bool {
@@ -133,7 +125,7 @@ func ValidateLine(line []byte, source string) (Event, error) {
 	}
 	for k := range m {
 		if !topFields[k] {
-			return Event{}, bad("unknown-field:%s", fieldName(k))
+			return Event{}, bad("unknown-field")
 		}
 	}
 	str := func(k string, required bool, max int) (string, bool, error) {
@@ -257,7 +249,7 @@ func ValidateLine(line []byte, source string) (Event, error) {
 		out := map[string]string{}
 		for k, v := range o {
 			if !f.allowed[k] {
-				return Event{}, bad("unknown-field:%s.%s", f.name, fieldName(k))
+				return Event{}, bad("unknown-field:%s", f.name)
 			}
 			var s string
 			if err := json.Unmarshal(v, &s); err != nil || string(v) == "null" {

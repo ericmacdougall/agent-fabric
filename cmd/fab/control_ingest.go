@@ -70,7 +70,7 @@ func controlIngestMain(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close(context.Background()) //nolint:errcheck
+	defer conn.Close(ctx) //nolint:errcheck
 	res, err := ingest.Finish(ctx, conn, batch, *source, os.Stderr)
 	if err != nil {
 		return err

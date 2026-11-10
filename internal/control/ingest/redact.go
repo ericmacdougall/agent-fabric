@@ -87,9 +87,6 @@ func findSecrets(s string) []span {
 	}
 	for _, p := range secretPatterns {
 		for _, m := range p.re.FindAllStringIndex(s, -1) {
-			if strings.Contains(s[m[0]:m[1]], "[REDACTED:") {
-				continue
-			}
 			spans = append(spans, span{m[0], m[1], p.kind})
 		}
 	}

@@ -71,7 +71,7 @@ func TestValidate(t *testing.T) {
 func TestReasonsNeverEchoInput(t *testing.T) {
 	line := `{"schema":"mc.event/1","id":"wal-x:1","ts":"2026-11-09T12:30:45Z","kind":"wal","\u001b[31mevil":1}`
 	_, err := ValidateLine([]byte(line), "wal-x")
-	if err == nil || strings.ContainsAny(err.Error(), "\x1b[") || err.Error() != "unknown-field:?" {
+	if err == nil || strings.ContainsAny(err.Error(), "\x1b[") || err.Error() != "unknown-field" {
 		t.Fatalf("got %v", err)
 	}
 }
