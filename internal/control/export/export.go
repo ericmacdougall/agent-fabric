@@ -12,6 +12,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -20,7 +21,7 @@ import (
 const MaxOutput = 1 << 20
 
 // cursorReserve is room kept for the final cursor line.
-const cursorReserve = 256
+const cursorReserve = 768 // the cursor line plus a possible lag event
 
 const pageSize = 500
 
@@ -144,10 +145,11 @@ page:
 		// every in-progress one, so a row that commits late with a lower id is
 		// never passed over by the cursor. Execute assigns ids in xid order.
 		rows, err := tx.Query(ctx, `SELECT o.id, o.mission_id, o.seq, COALESCE(e.kind, ''), COALESCE(e.at, o.at),
-				COALESCE(h.last_id IS NOT NULL AND o.id > h.last_id, false), `+rowHashSQL+`
+				COALESCE(h.last_id IS NOT NULL AND o.id > h.last_id, false), COALESCE(left(m.ticket, 256), ''), `+rowHashSQL+`
 			FROM outbox o
 			LEFT JOIN events e ON e.mission_id = o.mission_id AND e.seq = o.seq
 			LEFT JOIN outbox_cursors h ON h.consumer = 'sched.hold.' || o.mission_id
+			LEFT JOIN missions m ON m.id = o.mission_id
 			WHERE o.id > $1 AND o.xid < pg_snapshot_xmin(pg_current_snapshot())
 			ORDER BY o.id LIMIT $2`, last, pageSize)
 		if err != nil {
@@ -158,7 +160,7 @@ page:
 		for rows.Next() {
 			var r Row
 			var h string
-			if err := rows.Scan(&r.ID, &r.Mission, &r.Seq, &r.Kind, &r.At, &r.Held, &h); err != nil {
+			if err := rows.Scan(&r.ID, &r.Mission, &r.Seq, &r.Kind, &r.At, &r.Held, &r.Ticket, &h); err != nil {
 				rows.Close()
 				return Result{}, err
 			}
@@ -192,8 +194,19 @@ page:
 	if !res.More {
 		// Rows committed but held back by an older open transaction (anywhere in the
 		// cluster): without this, a stall looks exactly like being caught up.
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM outbox o WHERE o.id > $1 AND o.xid >= pg_snapshot_xmin(pg_current_snapshot())`, last).Scan(&res.Lagging); err != nil {
+		var firstHeld int64
+		var now time.Time
+		if err := tx.QueryRow(ctx, `SELECT count(*), COALESCE(min(o.id), 0), now() FROM outbox o WHERE o.id > $1 AND o.xid >= pg_snapshot_xmin(pg_current_snapshot())`, last).Scan(&res.Lagging, &firstHeld, &now); err != nil {
 			return Result{}, err
+		}
+		if res.Lagging > 0 {
+			// A file-drop reader never sees stderr: say it in the stream too, once per episode.
+			line, err := json.Marshal(MapLag(res.Lagging, firstHeld, now))
+			if err != nil {
+				return Result{}, err
+			}
+			buf.Write(line)
+			buf.WriteByte('\n')
 		}
 	}
 	res.Cursor = encodeCursor(dbid, last, lastHash, res.More && backfill)

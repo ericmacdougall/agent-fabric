@@ -34,7 +34,8 @@ type Row struct {
 	Seq     int64
 	Kind    string // events.kind; "" when the event row is missing
 	At      time.Time
-	Held    bool // the mission's stream is held at or before this row
+	Held    bool   // the mission's stream is held at or before this row
+	Ticket  string // missions.ticket as stored (free text); only a "name#N" reference leaves this package
 }
 
 // Event is one mc.event/1 line.
@@ -52,7 +53,8 @@ type Event struct {
 
 // Subject names the stream: the initiative is the fabric mission.
 type Subject struct {
-	Initiative string `json:"initiative"`
+	Initiative string `json:"initiative,omitempty"`
+	Ticket     string `json:"ticket,omitempty"`
 }
 
 var idShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$`)
@@ -89,7 +91,7 @@ func MapRow(r Row) Event {
 		ID:      Source + ":" + itoa(r.ID),
 		TS:      r.At.UTC().Format("2006-01-02T15:04:05.000Z"),
 		Source:  Source,
-		Subject: Subject{Initiative: mission},
+		Subject: Subject{Initiative: mission, Ticket: ticketRef(r.Ticket)},
 	}
 	k := domain.EventKind(r.Kind)
 	prefix := "mission " + mission + ": "
@@ -128,3 +130,40 @@ func clip(s string, n int) string {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// Mission Control validates tickets as [a-z0-9][a-z0-9-]{0,39}#[0-9]{1,7}; the match here is bounded the same way
+// (no underscore, at most 7 digits, not part of a longer word or number; a neighbouring non-ASCII character
+// counts as part of the word), on the original text with ASCII-only
+// case folding (a Unicode fold would turn U+212A into k).
+var ticketShape = regexp.MustCompile(`(?:^|[\x00-\x2c\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f])([A-Za-z][A-Za-z0-9-]{0,30}#[0-9]{1,7})(?:[\x00-\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f]|$)`)
+
+// ticketRef extracts the first "project#N" reference (lower-cased, e.g.
+// "goodqa#15586") from a mission's ticket text, the join key Mission Control
+// derives initiatives from. Nothing else of the text is exported; no match, no field.
+func ticketRef(s string) string {
+	m := ticketShape.FindStringSubmatch(s)
+	if m == nil {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + 32
+		}
+		return r
+	}, m[1])
+}
+
+// MapLag is the system event that tells a file-drop reader (which never sees
+// stderr) that committed rows are held back: one per lag episode, keyed by the
+// first held outbox id, so replays dedupe on it. The next normal event clears it.
+func MapLag(n, firstHeldID int64, at time.Time) Event {
+	return Event{
+		Schema:   Schema,
+		ID:       Source + ":lag:" + itoa(firstHeldID),
+		TS:       at.UTC().Format("2006-01-02T15:04:05.000Z"),
+		Kind:     "system",
+		Source:   Source,
+		Summary:  "fabric export lagging: " + itoa(n) + " rows held back",
+		Severity: "warn",
+	}
+}
