@@ -168,24 +168,13 @@ func VerifyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles) (problems, no
 		if dbcreate {
 			problems = append(problems, fmt.Sprintf("role %s may CREATE in database %s", n, db))
 		}
-		rows, err := pool.Query(ctx, `SELECT datname, has_database_privilege($1, datname, 'CONNECT') FROM pg_database WHERE datallowconn AND NOT datistemplate AND datname <> $2 ORDER BY datname`, n, db)
-		if err != nil {
-			return nil, nil, err
-		}
-		for rows.Next() {
-			var name string
-			var connect bool
-			if err := rows.Scan(&name, &connect); err != nil {
-				rows.Close()
-				return nil, nil, err
-			}
-			notes = append(notes, fmt.Sprintf("other_db_rights: database %s: unchecked, not connected; role %s CONNECT=%t (read from the shared catalog)", name, n, connect))
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return nil, nil, err
-		}
 	}
+	odbp, odbn, err := otherDatabases(ctx, pool, r, db)
+	if err != nil {
+		return nil, nil, err
+	}
+	problems = append(problems, odbp...)
+	notes = append(notes, odbn...)
 	return problems, notes, nil
 }
 

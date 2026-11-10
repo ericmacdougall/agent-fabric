@@ -417,7 +417,9 @@ func TestApplyRolesRefusesLoudLogging(t *testing.T) {
 	if _, err := p.Exec(ctx, fmt.Sprintf("CREATE ROLE %s LOGIN CREATEROLE PASSWORD '%s'", adm, admPassword)); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { p.Exec(context.Background(), "REVOKE ALL ON SCHEMA control FROM "+adm+"; DROP ROLE IF EXISTS "+adm) }) //nolint:errcheck
+	t.Cleanup(func() {
+		p.Exec(context.Background(), "REVOKE ALL ON SCHEMA control FROM "+adm+"; DROP ROLE IF EXISTS "+adm)
+	}) //nolint:errcheck
 	if _, err := p.Exec(ctx, "GRANT USAGE ON SCHEMA control TO "+adm+"; GRANT SELECT ON control.ingested_events TO "+adm); err != nil {
 		t.Fatal(err)
 	}
