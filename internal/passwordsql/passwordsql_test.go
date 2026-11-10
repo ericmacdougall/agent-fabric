@@ -2,6 +2,7 @@ package passwordsql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -143,25 +144,28 @@ func TestWireExtendedPasswordBoundary(t *testing.T) {
 	if a != 1 || b != 0 {
 		t.Fatal("old literal control did not prove exposure")
 	}
-	c, counts := wire(t, marker)
-	key, err := NewKey()
-	if err != nil {
-		t.Fatal(err)
+	for _, setter := range []func(context.Context, Queryer, string, string, string) error{Set, SetStore} {
+		c, counts := wire(t, marker)
+		key, err := NewKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := setter(context.Background(), c, key, "fixture", marker); err != nil {
+			t.Fatal("protected wire execution failed")
+		}
+		a, b = counts()
+		if a != 0 || b != 1 {
+			t.Fatal("password entered SQL or failed to use extended Bind")
+		}
 	}
-	if err := Set(context.Background(), c, key, "fixture", marker); err != nil {
-		t.Fatal("protected wire execution failed")
-	}
-	a, b = counts()
-	if a != 0 || b != 1 {
-		t.Fatal("password entered SQL or failed to use extended Bind")
-	}
+
 }
 func TestBuildersAndSafeErrors(t *testing.T) {
 	key, err := NewKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	q, err := AlterSQL("fixture", key)
+	q, err := ControlAlterSQL("fixture", key)
 	if err != nil || !strings.Contains(q, "pg_catalog.format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION NOINHERIT LOGIN PASSWORD %L'") {
 		t.Fatal("builder lost single escaped utility")
 	}
@@ -169,7 +173,7 @@ func TestBuildersAndSafeErrors(t *testing.T) {
 		t.Fatal("password-valued result")
 	}
 	for _, v := range []string{"bad'role", "bad.role", "", strings.Repeat("x", 64)} {
-		if _, err := AlterSQL(v, key); err == nil {
+		if _, err := ControlAlterSQL(v, key); err == nil {
 			t.Error("invalid role accepted")
 		}
 	}
@@ -235,5 +239,65 @@ func TestFrontendSensitiveErrorIsReducedToSQLState(t *testing.T) {
 	}
 	if err := c.Close(context.Background()); err != nil || !c.IsClosed() {
 		t.Fatal("dedicated wire connection not closed")
+	}
+}
+
+func TestClosedBuildersPreserveDistinctInheritanceContracts(t *testing.T) {
+	key, _ := NewKey()
+	control, err := ControlAlterSQL("fixture", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := StoreAlterSQL("fixture", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(control, " NOINHERIT ") || strings.Contains(store, "INHERIT") {
+		t.Fatal("Store inheritance changed or control inheritance widened")
+	}
+	for _, q := range []string{control, store} {
+		if strings.Count(q, "ALTER ROLE") != 1 || !strings.Contains(q, " PASSWORD %L") {
+			t.Fatal("closed single utility contract changed")
+		}
+	}
+}
+
+type rollbackControl struct {
+	pgx.Tx
+	calls int
+	err   error
+}
+
+func (r *rollbackControl) Rollback(context.Context) error { r.calls++; return r.err }
+func TestDedicatedCloseTruthAndNoReuse(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		c, _ := wire(t, "PUBLIC_MARKER")
+		tx := &rollbackControl{}
+		var original error
+		if !committed {
+			original = errors.New("commit outcome unconfirmed")
+		}
+		err := Close(context.Background(), c, tx, Protection{}, "", false, committed, original)
+		if !c.IsClosed() {
+			t.Error("physical connection left reusable")
+		}
+		if committed && (err != nil || tx.calls != 0) {
+			t.Error("confirmed commit misreported")
+		}
+		if !committed && (err != original || tx.calls != 1) {
+			t.Error("unconfirmed state replaced by a success/refusal claim")
+		}
+	}
+	c, _ := wire(t, "PUBLIC_MARKER")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	original := errors.New("cancelled; outcome unconfirmed")
+	if err := Close(ctx, c, nil, Protection{}, "", true, false, original); err != original || !c.IsClosed() {
+		t.Error("cancellation reused a connection or rewrote outcome")
+	}
+	c, _ = wire(t, "PUBLIC_MARKER")
+	err := Close(context.Background(), c, nil, Protection{names: []string{"track_activities"}, before: []string{"on"}}, "", true, true, nil)
+	if err == nil || !strings.Contains(err.Error(), "roles committed;") || !c.IsClosed() {
+		t.Error("confirmed commit with failed cleanup lost its state")
 	}
 }

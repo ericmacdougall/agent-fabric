@@ -1,6 +1,6 @@
 # Control-role password SQL boundary
 
-The control-role apply operation uses a fresh physical connection from the
+Both the control-role and Store App/Runner apply operations use a fresh physical connection from the
 reviewed stock `Store.Open` configuration. It never returns that connection to a
 pool. Unsupported pool policy callbacks, query tracers and raw notice/error or
 notification callbacks refuse before password transmission; they are not
@@ -57,8 +57,10 @@ A genuine nested-utility PANIC requires a separately reviewed disposable privacy
 fixture, bounded memory-only diagnostic observer and test-only fault module. The
 production module guard must still refuse that module; no test exception is
 permitted in production. Backend termination and RAISE EXCEPTION do not establish
-the PANIC property. The unrelated legacy Store.ApplyRoles literal path and SCRAM
-verifier replacement are not closed by this control-role change.
+the PANIC property. The shared channel has two closed builders: control roles retain NOINHERIT;
+Store adds neither INHERIT nor NOINHERIT and preserves its existing behavior,
+memberships and Scheduler NOLOGIN/no-password state. The separate SCRAM verifier
+replacement remains open.
 
 Source: accepted narrow password-SQL contract, GoodQA#15623/#15655. PostgreSQL's
 [DO documentation](https://www.postgresql.org/docs/16/sql-do.html) describes the

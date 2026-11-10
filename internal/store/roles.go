@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+
+	"fabric/internal/passwordsql"
 )
 
 // Roles names the database roles that replace the single superuser
@@ -48,44 +50,49 @@ var applyRolesFault func(stmt string) error
 // after every migration so new tables are granted. An empty password makes
 // that role NOLOGIN (tests reach it through SET ROLE). Passwords are never
 // logged or returned.
-func (s *Store) ApplyRoles(ctx context.Context, r Roles, appPassword, runnerPassword string) error {
+func (s *Store) ApplyRoles(ctx context.Context, r Roles, appPassword, runnerPassword string) (err error) {
 	if !rolePrefix.MatchString(r.Prefix) {
-		return fmt.Errorf("role prefix %q", r.Prefix)
+		return errors.New("invalid role prefix")
 	}
-	conn, err := s.pool.Acquire(ctx)
+	if !passwordsql.Valid(r.App(), appPassword) || !passwordsql.Valid(r.Runner(), runnerPassword) {
+		return passwordsql.ErrRefused
+	}
+	conn, err := passwordsql.Connect(ctx, s.pool.Config())
 	if err != nil {
-		return err
+		return passwordsql.Safe(err)
 	}
-	defer conn.Release()
-	quote := func(v string) (string, error) {
-		q, err := conn.Conn().PgConn().EscapeString(v)
-		return "'" + q + "'", err
+	var tx pgx.Tx
+	var protection passwordsql.Protection
+	key := ""
+	committed := false
+	withPassword := appPassword != "" || runnerPassword != ""
+	defer func() { err = passwordsql.Close(ctx, conn, tx, protection, key, withPassword, committed, err) }()
+	quote := func(v string) (string, error) { q, e := conn.PgConn().EscapeString(v); return "'" + q + "'", e }
+	appLogin, runnerLogin := "NOLOGIN", "NOLOGIN"
+	if appPassword == "" {
+		appLogin = "NOLOGIN PASSWORD NULL"
 	}
-	login := func(pw string) (string, error) {
-		if pw == "" {
-			return "NOLOGIN PASSWORD NULL", nil
-		}
-		q, err := quote(pw)
-		return "LOGIN PASSWORD " + q, err
-	}
-	appLogin, err := login(appPassword)
-	if err != nil {
-		return err
-	}
-	runnerLogin, err := login(runnerPassword)
-	if err != nil {
-		return err
+	if runnerPassword == "" {
+		runnerLogin = "NOLOGIN PASSWORD NULL"
 	}
 	var db string
 	if err := conn.QueryRow(ctx, "SELECT current_database()").Scan(&db); err != nil {
-		return err
+		return passwordsql.Safe(err)
 	}
 	id := func(n string) string { return pgx.Identifier{n}.Sanitize() }
 	sched, app, runner := id(r.Scheduler()), id(r.App()), id(r.Runner())
 	stmts := []string{}
+	passwordActions := map[string]struct{ role, password string }{}
 	for _, c := range []struct{ name, opts string }{{r.Scheduler(), "NOLOGIN"}, {r.App(), appLogin}, {r.Runner(), runnerLogin}} {
+		alter := fmt.Sprintf("ALTER ROLE %s NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION %s", id(c.name), c.opts)
+		if c.name == r.App() && appPassword != "" {
+			passwordActions[alter] = struct{ role, password string }{c.name, appPassword}
+		}
+		if c.name == r.Runner() && runnerPassword != "" {
+			passwordActions[alter] = struct{ role, password string }{c.name, runnerPassword}
+		}
 		stmts = append(stmts, fmt.Sprintf(`DO $do$ BEGIN CREATE ROLE %s NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $do$`, id(c.name)),
-			fmt.Sprintf("ALTER ROLE %s NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION %s", id(c.name), c.opts))
+			alter)
 	}
 	for _, rl := range []string{app, runner} {
 		stmts = append(stmts,
@@ -99,7 +106,7 @@ func (s *Store) ApplyRoles(ctx context.Context, r Roles, appPassword, runnerPass
 	}
 	runnerRoleName, err := quote(r.Runner())
 	if err != nil {
-		return err
+		return passwordsql.Safe(err)
 	}
 	stmts = append(stmts,
 		fmt.Sprintf("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO %s", app),
@@ -140,7 +147,7 @@ func (s *Store) ApplyRoles(ctx context.Context, r Roles, appPassword, runnerPass
 	}
 	schedRole, err := quote(r.Scheduler())
 	if err != nil {
-		return err
+		return passwordsql.Safe(err)
 	}
 	stmts = append(stmts,
 		"REVOKE CREATE ON SCHEMA public FROM PUBLIC",
@@ -152,39 +159,52 @@ func (s *Store) ApplyRoles(ctx context.Context, r Roles, appPassword, runnerPass
 	// part way used to leave, for example, the app granted every table but
 	// not yet revoked from fabric_settings. Role DDL and grants are
 	// transactional in Postgres.
-	tx, err := conn.Begin(ctx)
+	tx, err = conn.Begin(ctx)
 	if err != nil {
-		return err
+		return passwordsql.Safe(err)
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext('fabric.apply_roles'))"); err != nil {
 		return fmt.Errorf("apply roles: %w", redactPassword(err))
+	}
+	if withPassword {
+		protection, err = passwordsql.Protect(ctx, tx)
+		if err != nil {
+			return passwordsql.Safe(err)
+		}
+		key, err = passwordsql.NewKey()
+		if err != nil {
+			return passwordsql.Safe(err)
+		}
+		if err := passwordsql.Preclaim(ctx, tx, key); err != nil {
+			return passwordsql.Safe(err)
+		}
 	}
 	for _, q := range stmts {
 		if applyRolesFault != nil {
 			if err := applyRolesFault(q); err != nil {
-				return fmt.Errorf("apply roles: %w", err)
+				return fmt.Errorf("apply roles: %w", passwordsql.Safe(err))
 			}
+		}
+		if item, ok := passwordActions[q]; ok {
+			if err := passwordsql.SetStore(ctx, tx, key, item.role, item.password); err != nil {
+				return passwordsql.Safe(err)
+			}
+			continue
 		}
 		if _, err := tx.Exec(ctx, q); err != nil {
 			return fmt.Errorf("apply roles: %w", redactPassword(err))
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("apply roles: %w", redactPassword(err))
+		return fmt.Errorf("apply roles: commit outcome unconfirmed: %w", redactPassword(err))
 	}
+	committed = true
 	return nil
 }
 
 // redactPassword drops the statement text from an error, which could hold
 // a password.
-func redactPassword(err error) error {
-	var pe interface{ SQLState() string }
-	if errors.As(err, &pe) {
-		return fmt.Errorf("sqlstate %s", pe.SQLState())
-	}
-	return errors.New("statement failed")
-}
+func redactPassword(err error) error { return passwordsql.Safe(err) }
 
 var roleSwitchOption = regexp.MustCompile(`(?i)(?:^|\s)-(?:c\s*|-)(?:role|session_authorization)\s*=`)
 

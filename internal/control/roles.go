@@ -89,27 +89,16 @@ func ApplyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, pw Passwords) 
 			return false, passwordsql.ErrRefused
 		}
 	}
-	cfg, err := passwordsql.DedicatedConfig(pool.Config())
+	conn, err := passwordsql.Connect(ctx, pool.Config())
 	if err != nil {
 		return false, err
 	}
-	conn, err := pgx.ConnectConfig(ctx, cfg)
-	if err != nil {
-		return false, passwordsql.Safe(err)
-	}
 	committed := false
-	// A physical backend is never returned to any pool, including cancellation.
-	defer func() {
-		closeErr := conn.Close(ctx)
-		if closeErr != nil && err == nil {
-			if committed {
-				err = errors.New("apply control roles: roles committed; dedicated connection close failed")
-			} else {
-				err = errors.New("apply control roles: dedicated connection close failed")
-			}
-		}
-	}()
 	withPassword := pw.Export != "" || pw.Ingest != "" || pw.Service != ""
+	var tx pgx.Tx
+	var protection passwordsql.Protection
+	key := ""
+	defer func() { err = passwordsql.Close(ctx, conn, tx, protection, key, withPassword, committed, err) }()
 	var db string
 	if err := conn.QueryRow(ctx, "SELECT current_database()").Scan(&db); err != nil {
 		return false, passwordsql.Safe(err)
@@ -180,30 +169,10 @@ func ApplyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, pw Passwords) 
 	for _, t := range serviceWrite {
 		stmts = append(stmts, fmt.Sprintf("GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO %s", qualified("control", t), svc))
 	}
-	tx, err := conn.Begin(ctx)
+	tx, err = conn.Begin(ctx)
 	if err != nil {
 		return false, passwordsql.Safe(err)
 	}
-	var protection passwordsql.Protection
-	key := ""
-	defer func() {
-		if !committed {
-			tx.Rollback(ctx)
-		} //nolint:errcheck // no rollback claim on failure
-		if withPassword && !conn.IsClosed() {
-			cleanupErr := protection.Restored(ctx, conn)
-			if key != "" && cleanupErr == nil {
-				cleanupErr = passwordsql.Empty(ctx, conn, key)
-			}
-			if cleanupErr != nil && err == nil {
-				if committed {
-					err = errors.New("apply control roles: roles committed; session cleanup could not be verified; dedicated connection closed")
-				} else {
-					err = errors.New("apply control roles: session cleanup could not be verified; dedicated connection closed")
-				}
-			}
-		}
-	}()
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", rolesLock); err != nil {
 		return false, fmt.Errorf("apply control roles: %w", redactErr(err))
 	}

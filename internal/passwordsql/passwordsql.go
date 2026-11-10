@@ -18,19 +18,27 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrRefused = errors.New("password operation refused before transmission")
+var ErrRefused = errors.New("password session policy or verification refused")
 var roleRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 var keyRE = regexp.MustCompile(`^fabric_password_[0-9a-f]{32}\.handoff$`)
 var stateRE = regexp.MustCompile(`^[A-Z0-9]{5}$`)
+
+type stateError string
+
+func (s stateError) Error() string    { return "sqlstate " + string(s) }
+func (s stateError) SQLState() string { return string(s) }
 
 // Safe never retains a PgError, its internal query/context, Bind args or DSN.
 func Safe(err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, ErrRefused) {
+		return ErrRefused
+	}
 	var pe interface{ SQLState() string }
 	if errors.As(err, &pe) && stateRE.MatchString(pe.SQLState()) {
-		return errors.New("sqlstate " + pe.SQLState())
+		return stateError(pe.SQLState())
 	}
 	return errors.New("database operation failed")
 }
@@ -48,9 +56,14 @@ func NewKey() (string, error) {
 // BindSQL returns a boolean, never set_config's password-valued text result.
 const BindSQL = `SELECT pg_catalog.set_config($1, $2, true) IS NOT NULL`
 
-func AlterSQL(role, key string) (string, error) {
+func ControlAlterSQL(role, key string) (string, error) { return alter(role, key, false) }
+func StoreAlterSQL(role, key string) (string, error)   { return alter(role, key, true) }
+func alter(role, key string, store bool) (string, error) {
 	if !roleRE.MatchString(role) || !keyRE.MatchString(key) {
 		return "", ErrRefused
+	}
+	if store {
+		return `DO $fabric_password$ BEGIN EXECUTE pg_catalog.format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION LOGIN PASSWORD %L', '` + role + `', pg_catalog.current_setting('` + key + `')); END $fabric_password$ LANGUAGE plpgsql`, nil
 	}
 	return `DO $fabric_password$ BEGIN EXECUTE pg_catalog.format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION NOINHERIT LOGIN PASSWORD %L', '` + role + `', pg_catalog.current_setting('` + key + `')); END $fabric_password$ LANGUAGE plpgsql`, nil
 }
@@ -93,10 +106,16 @@ func Empty(ctx context.Context, q Queryer, key string) error {
 	return boolean(ctx, q, `SELECT COALESCE(pg_catalog.current_setting($1, true), '') = ''`, key)
 }
 func Set(ctx context.Context, q Queryer, key, role, password string) error {
+	return set(ctx, q, key, role, password, false)
+}
+func SetStore(ctx context.Context, q Queryer, key, role, password string) error {
+	return set(ctx, q, key, role, password, true)
+}
+func set(ctx context.Context, q Queryer, key, role, password string, store bool) error {
 	if !Valid(role, password) || password == "" {
 		return ErrRefused
 	}
-	sql, err := AlterSQL(role, key)
+	sql, err := alter(role, key, store)
 	if err != nil {
 		return err
 	}
@@ -147,4 +166,48 @@ func DedicatedConfig(p *pgxpool.Config) (*pgx.ConnConfig, error) {
 		return nil, ErrRefused
 	}
 	return c, nil // TLS/authentication/fallback/validation defaults stay intact.
+}
+
+// Connect preserves the reviewed stock connection policy on a new backend.
+func Connect(ctx context.Context, p *pgxpool.Config) (*pgx.Conn, error) {
+	cfg, err := DedicatedConfig(p)
+	if err != nil {
+		return nil, err
+	}
+	c, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		return nil, Safe(err)
+	}
+	return c, nil
+}
+
+// Close finishes only this dedicated backend. It never returns it to a pool,
+// and does not infer absence of writes from rollback/transport failure.
+func Close(ctx context.Context, c *pgx.Conn, tx pgx.Tx, p Protection, key string, sensitive, committed bool, operationErr error) error {
+	if !committed && operationErr == nil {
+		operationErr = errors.New("commit outcome unconfirmed")
+	}
+	if tx != nil && !committed {
+		tx.Rollback(ctx)
+	} //nolint:errcheck
+	if sensitive && !c.IsClosed() {
+		cleanupErr := p.Restored(ctx, c)
+		if key != "" && cleanupErr == nil {
+			cleanupErr = Empty(ctx, c, key)
+		}
+		if cleanupErr != nil && operationErr == nil {
+			if committed {
+				operationErr = errors.New("roles committed; session cleanup could not be verified; dedicated connection closed")
+			} else {
+				operationErr = errors.New("session cleanup could not be verified; dedicated connection closed")
+			}
+		}
+	}
+	if err := c.Close(ctx); err != nil && operationErr == nil {
+		if committed {
+			return errors.New("roles committed; dedicated connection close failed")
+		}
+		return errors.New("dedicated connection close failed")
+	}
+	return operationErr
 }
