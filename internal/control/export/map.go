@@ -131,13 +131,26 @@ func clip(s string, n int) string {
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
-var ticketShape = regexp.MustCompile(`[a-z][a-z0-9_-]{0,30}#[0-9]{1,9}`)
+// Mission Control validates tickets as [a-z0-9][a-z0-9-]{0,39}#[0-9]{1,7}; the match here is bounded the same way
+// (no underscore, at most 7 digits, not part of a longer word or number; a neighbouring non-ASCII character
+// counts as part of the word), on the original text with ASCII-only
+// case folding (a Unicode fold would turn U+212A into k).
+var ticketShape = regexp.MustCompile(`(?:^|[\x00-\x2c\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f])([A-Za-z][A-Za-z0-9-]{0,30}#[0-9]{1,7})(?:[\x00-\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f]|$)`)
 
 // ticketRef extracts the first "project#N" reference (lower-cased, e.g.
 // "goodqa#15586") from a mission's ticket text, the join key Mission Control
 // derives initiatives from. Nothing else of the text is exported; no match, no field.
 func ticketRef(s string) string {
-	return ticketShape.FindString(strings.ToLower(s))
+	m := ticketShape.FindStringSubmatch(s)
+	if m == nil {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + 32
+		}
+		return r
+	}, m[1])
 }
 
 // MapLag is the system event that tells a file-drop reader (which never sees

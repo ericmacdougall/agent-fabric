@@ -574,7 +574,7 @@ func TestMapEventsFromStore(t *testing.T) {
 			t.Errorf("%v: %v", ev, bad)
 		}
 		if ev["id"] != fmt.Sprintf("fabric:%d", id) || ev["ts"] != at.UTC().Format("2006-01-02T15:04:05.000Z") ||
-			ev["subject"].(map[string]any)["initiative"] != mission {
+			ev["subject"].(map[string]any)["initiative"] != mission || ev["subject"].(map[string]any)["ticket"] != "goodqa#1" {
 			t.Errorf("row %d mapped to %v", id, ev)
 		}
 	}
@@ -618,6 +618,21 @@ func TestLaggingReported(t *testing.T) {
 	if lag := lagEvents(evs); len(withoutLag(evs)) != 0 || len(lag) != 1 || cur2 != cur || res.Lagging < 2 || lag[0]["severity"] != "warn" || lag[0]["kind"] != "system" || lag[0]["summary"] != fmt.Sprintf("fabric export lagging: %d rows held back", res.Lagging) || !strings.HasPrefix(lag[0]["id"].(string), "fabric:lag:") {
 		t.Fatalf("events=%d cursor same=%v lagging=%d", len(evs), cur2 == cur, res.Lagging)
 	}
+	// The id is keyed on the first held outbox row and stays the same while more rows pile up.
+	var firstHeld int64
+	_, curID, _, _, _ := decodeCursor(cur)
+	if err := c.QueryRow(ctx, `SELECT min(id) FROM outbox WHERE id > $1`, curID).Scan(&firstHeld); err != nil {
+		t.Fatal(err)
+	}
+	wantID := fmt.Sprintf("fabric:lag:%d", firstHeld)
+	if got := lagEvents(evs)[0]["id"]; got != wantID {
+		t.Fatalf("lag id %v, want %s (first held row)", got, wantID)
+	}
+	seed(t, st, ctx, "n", 1)
+	evs2, _, res2 := run(t, ctx, c, cur)
+	if lag := lagEvents(evs2); len(lag) != 1 || lag[0]["id"] != wantID || res2.Lagging <= res.Lagging {
+		t.Fatalf("lag episode id not stable: %v lagging %d -> %d", lagEvents(evs2), res.Lagging, res2.Lagging)
+	}
 	if _, err := blocker.Exec(ctx, `ROLLBACK`); err != nil {
 		t.Fatal(err)
 	}
@@ -657,12 +672,21 @@ func TestHistoricOnBackfillOnly(t *testing.T) {
 // mission's ticket and nothing else of the ticket text; no reference, no field.
 func TestSubjectTicket(t *testing.T) {
 	for in, want := range map[string]string{
-		"GoodQA goodqa#14791":         "goodqa#14791",
-		"goodqa#15586 and more text":  "goodqa#15586",
-		"GoodQA #5":                   "",
-		"no reference " + secret:      "",
-		"x\x1b[31m goodqa#7\n":        "goodqa#7",
-		"goodqa#12345678901234567890": "goodqa#123456789",
+		"GoodQA goodqa#14791":                    "goodqa#14791",
+		"goodqa#15586 and more text":             "goodqa#15586",
+		"GoodQA #5":                              "",
+		"no reference " + secret:                 "",
+		"x\x1b[31m goodqa#7\n":                   "goodqa#7",
+		"goodqa#12345678901234567890":            "",
+		"goodqa#1234567890":                      "",
+		"goodqa#1234567":                         "goodqa#1234567",
+		"goodqa#12345678":                        "",
+		"abcdefghijklmnopqrstuvwxyzabcdefghij#5": "",
+		"\u212Aimi#5":                            "",
+		"foo.goodqa#5":                           "",
+		"my_proj#5":                              "",
+		"GoodQA GOODQA#77.":                      "goodqa#77",
+		"(goodqa#9)":                             "goodqa#9",
 	} {
 		if got := ticketRef(in); got != want {
 			t.Errorf("ticketRef(%q) = %q, want %q", in, got, want)

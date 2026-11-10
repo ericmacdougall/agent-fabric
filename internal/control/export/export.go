@@ -145,7 +145,7 @@ page:
 		// every in-progress one, so a row that commits late with a lower id is
 		// never passed over by the cursor. Execute assigns ids in xid order.
 		rows, err := tx.Query(ctx, `SELECT o.id, o.mission_id, o.seq, COALESCE(e.kind, ''), COALESCE(e.at, o.at),
-				COALESCE(h.last_id IS NOT NULL AND o.id > h.last_id, false), COALESCE(m.ticket, ''), `+rowHashSQL+`
+				COALESCE(h.last_id IS NOT NULL AND o.id > h.last_id, false), COALESCE(left(m.ticket, 256), ''), `+rowHashSQL+`
 			FROM outbox o
 			LEFT JOIN events e ON e.mission_id = o.mission_id AND e.seq = o.seq
 			LEFT JOIN outbox_cursors h ON h.consumer = 'sched.hold.' || o.mission_id

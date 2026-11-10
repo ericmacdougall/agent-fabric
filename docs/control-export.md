@@ -14,7 +14,7 @@ One JSON object per line, then exactly one `{"cursor":"OPAQUE"}` line.
 - `subject.initiative` is the stream: the fabric mission id. (Assumption: "stream"
   means mission, as in `fab streams held`.)
 - `subject.ticket` is the mission's ticket reference as `project#N` (for example
-  `goodqa#15586`), lower-cased, taken from `missions.ticket`; no other ticket text is
+  `goodqa#15586`), lower-cased, taken from `missions.ticket` (the first match of a bounded `project#N`: letters, digits and hyphens, at most 7 digits, not inside a longer word or number, which is the shape Mission Control accepts); no other ticket text is
   exported, and the field is absent when the mission has no such reference. It is
   Mission Control's join key (initiatives there are keyed by ticket).
 - `kind` is `owner` for mission, attempt, candidate and effect events, `release` for
@@ -42,7 +42,9 @@ One JSON object per line, then exactly one `{"cursor":"OPAQUE"}` line.
   and the exit code stays 0. Because a file-drop reader never sees stderr, the stream
   also carries one event `fabric:lag:<first held outbox id>` (kind `system`, severity
   `warn`, summary `fabric export lagging: N rows held back`), stable per lag episode; the
-  next normal event clears it. The cursor does not move past them, so a later call returns
+  next normal event clears it. N is the count when that call ran; the id is keyed on the
+  first held row only, so a consumer that dedupes on id keeps the first summary of an
+  episode. The cursor does not move past them, so a later call returns
   them in order.
 - A held-stream placeholder (`stream held, event withheld`) is exported once under its
   `fabric:<id>`. If the hold is later released, the same id is not re-exported with the
