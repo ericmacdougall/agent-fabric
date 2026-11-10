@@ -316,7 +316,7 @@ func (s *Store) CheckRunnerRole(ctx context.Context) error {
 		UNION SELECT DISTINCT 'control.' || c.relname
 			FROM pg_catalog.pg_class c JOIN pg_catalog.pg_roles r ON pg_has_role(current_user, r.rolname, 'MEMBER')
 			WHERE c.relnamespace = to_regnamespace('control') AND c.relkind IN ('r', 'p', 'v', 'f')
-			AND (has_table_privilege(r.oid, c.oid, 'SELECT') OR has_table_privilege(r.oid, c.oid, 'DELETE')
+			AND (has_any_column_privilege(r.oid, c.oid, 'SELECT') OR has_table_privilege(r.oid, c.oid, 'DELETE')
 			  OR has_table_privilege(r.oid, c.oid, 'TRUNCATE') OR has_table_privilege(r.oid, c.oid, 'TRIGGER')
 			  OR has_any_column_privilege(r.oid, c.oid, 'INSERT') OR has_any_column_privilege(r.oid, c.oid, 'UPDATE')
 			  OR has_any_column_privilege(r.oid, c.oid, 'REFERENCES'))

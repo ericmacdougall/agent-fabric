@@ -98,3 +98,11 @@ the first group mirrors `harness/mission_control/events.py` `validate()` at d825
 second the stricter rules above. Failing-first controls: skipping the `fabric:` check,
 dropping `ON CONFLICT`, writing per row instead of per batch, always notifying, allowing
 control characters and writing another table each fail the tests named in the PR.
+
+Unknown JSON field names are never echoed in rejection reasons or stderr;
+rejections use fixed codes. A redaction marker embedded within a credential
+match does not exempt the surrounding text from redaction. The original
+absolute session deadline also bounds best-effort notification after commit and
+transaction/connection cleanup. A confirmed commit succeeds when its notification
+hint fails; an uncertain commit remains an operational error with unknown write
+effect.

@@ -95,3 +95,9 @@ On a machine with Postgres: `FABRIC_TEST_DSN=<admin dsn of a disposable instance
 `storetest` creates and drops its own `fabric_ctlx_<pid>` database. Failing-first controls
 (payload leak, missing xid filter, no cap, read-write transaction, no stale check, missing
 `fabric:` prefix) each fail the tests named in the PR.
+
+The intended export database role also needs column SELECT on
+`missions(id, ticket)` and `outbox_cursors(consumer, last_id)` for the ticket and
+held-stream joins. It has whole-table SELECT only on events and outbox. See
+[the role contract](control-roles.md) for the literal privilege matrix and
+verification behavior.

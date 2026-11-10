@@ -57,20 +57,8 @@ func controlRolesMain(prefix, exportFile, ingestFile, serviceFile string, verify
 			return nil
 		})
 	}
-	for what, f := range map[string]string{"export": exportFile, "ingest": ingestFile, "service": serviceFile} {
-		if f == "" && !allowNologin {
-			return usageError{fmt.Errorf("--%s-password-file is empty: that role would become NOLOGIN (an outage for its transport); pass --allow-nologin to confirm", what)}
-		}
-	}
-	var pw control.Passwords
-	var err error
-	if pw.Export, err = readSecret(exportFile); err != nil {
-		return err
-	}
-	if pw.Ingest, err = readSecret(ingestFile); err != nil {
-		return err
-	}
-	if pw.Service, err = readSecret(serviceFile); err != nil {
+	pw, err := loadControlPasswords(exportFile, ingestFile, serviceFile, allowNologin)
+	if err != nil {
 		return err
 	}
 	return withStore(func(ctx context.Context, st *store.Store) error {
@@ -85,4 +73,29 @@ func controlRolesMain(prefix, exportFile, ingestFile, serviceFile string, verify
 		fmt.Printf("control roles applied: %s, %s, %s: %s\n", r.Export(), r.Ingest(), r.Service(), state)
 		return nil
 	})
+}
+
+// loadControlPasswords validates the entire requested operation before DB access.
+func loadControlPasswords(exportFile, ingestFile, serviceFile string, allowNologin bool) (control.Passwords, error) {
+	var pw control.Passwords
+	for _, item := range []struct {
+		name, path string
+		dst        *string
+	}{
+		{"export", exportFile, &pw.Export}, {"ingest", ingestFile, &pw.Ingest}, {"service", serviceFile, &pw.Service},
+	} {
+		value, err := readSecret(item.path)
+		if err != nil {
+			return control.Passwords{}, err
+		}
+		*item.dst = value
+	}
+	if !allowNologin {
+		for _, item := range []struct{ name, value string }{{"export", pw.Export}, {"ingest", pw.Ingest}, {"service", pw.Service}} {
+			if item.value == "" {
+				return control.Passwords{}, usageError{fmt.Errorf("--%s-password-file has no effective password: that role would become NOLOGIN (an outage for its transport); pass --allow-nologin to confirm", item.name)}
+			}
+		}
+	}
+	return pw, nil
 }

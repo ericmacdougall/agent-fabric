@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -134,5 +135,18 @@ func TestStoreUncertainCommitIsError(t *testing.T) {
 	got, err := Store(ctx, db, []Event{{ID: "harness:uncertain"}})
 	if !errors.Is(err, context.DeadlineExceeded) || got.Inserted != 0 || db.notifyCalled {
 		t.Error("uncertain commit reported as confirmed or sent a hint")
+	}
+}
+
+func TestUnknownKeyStderrUsesFixedReasons(t *testing.T) {
+	key := "password_" + strings.Repeat("Z", 20)
+	line, _ := json.Marshal(map[string]any{"schema": Schema, "id": "harness:stderr", "ts": "2026-11-09T12:30:45Z", "kind": "wal", key: "x"})
+	var stderr bytes.Buffer
+	res, err := Run(context.Background(), nil, strings.NewReader(string(line)), "harness", &stderr)
+	if err != nil || res.Batch.Lines != 1 || len(res.Batch.Rejected) != 1 || res.Stored.Inserted != 0 {
+		t.Fatal("rejection report classification changed")
+	}
+	if strings.Contains(stderr.String(), key) || !strings.Contains(stderr.String(), "line 1 rejected: unknown-field") {
+		t.Error("stderr did not use fixed reason")
 	}
 }

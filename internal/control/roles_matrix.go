@@ -21,6 +21,7 @@ var matrixJSON []byte
 type matrixFile struct {
 	Tables        map[string]map[string]string
 	InsertColumns map[string]map[string][]string `json:"insert_columns"`
+	SelectColumns map[string]map[string][]string `json:"select_columns"`
 	SchemaUsage   map[string][]string            `json:"schema_usage"`
 	Database      struct{ Connect, Create, Temp bool }
 	// Functions in schema public: EXECUTE is expected on every function except a
@@ -128,7 +129,7 @@ func matrixProblems(ctx context.Context, pool *pgxpool.Pool, kind, role string) 
 				if err := pool.QueryRow(ctx, "SELECT has_column_privilege($1, $2::oid, $3::smallint, $4)", role, r.oid, c.n, priv).Scan(&got); err != nil {
 					return nil, err
 				}
-				w := privHas(want, priv) || (priv == "INSERT" && ins[c.name])
+				w := privHas(want, priv) || (priv == "INSERT" && ins[c.name]) || (priv == "SELECT" && inList(m.SelectColumns[kind][full], c.name))
 				if got != w {
 					add("%s %s on column %s.%s: got %t, want %t", kind, priv, full, c.name, got, w)
 				}

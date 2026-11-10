@@ -324,3 +324,18 @@ func TestControlCharactersNeverStored(t *testing.T) {
 		t.Fatalf("%d rows with control characters", n)
 	}
 }
+
+func TestMarkerCredentialDoesNotReachStoredRows(t *testing.T) {
+	c, ctx := open(t)
+	canary := strings.Repeat("Q", 18)
+	value := "password=[REDACTED:named-credential]" + canary
+	line := `{"schema":"mc.event/1","id":"harness:marker-stored","ts":"2026-11-09T12:30:45Z","kind":"wal","host":"` + value + `","tenant":"` + value + `","summary":"` + value + `","actor":{"agent":"` + value + `"},"subject":{"repo":"` + value + `","branch":"` + value + `","ref":"` + value + `","ticket":"` + value + `","initiative":"` + value + `"}}`
+	res, stderr, err := run(t, ctx, c, line)
+	if err != nil || res.Stored.Inserted != 1 || strings.Contains(stderr, canary) {
+		t.Fatal("marker redaction did not safely store/report event")
+	}
+	var leaked int
+	if err := c.QueryRow(ctx, `SELECT count(*) FROM control.ingested_events WHERE strpos(concat(summary,host,tenant,actor,repo,branch,ref,ticket,initiative),$1)>0`, canary).Scan(&leaked); err != nil || leaked != 0 {
+		t.Error("marker-bearing credential reached stored rows")
+	}
+}

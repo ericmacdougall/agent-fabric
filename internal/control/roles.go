@@ -12,7 +12,7 @@ import (
 )
 
 // Roles names the three database roles of the Control Room (goodqa#15586, spec
-// goodqa#15623): PREFIX_control_export (reads outbox and events, writes nothing),
+// goodqa#15623): PREFIX_control_export (reads outbox and events plus four joined metadata columns, writes nothing),
 // PREFIX_control_ingest (INSERT on named columns of the two source tables,
 // SELECT on allowed_sources) and PREFIX_control_service (reads the source
 // tables and a named list of Fabric tables, writes the projection tables). They
@@ -41,8 +41,9 @@ const rolesLock = "fabric.apply_control_roles"
 // Grants of the control roles. These are the single source of the grant code;
 // the privilege matrix test compares the result with a literal committed file.
 var (
-	// exportFabric: the F19 AC-2 list, the only thing the export role reads.
-	exportFabric = []string{"outbox", "events"}
+	// exportFabric: whole-table reads; the two joins below use column grants only.
+	exportFabric  = []string{"outbox", "events"}
+	exportColumns = map[string][]string{"missions": {"id", "ticket"}, "outbox_cursors": {"consumer", "last_id"}}
 	// serviceFabric: what the service reads of Fabric's own tables.
 	serviceFabric = []string{"events", "outbox", "outbox_cursors", "missions", "attempts", "jobs", "waits"}
 	// ingestEvents: the insert columns of control.ingested_events. seq,
@@ -91,7 +92,23 @@ func ApplyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, pw Passwords) 
 	if err != nil {
 		return false, err
 	}
-	defer conn.Release()
+	// On uncertain transaction completion or failed restoration checks, discard
+	// this physical connection rather than letting protected session state escape.
+	discard := false
+	defer func() {
+		if discard {
+			conn.Hijack().Close(ctx) //nolint:errcheck // Close destroys even with an expired context
+		} else {
+			conn.Release()
+		}
+	}()
+	withPassword := pw.Export != "" || pw.Ingest != "" || pw.Service != ""
+	var activityBefore string
+	if withPassword {
+		if err := conn.QueryRow(ctx, "SELECT current_setting('track_activities')").Scan(&activityBefore); err != nil {
+			return false, errors.New("apply control roles: cannot inspect activity tracking; no roles changed")
+		}
+	}
 	quote := func(v string) (string, error) {
 		q, err := conn.Conn().PgConn().EscapeString(v)
 		return "'" + q + "'", err
@@ -146,6 +163,9 @@ func ApplyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, pw Passwords) 
 	for _, t := range exportFabric {
 		stmts = append(stmts, fmt.Sprintf("GRANT SELECT ON %s TO %s", qualified("public", t), e))
 	}
+	for _, table := range []string{"missions", "outbox_cursors"} {
+		stmts = append(stmts, fmt.Sprintf("GRANT SELECT (%s) ON %s TO %s", columns(exportColumns[table]), qualified("public", table), e))
+	}
 	stmts = append(stmts,
 		fmt.Sprintf("GRANT USAGE ON SCHEMA control TO %s", ing),
 		fmt.Sprintf("GRANT INSERT (%s) ON control.ingested_events TO %s", columns(ingestEvents), ing),
@@ -169,11 +189,34 @@ func ApplyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, pw Passwords) 
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
+	committed := false
+	defer func() {
+		if !committed {
+			if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+				discard = true
+			}
+		}
+		if conn.Conn().PgConn().TxStatus() != 'I' {
+			discard = true
+		}
+		if !discard && withPassword {
+			var restored string
+			if checkErr := conn.QueryRow(ctx, "SELECT current_setting('track_activities')").Scan(&restored); checkErr != nil || restored != activityBefore {
+				discard = true
+				if err == nil {
+					if committed {
+						err = errors.New("apply control roles: roles committed; session restoration could not be verified; connection discarded")
+					} else {
+						err = errors.New("apply control roles: session restoration could not be verified; connection discarded")
+					}
+				}
+			}
+		}
+	}()
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", rolesLock); err != nil {
 		return false, fmt.Errorf("apply control roles: %w", redactErr(err))
 	}
-	if pw.Export != "" || pw.Ingest != "" || pw.Service != "" {
+	if withPassword {
 		if err := requireQuietLogging(ctx, tx); err != nil {
 			return false, err
 		}
@@ -184,11 +227,13 @@ func ApplyRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, pw Passwords) 
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("apply control roles: %w", redactErr(err))
+		discard = true
+		return false, fmt.Errorf("apply control roles: commit outcome unconfirmed: %w", redactErr(err))
 	}
+	committed = true
 	after, err := rolesDigest(ctx, conn.Conn(), r)
 	if err != nil {
-		return false, err
+		return false, errors.New("apply control roles: roles committed; catalog readback failed")
 	}
 	return before != after, nil
 }
@@ -223,6 +268,15 @@ func rolesDigest(ctx context.Context, conn *pgx.Conn, r Roles) (string, error) {
 // tracks utility statements it must be turned off for the transaction, or the run
 // is refused. A refusal sends no password.
 func requireQuietLogging(ctx context.Context, tx pgx.Tx) error {
+	// Protect the outer transaction before any role mutation or plaintext SQL.
+	// Do not put this in a savepoint that could roll back the protection.
+	if _, err := tx.Exec(ctx, "SET LOCAL track_activities = off"); err != nil {
+		return errors.New("apply control roles: refusing to send a password: cannot disable activity tracking for this transaction")
+	}
+	var tracking string
+	if err := tx.QueryRow(ctx, "SELECT current_setting('track_activities')").Scan(&tracking); err != nil || tracking != "off" {
+		return errors.New("apply control roles: refusing to send a password: activity tracking protection cannot be verified")
+	}
 	var super bool
 	if err := tx.QueryRow(ctx, "SELECT rolsuper FROM pg_roles WHERE rolname = current_user").Scan(&super); err != nil {
 		return err
@@ -254,6 +308,9 @@ func requireQuietLogging(ctx context.Context, tx pgx.Tx) error {
 	}
 	if _, err := tx.Exec(ctx, "SET LOCAL pg_stat_statements.track_utility = off"); err != nil {
 		return errors.New("apply control roles: pg_stat_statements tracks utility statements and this session cannot turn that off; refusing to send a password (set pg_stat_statements.track_utility = off, or wait for the SCRAM verifier change goodqa#15594)")
+	}
+	if err := tx.QueryRow(ctx, "SELECT current_setting('pg_stat_statements.track_utility')").Scan(&tracking); err != nil || tracking != "off" {
+		return errors.New("apply control roles: refusing to send a password: utility tracking protection cannot be verified")
 	}
 	return nil
 }

@@ -22,9 +22,10 @@ func TestRoleSafetyCoversControl(t *testing.T) {
 		t.Fatalf("control: a clean runner failed its check with a control schema present: %v", err)
 	}
 	for name, c := range map[string]struct{ grant, revoke string }{
-		"create":     {"GRANT CREATE ON SCHEMA control TO " + r.Runner(), "REVOKE CREATE ON SCHEMA control FROM " + r.Runner()},
-		"select":     {"GRANT USAGE ON SCHEMA control TO " + r.Runner() + "; GRANT SELECT ON control.t_ac7 TO " + r.Runner(), "REVOKE SELECT ON control.t_ac7 FROM " + r.Runner()},
-		"column-ins": {"GRANT USAGE ON SCHEMA control TO " + r.Runner() + "; GRANT INSERT (a) ON control.t_ac7 TO " + r.Runner(), "REVOKE INSERT (a) ON control.t_ac7 FROM " + r.Runner()},
+		"create":        {"GRANT CREATE ON SCHEMA control TO " + r.Runner(), "REVOKE CREATE ON SCHEMA control FROM " + r.Runner()},
+		"select":        {"GRANT USAGE ON SCHEMA control TO " + r.Runner() + "; GRANT SELECT ON control.t_ac7 TO " + r.Runner(), "REVOKE SELECT ON control.t_ac7 FROM " + r.Runner()},
+		"column-select": {"GRANT USAGE ON SCHEMA control TO " + r.Runner() + "; GRANT SELECT (a) ON control.t_ac7 TO " + r.Runner(), "REVOKE SELECT (a) ON control.t_ac7 FROM " + r.Runner()},
+		"column-ins":    {"GRANT USAGE ON SCHEMA control TO " + r.Runner() + "; GRANT INSERT (a) ON control.t_ac7 TO " + r.Runner(), "REVOKE INSERT (a) ON control.t_ac7 FROM " + r.Runner()},
 	} {
 		if _, err := owner.pool.Exec(ctx, c.grant); err != nil {
 			t.Fatal(err)
@@ -35,6 +36,17 @@ func TestRoleSafetyCoversControl(t *testing.T) {
 		if _, err := owner.pool.Exec(ctx, c.revoke); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// A NOINHERIT member's column SELECT is assumable and must be refused.
+	member := r.Runner() + "_col"
+	if _, err := owner.pool.Exec(ctx, "CREATE ROLE "+member+" NOLOGIN; GRANT USAGE ON SCHEMA control TO "+member+"; GRANT SELECT (a) ON control.t_ac7 TO "+member+"; GRANT "+member+" TO "+r.Runner()+" WITH INHERIT FALSE"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.CheckRunnerRole(ctx); err == nil || !strings.Contains(err.Error(), "control schema") {
+		t.Error("NOINHERIT member column SELECT passed runner check")
+	}
+	if _, err := owner.pool.Exec(ctx, "REVOKE "+member+" FROM "+r.Runner()+"; REVOKE ALL ON control.t_ac7 FROM "+member+"; REVOKE ALL ON SCHEMA control FROM "+member+"; DROP ROLE "+member); err != nil {
+		t.Fatal(err)
 	}
 	// inherited: a NOINHERIT membership of a role holding CREATE on control counts
 	if _, err := owner.pool.Exec(ctx, `CREATE ROLE ac7_member NOLOGIN; GRANT CREATE ON SCHEMA control TO ac7_member; GRANT ac7_member TO `+r.Runner()+` WITH INHERIT FALSE`); err != nil {

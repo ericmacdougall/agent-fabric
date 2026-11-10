@@ -27,6 +27,12 @@
       "control.pulses": "SELECT,INSERT,UPDATE,DELETE"
     }
   },
+  "select_columns": {
+    "export": {
+      "public.missions": ["id", "ticket"],
+      "public.outbox_cursors": ["consumer", "last_id"]
+    }
+  },
   "insert_columns": {
     "ingest": {
       "control.ingested_events": ["id", "ts", "kind", "source", "host", "actor", "initiative", "repo", "branch", "ref", "ticket", "summary", "severity", "count", "tenant"],
