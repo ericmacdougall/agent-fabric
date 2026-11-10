@@ -203,3 +203,51 @@ func TestHarnessRunSignalFailsTheRun(t *testing.T) {
 		t.Fatalf("the signal did not stop the session promptly (%v)", d)
 	}
 }
+
+func TestCodexPreflightRejectsModelAndAmbientFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--adapter", "codex"},
+		{"--adapter", "codex", "--codex-preflight", "--codex-dir", "/owned", "--unconfined"},
+		{"--adapter", "codex", "--codex-preflight", "--codex-dir", "/owned", "--pass-env", "USER"},
+		{"--adapter", "codex", "--codex-preflight", "--codex-dir", "/owned", "--prompt", "history"},
+		{"--adapter", "codex", "--codex-preflight", "--codex-dir", "/owned", "--wait", "121s"},
+		{"--adapter", "native", "--grant", "x", "--codex-preflight"},
+	} {
+		ev := filepath.Join(t.TempDir(), "events.jsonl")
+		if err := harnessMain(append([]string{"run", "--events", ev}, args...)); err == nil {
+			t.Fatal("unsafe Codex flags accepted")
+		}
+		if _, err := os.Stat(ev); err == nil {
+			t.Fatal("usage refusal created output")
+		}
+	}
+}
+
+func TestCodexArtifactRequiresExactOwnedPlainFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := checkCodexArtifact(dir); err == nil {
+		t.Fatal("missing artifact passed")
+	}
+	path := filepath.Join(dir, "demo.txt")
+	if err := os.WriteFile(path, []byte("fabric\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCodexArtifact(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCodexArtifact(dir); err == nil {
+		t.Fatal("executable artifact passed")
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "extra"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCodexArtifact(dir); err == nil {
+		t.Fatal("extra footprint passed")
+	}
+}

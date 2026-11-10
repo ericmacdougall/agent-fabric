@@ -24,6 +24,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"fabric/internal/connref"
 	"fabric/internal/domain"
 	"fabric/internal/reducer"
 	"fabric/internal/store"
@@ -95,8 +96,14 @@ func run(ctx context.Context, st *store.Store, out io.Writer, build string) erro
 }
 
 func main() {
-	dsn := os.Getenv("FABRIC_DSN")
-	if dsn == "" {
+	credential, err := connref.ResolveEnv("FABRIC_DSN", connref.App)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "replaycheck: credential reference unavailable")
+		os.Exit(2)
+	}
+	defer credential.Close()
+	dsn, err := credential.DSN()
+	if err != nil || dsn == "" {
 		fmt.Fprintln(os.Stderr, "replaycheck: FABRIC_DSN (a copy of live data) is required")
 		os.Exit(2)
 	}

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"fabric/internal/connref"
 	"fabric/internal/domain"
 	"fabric/internal/host"
 	"fabric/internal/store"
@@ -29,9 +30,14 @@ func TestAC2WaitWithoutPolling(t *testing.T) {
 	}
 	fab := os.Getenv("FABRIC_FAB_BIN")
 	fake := os.Getenv("FABRIC_FAKE_PROVIDER")
-	dsn := os.Getenv("FABRIC_TEST_DSN")
-	if fab == "" || fake == "" || dsn == "" {
-		t.Fatal("FABRIC_FAB_BIN, FABRIC_FAKE_PROVIDER and FABRIC_TEST_DSN are required")
+	adminRef, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)
+	if err != nil {
+		t.Fatal("test admin reference unavailable")
+	}
+	defer adminRef.Close()
+	dsn, err := adminRef.DSN()
+	if err != nil || fab == "" || fake == "" || dsn == "" {
+		t.Fatal("FABRIC_FAB_BIN, FABRIC_FAKE_PROVIDER and FABRIC_TEST_DSN or FABRIC_TEST_DSN_FILE are required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -45,9 +51,23 @@ func TestAC2WaitWithoutPolling(t *testing.T) {
 	if _, err := admin.Pool().Exec(ctx, "CREATE DATABASE "+name); err != nil {
 		t.Fatal(err)
 	}
-	admin.Close()
-	testDSN := replaceDB(dsn, name)
-	os.Setenv("FABRIC_DSN", testDSN)
+	var dbRef *connref.Ref
+	defer func() {
+		admin.Pool().Exec(context.Background(), "DROP DATABASE "+name+" WITH (FORCE)") //nolint:errcheck
+		if dbRef != nil {
+			dbRef.Close()
+		}
+		admin.Close()
+	}()
+	dbRef, err = connref.ForTestDatabase(adminRef, name)
+	if err != nil {
+		t.Fatal("derive test database reference failed")
+	}
+	testDSN, err := dbRef.DSN()
+	if err != nil {
+		t.Fatal("test database reference unavailable")
+	}
+	t.Setenv("FABRIC_DSN", testDSN)
 	st, err := store.Open(ctx, testDSN)
 	if err != nil {
 		t.Fatal(err)
@@ -133,26 +153,4 @@ func TestAC2WaitWithoutPolling(t *testing.T) {
 	if len(out) != 0 {
 		t.Fatalf("job units still present:\n%s", out)
 	}
-}
-
-func replaceDB(dsn, name string) string {
-	i := len(dsn) - 1
-	for i >= 0 && dsn[i] != '/' {
-		i--
-	}
-	rest := dsn[i+1:]
-	q := ""
-	if j := indexByte(rest, '?'); j >= 0 {
-		q = rest[j:]
-	}
-	return dsn[:i+1] + name + q
-}
-
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
 }

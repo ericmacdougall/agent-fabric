@@ -332,3 +332,30 @@ func TestHandler(t *testing.T) {
 		t.Errorf("concurrent scrape: %d, want 503", rec.Code)
 	}
 }
+
+// goodqa#15623 AC-14: the Control Room tables' row estimates are exported when the schema
+// exists, from the catalog alone, and the family is empty before the bootstrap.
+func TestControlRowsEstimate(t *testing.T) {
+	pool := open(t)
+	ctx := context.Background()
+	out := render(t, pool, opts)
+	if !strings.Contains(out, "# TYPE fabric_control_rows_estimate gauge") || strings.Contains(out, "fabric_control_rows_estimate{") {
+		t.Fatalf("before the bootstrap the family must exist and have no samples:\n%s", out)
+	}
+	for _, q := range []string{
+		`DROP SCHEMA IF EXISTS control CASCADE`,
+		`CREATE SCHEMA control`,
+		`CREATE TABLE control.ingested_events (a int)`,
+		`INSERT INTO control.ingested_events SELECT generate_series(1, 50)`,
+		`ANALYZE control.ingested_events`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	t.Cleanup(func() { pool.Exec(context.Background(), `DROP SCHEMA IF EXISTS control CASCADE`) }) //nolint:errcheck
+	out = render(t, pool, opts)
+	if got := sample(out, `fabric_control_rows_estimate{table="ingested_events"}`); got != "50" {
+		t.Fatalf("estimate for control.ingested_events = %s, want 50:\n%s", got, out)
+	}
+}

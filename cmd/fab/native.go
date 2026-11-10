@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"fabric/internal/connref"
 	"fabric/internal/host"
 	"fabric/internal/native"
 	"fabric/internal/store"
@@ -35,6 +36,7 @@ func nativeRunMain(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer opts.Close()
 	return withStore(func(_ context.Context, st *store.Store) error {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(g.WallSeconds+120)*time.Second)
 		defer cancel()
@@ -49,14 +51,19 @@ func nativeRunMain(args []string) error {
 
 // nativeOptions resolves the host boundary, tools and review settings for a
 // native run. `fab mission run` and `fab harness run` share it.
-func nativeOptions(g native.Grant, fake bool) (native.Options, error) {
+func nativeOptions(g native.Grant, fake bool) (result native.Options, rerr error) {
 	// The review DSN is always taken out of the environment before any worker
 	// can be constructed, flag on or off. Only FABRIC_REVIEW_GATE=1 uses it.
-	reviewDSN, err := takeReviewDSN()
+	reviewDSN, credential, err := takeReviewDSN()
 	if err != nil {
 		return native.Options{}, err
 	}
-	opts := native.Options{ReviewGate: reviewGateEnabled(), ReviewDSN: reviewDSN, ToolExitCleanup: toolExitCleanupEnabled()}
+	defer func() {
+		if rerr != nil {
+			credential.Close()
+		}
+	}()
+	opts := native.Options{ReviewClose: credential.Close, ReviewGate: reviewGateEnabled(), ReviewDSN: reviewDSN, ToolExitCleanup: toolExitCleanupEnabled()}
 	if fake {
 		if os.Getenv("FABRIC_ALLOW_FAKE_HOST") != "1" {
 			return native.Options{}, errors.New("--unconfined-fake-host is refused: it runs tools with no containment")
@@ -110,12 +117,22 @@ func toolExitCleanupEnabled() bool { return os.Getenv(toolExitCleanupFlag) == "1
 
 // takeReviewDSN removes the app-role credential from the process environment
 // before any tool worker can be constructed. Native retains it only in Options.
-func takeReviewDSN() (string, error) {
-	dsn := os.Getenv("FABRIC_REVIEW_DSN")
-	if err := os.Unsetenv("FABRIC_REVIEW_DSN"); err != nil {
-		return "", fmt.Errorf("scrub FABRIC_REVIEW_DSN: %w", err)
+func takeReviewDSN() (string, *connectionRef, error) {
+	dsn, credential, err := connectionDSN("FABRIC_REVIEW_DSN", connref.Review, false)
+	// Remove values and reference metadata before any tool is constructed,
+	// including on a resolution error. Only Options retains the owned Ref.
+	for _, name := range []string{"FABRIC_REVIEW_DSN", "FABRIC_REVIEW_DSN_FILE", "FABRIC_REVIEW_DSN_FILE_KEY", "FABRIC_REVIEW_DSN_PASSWORD_FILE", "FABRIC_REVIEW_DSN_DATABASE"} {
+		if unsetErr := os.Unsetenv(name); unsetErr != nil && err == nil {
+			err = errors.New("cannot clear review connection environment")
+		}
 	}
-	return dsn, nil
+	if err != nil {
+		if credential != nil {
+			credential.Close()
+		}
+		return "", nil, err
+	}
+	return dsn, credential, nil
 }
 
 // waitStarter adapts a Profile plus its Wait to tools.Starter.

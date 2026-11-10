@@ -153,7 +153,12 @@ func daemonMain(args []string) error {
 		MaxTurns: 40, MaxBudgetUSD: 2, Wall: 45 * time.Minute, WorkRoot: *workRoot, FabBin: selfPath()}
 	cfg.Holds = holds
 	cfg.NoDispatch = *noDispatch
-	cfg.RunnerDSN = os.Getenv(*runnerDSNEnv)
+	runnerDSN, runnerCredential, err := runnerConnection(*runnerDSNEnv, false)
+	if err != nil {
+		return err
+	}
+	defer runnerCredential.Close()
+	cfg.RunnerDSN = runnerDSN
 	// FABRIC_WORKER_EXIT_CLEANUP=1 (exact; default off) verifies descendant
 	// cleanup after every worker exit before settling. Off by default: on
 	// Darwin the Stop signals the exited leader's process group, which

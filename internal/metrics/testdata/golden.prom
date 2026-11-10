@@ -67,3 +67,5 @@ fabric_asks_open_oldest_age_seconds 50
 # HELP fabric_held_streams Missions held because a stored event cannot be decoded by this build (distinct missions).
 # TYPE fabric_held_streams gauge
 fabric_held_streams 0
+# HELP fabric_control_rows_estimate Planner row estimate per table of schema control (warn at 1M, critical at 5M rows per table; absent before fab control bootstrap).
+# TYPE fabric_control_rows_estimate gauge

@@ -82,6 +82,8 @@ func main() {
 		err = harnessMain(os.Args[2:])
 	case "tui":
 		err = tuiMain(os.Args[2:])
+	case "control":
+		err = controlMain(os.Args[2:])
 	case "version":
 		err = versionMain(os.Args[2:])
 	case "migrate":
@@ -96,10 +98,15 @@ func main() {
 	}
 }
 
-// exitCode: 3 is a refusal (nothing changed), 1 an error of unknown effect.
+// exitCode: 3 is a refusal (nothing changed), 4 a completed call that rejected
+// some input lines (fab control ingest), 1 an error of unknown effect.
 func exitCode(err error) int {
 	if err == nil {
 		return 0
+	}
+	var pr partialRejects
+	if errors.As(err, &pr) {
+		return 4
 	}
 	var ref *store.Refusal
 	var ue usageError
@@ -134,8 +141,11 @@ func usage() {
   metrics [--timeout D]                health metrics (Prometheus text format, read-only)
   serve-metrics [--listen 127.0.0.1:9464] [--allow-remote] [--timeout D]   GET /metrics; loopback only by default
   tui [--interval 2s] [--timeout 1s] [--no-color] [--keys on|off]   read-only terminal view (fab tui -h: keys)
+  control export [--since CURSOR]      mc.event/1 lines + cursor for Mission Control (read-only)
+  control ingest --source NAME         validate mc.event/1 lines on stdin, store in control.ingested_events
   version                              build revision
   harness run --adapter native --grant F --events F   run a native mission through the harness seam; record and check its event trace
+  harness run --adapter codex --codex-preflight --codex-dir D --events F   check Codex feature and profile metadata without starting a thread
   ladder status --state F --policy F [--json]   model ladder from an escalation.py state file (read-only)
   asks [--state open]                  the inbox
   ask new --id I --question Q --source S [--mission M --kind K --option O ...]
@@ -160,10 +170,11 @@ func usage() {
 }
 
 func withStore(f func(context.Context, *store.Store) error) error {
-	dsn := os.Getenv("FABRIC_DSN")
-	if dsn == "" {
-		return errors.New("FABRIC_DSN is not set")
+	dsn, credential, err := appConnection()
+	if err != nil {
+		return err
 	}
+	defer credential.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	st, err := store.Open(ctx, dsn)
@@ -179,10 +190,11 @@ func withStore(f func(context.Context, *store.Store) error) error {
 // cancels the context, and that is a clean shutdown (nil), not an error
 // (goodqa#15579: a fixed 60 s deadline used to end the daemon after a minute).
 func withStoreService(f func(context.Context, *store.Store) error) error {
-	dsn := os.Getenv("FABRIC_DSN")
-	if dsn == "" {
-		return errors.New("FABRIC_DSN is not set")
+	dsn, credential, err := appConnection()
+	if err != nil {
+		return err
 	}
+	defer credential.Close()
 	sctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// After the first signal, stop catching signals: a second Ctrl-C or SIGTERM

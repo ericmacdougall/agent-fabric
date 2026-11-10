@@ -1,0 +1,14 @@
+# scripted codex app-server session; see fake_test.go
+on initialize reply {"userAgent":"fake-codex/0"}
+on thread/start reply {"thread":{"id":"{{thread}}"}}
+on turn/start reply {"turn":{"id":"turn_{{seq}}","status":"inProgress","items":[]}}
+on turn/start send {"method":"turn/started","params":{"threadId":"{{thread}}","turn":{"id":"turn_{{seq}}","status":"inProgress"}}}
+on turn/start send {"method":"item/completed","params":{"threadId":"{{thread}}","turnId":"turn_OTHER","completedAtMs":1,"item":{"type":"agentMessage","id":"a1","text":"foreign turn"}}}
+on turn/start send {"method":"item/completed","params":{"threadId":"thr_child","turnId":"turn_{{seq}}","completedAtMs":1,"item":{"type":"agentMessage","id":"a2","text":"foreign thread"}}}
+on turn/start send {"method":"item/completed","params":{"threadId":"{{thread}}","completedAtMs":1,"item":{"type":"agentMessage","id":"a3","text":"no turn id"}}}
+on turn/start send {"method":"item/completed","params":{"threadId":"thr_1","turnId":"turn_1","turnId":"turn_OTHER","item":{"type":"agentMessage","id":"a4","text":"duplicate keys"}}}
+on turn/start send {"method":"item/completed","params":{"threadId":"{{thread}}","turnId":"turn_{{seq}}","completedAtMs":1,"item":{"type":"agentMessage","id":"a5","text":"genuine"}}}
+on turn/start send {"method":"item/completed","params":{"threadId":"{{thread}}","turnId":"turn_{{seq}}","completedAtMs":1,"item":{"type":"agentMessage","id":"a5","text":"replayed id"}}}
+on turn/start send {"method":"thread/started","params":{"thread":{"id":"thr_child","source":{"parent_thread_id":"thr_1"}}}}
+on turn/start send {"method":"turn/completed","params":{"threadId":"{{thread}}","turn":{"id":"turn_OTHER","status":"completed"}}}
+on turn/start send {"method":"turn/completed","params":{"threadId":"{{thread}}","turn":{"id":"turn_{{seq}}","status":"completed"}}}

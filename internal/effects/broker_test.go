@@ -5,53 +5,74 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fabric/internal/connref"
 	"fabric/internal/domain"
 	"fabric/internal/store"
 )
 
 var testDSN string
 
-func TestMain(m *testing.M) {
-	admin := os.Getenv("FABRIC_TEST_DSN")
-	if admin == "" {
-		fmt.Fprintln(os.Stderr, "FABRIC_TEST_DSN is not set: the broker tests require a disposable Postgres")
-		os.Exit(2)
+func TestMain(m *testing.M) { os.Exit(effectsTestMain(m)) }
+
+func effectsTestMain(m *testing.M) (code int) {
+	adminRef, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "test admin credential reference unavailable")
+		return 2
+	}
+	defer adminRef.Close()
+	admin, err := adminRef.DSN()
+	if err != nil || admin == "" {
+		fmt.Fprintln(os.Stderr, "FABRIC_TEST_DSN or FABRIC_TEST_DSN_FILE is required for disposable database tests")
+		return 2
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, admin)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "test admin connection failed")
+		return 2
 	}
-	name := fmt.Sprintf("fabric_fx_%d", os.Getpid())
-	pool.Exec(ctx, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)") //nolint:errcheck
-	if _, err := pool.Exec(ctx, "CREATE DATABASE "+name); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+	defer pool.Close()
+	name := fmt.Sprintf("fabric_fx_%d_%d", os.Getpid(), time.Now().UnixNano())
+	if _, err := pool.Exec(ctx, `CREATE DATABASE "`+name+`"`); err != nil {
+		fmt.Fprintln(os.Stderr, "create test database failed")
+		return 2
 	}
-	u, _ := url.Parse(admin)
-	u.Path = "/" + name
-	testDSN = u.String()
+	var dbRef *connref.Ref
+	defer func() {
+		if _, err := pool.Exec(context.Background(), `DROP DATABASE "`+name+`" WITH (FORCE)`); err != nil {
+			fmt.Fprintln(os.Stderr, "drop test database failed")
+			code = 2
+		}
+		if dbRef != nil {
+			dbRef.Close()
+		}
+	}()
+	dbRef, err = connref.ForTestDatabase(adminRef, name)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "derive test database reference failed")
+		return 2
+	}
+	testDSN, err = dbRef.DSN()
+	if err != nil {
+		return 2
+	}
 	st, err := store.Open(ctx, testDSN)
 	if err == nil {
 		err = st.Migrate(ctx)
 		st.Close()
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "migrate test database failed")
+		return 2
 	}
-	code := m.Run()
-	pool.Exec(ctx, "DROP DATABASE "+name+" WITH (FORCE)") //nolint:errcheck
-	pool.Close()
-	os.Exit(code)
+	return m.Run()
 }
 
 // setup gives a store, a broker, a fake remote and a live attempt r_1 at fence 1.

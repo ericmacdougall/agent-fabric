@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"math/rand"
-	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -18,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fabric/internal/connref"
 	"fabric/internal/domain"
 	"fabric/internal/reducer"
 )
@@ -27,50 +26,65 @@ import (
 // touched the database would be vacuous (CLAUDE.md: no vacuous passes).
 var testDSN string
 
-func TestMain(m *testing.M) {
+func TestMain(m *testing.M) { os.Exit(storeTestMain(m)) }
+
+func storeTestMain(m *testing.M) (code int) {
 	if helper := os.Getenv("FABRIC_HELPER_DSN"); helper != "" {
-		testDSN = helper // crash-cutpoint child: the parent owns the database
-		os.Exit(m.Run())
+		testDSN = helper // the parent keeps its derived reference alive
+		return m.Run()
 	}
-	admin := os.Getenv("FABRIC_TEST_DSN")
-	if admin == "" {
-		fmt.Fprintln(os.Stderr, "FABRIC_TEST_DSN is not set: the store tests require a disposable Postgres")
-		os.Exit(2)
+	adminRef, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "test admin credential reference unavailable")
+		return 2
+	}
+	defer adminRef.Close()
+	admin, err := adminRef.DSN()
+	if err != nil || admin == "" {
+		fmt.Fprintln(os.Stderr, "FABRIC_TEST_DSN or FABRIC_TEST_DSN_FILE is required for disposable database tests")
+		return 2
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, admin)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "admin connect:", err)
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "test admin connection failed")
+		return 2
 	}
-	name := fmt.Sprintf("fabric_t_%d_%d", os.Getpid(), rand.New(rand.NewSource(time.Now().UnixNano())).Intn(1_000_000))
-	if _, err := pool.Exec(ctx, "CREATE DATABASE "+quoteIdent(name)); err != nil {
-		fmt.Fprintln(os.Stderr, "create database:", err)
-		os.Exit(2)
+	defer pool.Close()
+	name := fmt.Sprintf("fabric_t_%d_%d", os.Getpid(), time.Now().UnixNano())
+	if _, err := pool.Exec(ctx, `CREATE DATABASE "`+name+`"`); err != nil {
+		fmt.Fprintln(os.Stderr, "create test database failed")
+		return 2
 	}
-	u, err := url.Parse(admin)
+	var dbRef *connref.Ref
+	defer func() {
+		if _, err := pool.Exec(context.Background(), `DROP DATABASE "`+name+`" WITH (FORCE)`); err != nil {
+			fmt.Fprintln(os.Stderr, "drop test database failed")
+			code = 2
+		}
+		if dbRef != nil {
+			dbRef.Close()
+		}
+	}()
+	dbRef, err = connref.ForTestDatabase(adminRef, name)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "dsn:", err)
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "derive test database reference failed")
+		return 2
 	}
-	u.Path = "/" + name
-	testDSN = u.String()
+	testDSN, err = dbRef.DSN()
+	if err != nil {
+		return 2
+	}
 	st, err := Open(ctx, testDSN)
 	if err == nil {
 		err = st.Migrate(ctx)
 		st.Close()
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "migrate:", err)
-		pool.Exec(ctx, "DROP DATABASE "+quoteIdent(name)+" WITH (FORCE)") //nolint:errcheck
-		os.Exit(2)
+		fmt.Fprintln(os.Stderr, "migrate test database failed")
+		return 2
 	}
-	code := m.Run()
-	if _, err := pool.Exec(ctx, "DROP DATABASE "+quoteIdent(name)+" WITH (FORCE)"); err != nil {
-		fmt.Fprintln(os.Stderr, "drop database:", err)
-	}
-	pool.Close()
-	os.Exit(code)
+	return m.Run()
 }
 
 func openTest(t *testing.T) (*Store, context.Context) {
@@ -616,7 +630,7 @@ func TestCrashCutpointsSubprocess(t *testing.T) {
 			id := domain.MissionID("m_" + cut)
 			mk(t, st, ctx, id)
 			child := exec.Command(os.Args[0], "-test.run=^TestHelperCrash$", "-test.count=1")
-			child.Env = append(os.Environ(),
+			child.Env = append(connref.ChildEnvironment(os.Environ()),
 				"FABRIC_HELPER_DSN="+testDSN, "FABRIC_HELPER_CUT="+cut, "FABRIC_HELPER_MISSION="+string(id))
 			out, err := child.CombinedOutput()
 			var exitErr *exec.ExitError

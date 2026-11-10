@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fabric/internal/connref"
 	"flag"
 	"os"
 	"path/filepath"
@@ -531,7 +532,16 @@ func TestDisconnectRecovers(t *testing.T) {
 	seed(t, seedPool)
 	name := guardThrowaway(t, seedPool)
 	ctx := context.Background()
-	admin, err := pgxpool.New(ctx, os.Getenv("FABRIC_TEST_DSN"))
+	adminRef, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)
+	if err != nil {
+		t.Fatal("test admin credential reference unavailable")
+	}
+	t.Cleanup(func() { adminRef.Close() })
+	adminDSN, err := adminRef.DSN()
+	if err != nil || adminDSN == "" {
+		t.Fatal("test admin credential reference is required")
+	}
+	admin, err := pgxpool.New(ctx, adminDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
