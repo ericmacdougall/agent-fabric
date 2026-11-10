@@ -59,6 +59,8 @@ func runFake(path string) {
 			arg := expand(r.arg, n, text, string(params), resp)
 			arg = strings.ReplaceAll(arg, "{{child_script}}", filepath.Join(filepath.Dir(path), "child_wait.script"))
 			switch r.action {
+			case "stderr":
+				fmt.Fprintln(os.Stderr, arg)
 			case "reply":
 				emit(fmt.Sprintf(`{"id":%s,"result":%s}`, id, arg))
 			case "error":
