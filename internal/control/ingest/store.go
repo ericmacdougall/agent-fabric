@@ -3,6 +3,7 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -62,10 +63,10 @@ func args(e Event) []any {
 	}
 	var tenant any
 	if e.Tenant != "" {
-		tenant = e.Tenant
+		tenant = cut(e.Tenant, 64)
 	}
-	return []any{e.ID, e.TS, e.Kind, e.Source, e.Host, cut(actor, maxActor), cut(e.Subject["initiative"], maxInitiative),
-		e.Subject["repo"], e.Subject["branch"], e.Subject["ref"], cut(e.Subject["ticket"], maxTicket),
+	return []any{e.ID, e.TS, e.Kind, e.Source, cut(e.Host, 128), cut(actor, maxActor), cut(e.Subject["initiative"], maxInitiative),
+		cut(e.Subject["repo"], 200), cut(e.Subject["branch"], 200), cut(e.Subject["ref"], 200), cut(e.Subject["ticket"], maxTicket),
 		e.Summary, e.Severity, count, tenant}
 }
 
@@ -78,6 +79,10 @@ func Store(ctx context.Context, db DB, events []Event) (Stored, error) {
 	if len(events) == 0 {
 		return s, nil
 	}
+	// Insert in id order: two concurrent calls with overlapping ids then take their
+	// row locks in the same order and cannot deadlock (review finding on PR 49).
+	events = append([]Event(nil), events...)
+	sort.Slice(events, func(i, j int) bool { return events[i].ID < events[j].ID })
 	tx, err := db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return s, err

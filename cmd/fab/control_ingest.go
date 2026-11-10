@@ -39,6 +39,15 @@ func controlIngestMain(args []string) error {
 	if dsn == "" {
 		return errors.New("FABRIC_DSN is not set")
 	}
+	// Read and validate stdin first, then connect: a stalled pipe never holds a
+	// database connection, and a slow producer cannot use up the 60 s deadline.
+	batch, err := ingest.Parse(os.Stdin, *source)
+	if errors.Is(err, ingest.ErrCallTooLarge) {
+		return usageError{err}
+	}
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	conn, err := pgx.Connect(ctx, dsn)
@@ -46,10 +55,7 @@ func controlIngestMain(args []string) error {
 		return err
 	}
 	defer conn.Close(context.Background()) //nolint:errcheck
-	res, err := ingest.Run(ctx, conn, os.Stdin, *source, os.Stderr)
-	if errors.Is(err, ingest.ErrCallTooLarge) {
-		return usageError{err}
-	}
+	res, err := ingest.Finish(ctx, conn, batch, *source, os.Stderr)
 	if err != nil {
 		return err
 	}

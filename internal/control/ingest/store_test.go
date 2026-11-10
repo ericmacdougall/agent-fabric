@@ -250,6 +250,66 @@ func TestHostileInputNoPartialWrite(t *testing.T) {
 	}
 }
 
+// Review (privacy): a secret in any text field never reaches the append-only table.
+func TestSecretsNeverStored(t *testing.T) {
+	c, ctx := open(t)
+	f := fakes()
+	in := `{"schema":"mc.event/1","id":"wal-x:s1","ts":"2026-11-09T12:30:45Z","kind":"wal","host":"` + f["bearer"] + `","actor":{"agent":"` + f["slack"] +
+		`"},"subject":{"ref":"` + f["aws-key"] + `"},"summary":"token ` + f["github"] + ` leaked"}` + "\n"
+	res, errs, err := run(t, ctx, c, in)
+	if err != nil || res.Stored.Inserted != 1 || !strings.Contains(errs, "redacted-fields=4") {
+		t.Fatalf("%+v %v\n%s", res.Stored, err, errs)
+	}
+	var all string
+	if err := c.QueryRow(ctx, `SELECT summary || '|' || host || '|' || actor || '|' || ref FROM control.ingested_events WHERE id = 'wal-x:s1'`).Scan(&all); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"github", "bearer", "slack", "aws-key"} {
+		if strings.Contains(all, f[k]) || strings.Contains(errs, f[k]) {
+			t.Errorf("%s stored or printed: %q", k, all)
+		}
+	}
+	if strings.Count(all, "[REDACTED:") != 4 {
+		t.Fatalf("stored %q", all)
+	}
+}
+
+// Review (availability): concurrent ingests of the same ids in opposite orders
+// must not deadlock; both complete and the rows land once.
+func TestConcurrentIngestNoDeadlock(t *testing.T) {
+	c, ctx := open(t)
+	const n = 200
+	for round := 0; round < 5; round++ {
+		var fwd, rev strings.Builder
+		for i := 0; i < n; i++ {
+			fwd.WriteString(ev(round*1000 + i))
+		}
+		for i := n - 1; i >= 0; i-- {
+			rev.WriteString(ev(round*1000 + i))
+		}
+		c2, err := pgx.Connect(ctx, storetest.DSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		errs := make(chan error, 2)
+		go func() { _, _, e := run(t, ctx, c, fwd.String()); errs <- e }()
+		go func() {
+			var b bytes.Buffer
+			_, e := Run(ctx, c2, strings.NewReader(rev.String()), "wal-x", &b)
+			errs <- e
+		}()
+		for i := 0; i < 2; i++ {
+			if e := <-errs; e != nil {
+				t.Fatalf("round %d: %v", round, e)
+			}
+		}
+		c2.Close(context.Background()) //nolint:errcheck
+	}
+	if got := ingested(t, ctx, c); got != 5*n {
+		t.Fatalf("%d rows, want %d", got, 5*n)
+	}
+}
+
 // NEG-3: control characters and ANSI in any text field never reach the table.
 func TestControlCharactersNeverStored(t *testing.T) {
 	c, ctx := open(t)

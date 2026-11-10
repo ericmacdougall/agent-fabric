@@ -3,7 +3,7 @@
 `fab control ingest --source NAME < events.jsonl` validates `mc.event/1` lines from an
 external producer (schema pinned at agent-harness d825d66, blob d7506f0d) and stores them
 in `control.ingested_events`. It needs `FABRIC_DSN` and the control schema
-(`fab control bootstrap`, owner-run once; see docs/control-room.md). It writes that one
+(created once by the database owner through the control schema bootstrap, owned by the control schema change, not by this one). It writes that one
 table only: never fabric `events`, `outbox` or any other table.
 
 ## Contract
@@ -18,6 +18,24 @@ table only: never fabric `events`, `outbox` or any other table.
   `id`, `ts`, `kind`, `severity` or `count`, a string over its limit, or any control
   character (ESC and so ANSI, NUL, newline, C1), line or paragraph separator, bidi override
   or BOM in any text field. Reasons are fixed codes; input text is never echoed.
+- Secrets are redacted before storage, because the table is append-only and a stored
+  credential could never be removed. Every free-text value (summary, host, tenant, actor
+  and subject fields) has secret-shaped spans replaced by `[REDACTED:<kind>]`, using the
+  shapes of the harness's shared list (agent-harness d825d66 `harness/hooks/redact.py`: API
+  keys and tokens, JWT, Bearer headers, URL userinfo, PEM blocks, NAME=value credentials).
+  A redacted summary is cut back to 280 characters. An `id` that itself looks like a
+  credential is refused (`secret-in-id`). The stderr line reports `redacted-fields=N`.
+  Redaction favours recall: a harmless string may gain a placeholder.
+- Invisible format characters (zero-width space, direction marks, tag characters) are
+  rejected with the other control characters. A JSON `null` for an optional field is
+  rejected (`bad-type:<field>`).
+- Rows are inserted in id order, so two concurrent calls with overlapping ids cannot
+  deadlock.
+- The CLI reads and validates stdin before it connects, so a stalled pipe never holds a
+  database connection.
+- Not enforced here: that the caller may write as `--source`. Anyone holding `FABRIC_DSN`
+  can claim any producer name, and the first write of an id is permanent. The grants
+  slice must bind source to the database role (tracked in the B3 follow-up ticket).
 - `ts` follows the schema pattern (RFC 3339 UTC `Z`, fraction optional up to 6 digits) and
   is stored at millisecond precision.
 - Storage mapping: `actor` is the first of `actor.agent`, `actor.session`, `actor.runtime`;

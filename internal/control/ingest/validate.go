@@ -70,6 +70,7 @@ type Event struct {
 	Count    int
 	Tenant   string
 	Historic bool
+	Redacted int // text values in which a secret-shaped span was replaced (see redact.go)
 }
 
 // Reject is a refused line: its 1-based number and a reason code. Reasons are
@@ -101,7 +102,7 @@ func cleanText(s string) bool {
 	}
 	for _, r := range s {
 		// U+2028/2029 line separators, U+202A-202E and U+2066-2069 bidi controls, U+FEFF BOM.
-		if unicode.IsControl(r) || r == 0x2028 || r == 0x2029 || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) || r == 0xFEFF {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029 || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) || r == 0xFEFF {
 			return false
 		}
 	}
@@ -143,7 +144,7 @@ func ValidateLine(line []byte, source string) (Event, error) {
 			return "", false, nil
 		}
 		var s string
-		if err := json.Unmarshal(raw, &s); err != nil {
+		if err := json.Unmarshal(raw, &s); err != nil || string(raw) == "null" {
 			return "", true, bad("bad-type:%s", k)
 		}
 		if utf8.RuneCountInString(s) > max {
@@ -166,6 +167,9 @@ func ValidateLine(line []byte, source string) (Event, error) {
 	id, _, err := str("id", true, 200)
 	if err != nil {
 		return Event{}, err
+	}
+	if idRE.MatchString(id) && hasSecret(id) {
+		return Event{}, bad("secret-in-id")
 	}
 	if !idRE.MatchString(id) {
 		return Event{}, bad("bad-id")
@@ -232,7 +236,7 @@ func ValidateLine(line []byte, source string) (Event, error) {
 		ev.Count = int(i)
 	}
 	if raw, ok := m["historic"]; ok {
-		if err := json.Unmarshal(raw, &ev.Historic); err != nil {
+		if err := json.Unmarshal(raw, &ev.Historic); err != nil || string(raw) == "null" {
 			return Event{}, bad("bad-type:historic")
 		}
 	}
@@ -255,7 +259,7 @@ func ValidateLine(line []byte, source string) (Event, error) {
 				return Event{}, bad("unknown-field:%s.%s", f.name, fieldName(k))
 			}
 			var s string
-			if err := json.Unmarshal(v, &s); err != nil {
+			if err := json.Unmarshal(v, &s); err != nil || string(v) == "null" {
 				return Event{}, bad("bad-type:%s.%s", f.name, k)
 			}
 			if utf8.RuneCountInString(s) > 160 {
@@ -268,6 +272,7 @@ func ValidateLine(line []byte, source string) (Event, error) {
 		}
 		*f.dst = out
 	}
+	redactEvent(&ev)
 	return ev, nil
 }
 

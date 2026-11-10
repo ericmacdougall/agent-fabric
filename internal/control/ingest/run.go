@@ -25,13 +25,24 @@ func Run(ctx context.Context, db DB, in io.Reader, source string, stderr io.Writ
 	if err != nil {
 		return Result{}, err
 	}
+	return Finish(ctx, db, b, source, stderr)
+}
+
+// Finish stores a parsed batch and reports. The CLI parses stdin first and only
+// then connects, so a slow or stalled producer never holds a database connection
+// or eats the connection deadline.
+func Finish(ctx context.Context, db DB, b Batch, source string, stderr io.Writer) (Result, error) {
 	st, err := Store(ctx, db, b.Accepted)
 	if err != nil {
 		return Result{}, err
 	}
 	res := Result{Batch: b, Stored: st}
-	fmt.Fprintf(stderr, "ingest: source=%s lines=%d accepted=%d inserted=%d existing=%d duplicate-in-input=%d rejected=%d\n",
-		source, b.Lines, len(b.Accepted), st.Inserted, st.Existing, b.Dups, len(b.Rejected))
+	redacted := 0
+	for _, e := range b.Accepted {
+		redacted += e.Redacted
+	}
+	fmt.Fprintf(stderr, "ingest: source=%s lines=%d accepted=%d inserted=%d existing=%d duplicate-in-input=%d rejected=%d redacted-fields=%d\n",
+		source, b.Lines, len(b.Accepted), st.Inserted, st.Existing, b.Dups, len(b.Rejected), redacted)
 	byReason := map[string]int{}
 	for _, r := range b.Rejected {
 		byReason[r.Reason]++
