@@ -88,6 +88,8 @@ func RemoveRoles(ctx context.Context, pool *pgxpool.Pool, r Roles, confirm bool)
 			fmt.Sprintf("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %s", q),
 			fmt.Sprintf("REVOKE ALL ON ALL SEQUENCES IN SCHEMA control FROM %s", q),
 			fmt.Sprintf("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM %s", q),
+			fmt.Sprintf("REVOKE ALL ON ALL FUNCTIONS IN SCHEMA control FROM %s", q),
+			fmt.Sprintf("REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM %s", q),
 			fmt.Sprintf("REVOKE ALL ON SCHEMA control FROM %s", q),
 			fmt.Sprintf("REVOKE ALL ON SCHEMA public FROM %s", q),
 			fmt.Sprintf("REVOKE ALL ON DATABASE %s FROM %s", quoteID(db), q),

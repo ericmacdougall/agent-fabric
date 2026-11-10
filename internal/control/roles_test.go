@@ -447,12 +447,19 @@ func TestControlRolesIdempotentAndRemove(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		hijacked := false
+		defer func() { // a failed assertion must not leave the connection checked out (the pool Close would wait for it)
+			if !hijacked {
+				conn.Release()
+			}
+		}()
 		if _, err := conn.Exec(ctx, "SET ROLE "+quoteID(r.Ingest())); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := RemoveRoles(ctx, p, r, true); err != nil {
 			t.Fatalf("remove with a live session: %v", err)
 		}
+		hijacked = true
 		conn.Hijack().Close(ctx) //nolint:errcheck // its backend was ended by the removal
 		if n := count(t, p, ctx, `SELECT count(*) FROM pg_roles WHERE rolname = ANY($1)`, r.Names()); n != 0 {
 			t.Fatalf("%d roles left after remove, want 0", n)
