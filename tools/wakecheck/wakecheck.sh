@@ -9,9 +9,14 @@
 # the roles. Credentials: ADMIN_DSN_FILE (a mode 0600 file) is read inside this
 # script; a DSN with a password is never put on a command line.
 #
+# If the script is killed with SIGKILL nothing can clean up: drop the leftovers by hand
+# (DROP DATABASE fabtest_N WITH (FORCE); DROP ROLE fabtest_N_scheduler, fabtest_N_app,
+# fabtest_N_runner); the database comment names the pid and start time of the run.
+#
 #   FAB_BIN=/srv/fabric/bin/fab-live WAKECHECK_BIN=<built tools/wakecheck> \
 #   FAKE_PROVIDER=/srv/fabric/bin/fakeclaude-live ADMIN_DSN_FILE=$HOME/ct-dry/admin.dsn \
 #     tools/wakecheck/wakecheck.sh
+set +x   # never trace: the admin DSN passes through this script
 set -euo pipefail
 umask 077
 export LC_ALL=C.UTF-8
@@ -23,9 +28,8 @@ FAKE=${FAKE_PROVIDER:?set FAKE_PROVIDER to the recorded fake provider}
 ADMIN_FILE=${ADMIN_DSN_FILE:?set ADMIN_DSN_FILE to a file holding the admin DSN}
 [[ -x "$FAB" && -x "$WC" && -x "$FAKE" ]] || die "FAB_BIN, WAKECHECK_BIN and FAKE_PROVIDER must be executable"
 [[ -f "$ADMIN_FILE" && "$(stat -c %a "$ADMIN_FILE")" == 600 ]] || die "ADMIN_DSN_FILE must be a mode 0600 file"
-for v in $(compgen -e); do case "$v" in PG*|FABRIC_*) die "inherited $v is set";; esac; done
-
-N=$(( ($(date +%s) * 7 + $$) % 900000 + 100000 ))
+for v in $(compgen -e); do case "$v" in PG*|FABRIC_*|BASH_ENV|SHELLOPS|BASH_XTRACEFD|ENV) die "inherited $v is set";; esac; done
+N=$(( $(od -An -N4 -tu4 /dev/urandom | tr -d ' ') % 900000 + 100000 ))   # random: two runs rarely collide; cleanup drops only what this run created
 DB=fabtest_$N
 PREFIX=fabtest_$N
 [[ "$DB" =~ ^fabtest_[0-9]+$ ]] || die "refusing database $DB"
@@ -60,12 +64,14 @@ for k, v in env.items():
 }
 adminq() ( eval "$(pgenv postgres)"; export PGAPPNAME=wakecheck; exec psql -X -q -At -v ON_ERROR_STOP=1 "$@" )
 
-DAEMON_PID=""
+DAEMON_PID=""; CREATED_DB=0; CREATED_ROLES=0   # cleanup drops only what this run itself created
 cleanup() {
   set +e
-  [[ -n "$DAEMON_PID" ]] && wait "$DAEMON_PID" 2>/dev/null   # bounded by timeout(1)
-  adminq -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)" >/dev/null 2>&1
-  for try in 1 2 3 4 5; do   # the daemon's last connections can still be closing
+  # No signal is sent: the daemon runs under timeout -k 5 45 and ends by itself (at most 50 s).
+  # DROP DATABASE WITH (FORCE) cuts its connections at once, so the teardown does not wait for it.
+  [[ -n "$DAEMON_PID" ]] && echo "teardown: dropping now; the daemon (pid $DAEMON_PID) ends on its own clock within 50 s"
+  [[ "$CREATED_DB" == 1 ]] && adminq -c "DROP DATABASE IF EXISTS $DB WITH (FORCE)" >/dev/null 2>&1
+  [[ "$CREATED_ROLES" == 1 ]] && for try in 1 2 3 4 5; do   # the daemon's last connections can still be closing
     for r in scheduler app runner; do adminq -c "DROP ROLE IF EXISTS ${PREFIX}_$r" >/dev/null 2>"$WORK/droprole.err"; done
     [[ "$(adminq -c "SELECT count(*) FROM pg_roles WHERE rolname LIKE '${PREFIX}\\_%'" 2>/dev/null)" == 0 ]] && break
     sleep 2
@@ -83,14 +89,17 @@ echo "wakecheck.sh: database $DB, fab $("$FAB" version | head -1)"
 PW_APP=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
 PW_RUNNER=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')
 adminq -c "CREATE DATABASE $DB"
+CREATED_DB=1
+adminq -c "COMMENT ON DATABASE $DB IS 'wakecheck.sh pid $$ started $(date -u +%FT%TZ)'" >/dev/null
 export FABRIC_DSN; FABRIC_DSN=$(dsn_for "$DB")
 "$FAB" migrate
+CREATED_ROLES=1   # set before the call: a partial failure may still have created a role
 "$FAB" db roles --prefix "$PREFIX" --app-password-file <(printf '%s' "$PW_APP") --runner-password-file <(printf '%s' "$PW_RUNNER") >/dev/null
 APP_DSN=$(dsn_for "$DB" "${PREFIX}_app" PW_APP)
 RUNNER_DSN=$(dsn_for "$DB" "${PREFIX}_runner" PW_RUNNER)
 
 printf '{"rungs":{"R0":{"effort":"n/a","models":{"claude":"fake-model"}}}}\n' > "$WORK/tiers.json"
-FABRIC_DSN="$APP_DSN" FABRIC_RUNNER_DSN="$RUNNER_DSN" timeout 45 "$FAB" daemon --provider "$FAKE" --trust-provider \
+FABRIC_DSN="$APP_DSN" FABRIC_RUNNER_DSN="$RUNNER_DSN" timeout -k 5 45 "$FAB" daemon --provider "$FAKE" --trust-provider \
   --work-root "$WORK/wr" --tier-table "$WORK/tiers.json" --rung R0 --host h_fabtest >"$WORK/daemon.log" 2>&1 &
 DAEMON_PID=$!
 sleep 3

@@ -58,8 +58,12 @@ func run() error {
 	var lats []time.Duration
 	for i := 0; i < rounds; i++ {
 		cmd := domain.Command{Kind: domain.CmdReviseIntent, Mission: id, Reason: fmt.Sprintf("wakecheck round %d", i)}
-		if _, err := st.Execute(ctx, "wakecheck", domain.CommandID(fmt.Sprintf("wake-%s-%d", id, i)), cmd); err != nil {
+		resp, err := st.Execute(ctx, "wakecheck", domain.CommandID(fmt.Sprintf("wake-%s-%d", id, i)), cmd)
+		if err != nil {
 			return fmt.Errorf("round %d %s: %w", i, cmd.Kind, err)
+		}
+		if resp.Replayed || len(resp.Events) == 0 {
+			return fmt.Errorf("round %d: the command was replayed or wrote no event, so it proves nothing", i)
 		}
 		t0 := time.Now()
 		var target int64
