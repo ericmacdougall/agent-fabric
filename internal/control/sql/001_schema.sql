@@ -30,7 +30,10 @@ END $$;
 -- Source: events ingested from other producers. id is "<source>:<stable id>",
 -- the producer's own id, and source must equal that prefix and may never be
 -- 'fabric': Fabric's own events come from the outbox and never from this table.
--- seq is an identity the projector pages by (a producer cannot choose it).
+-- seq is the identity the projector pages by. GENERATED ALWAYS refuses an
+-- explicit value, but a role may still pass OVERRIDING SYSTEM VALUE: the role
+-- grants (a later slice) must therefore give the ingest role INSERT on named
+-- columns that leave out seq and received_at, never on the whole table.
 CREATE TABLE control.ingested_events (
     seq         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id          text        NOT NULL UNIQUE
