@@ -27,12 +27,19 @@ type FixedWrite struct {
 type fixedFailure string
 
 const (
-	fixedProtocol   fixedFailure = "protocol"
-	fixedInit       fixedFailure = "init_catalog"
-	fixedHook       fixedFailure = "hook_lifecycle"
-	fixedPermission fixedFailure = "permission"
-	fixedResult     fixedFailure = "provider_result"
-	fixedCleanup    fixedFailure = "process_cleanup"
+	fixedProtocol         fixedFailure = "protocol"
+	fixedInit             fixedFailure = "init_catalog"
+	fixedHook             fixedFailure = "hook_lifecycle"
+	fixedPermission       fixedFailure = "permission"
+	fixedResult           fixedFailure = "provider_result"
+	fixedCleanup          fixedFailure = "process_cleanup"
+	fixedInitDuplicate    fixedFailure = "init_duplicate"
+	fixedInitSession      fixedFailure = "init_session"
+	fixedInitMCP          fixedFailure = "init_mcp"
+	fixedInitMode         fixedFailure = "init_permission"
+	fixedInitModel        fixedFailure = "init_model"
+	fixedInitTools        fixedFailure = "init_tools"
+	fixedInitMissingWrite fixedFailure = "init_missing_write"
 )
 
 var controlID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
