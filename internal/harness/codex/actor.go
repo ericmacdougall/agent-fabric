@@ -124,7 +124,7 @@ func (s *session) run() {
 		case <-s.timerC:
 			s.timerC = nil
 			if s.requirementsPhase {
-				s.fail("codex: requirements refused")
+				s.fail(errRequirementsTimeout.Error())
 				continue
 			}
 			s.fail(fmt.Sprintf("codex did not answer %s within %s", s.timerKind, s.reqTimeout))
@@ -353,7 +353,7 @@ func (s *session) onResponse(pk packet, raw []byte) {
 			s.requirementsPhase = true
 			s.requirementsID = strconv.FormatUint(s.nextReq+1, 10)
 			if err := s.request("config/requirements/read", map[string]any{}, "controlled_requirements"); err != nil {
-				s.fail("codex: requirements refused")
+				s.fail(errRequirementsRequest.Error())
 				return
 			}
 		} else {
