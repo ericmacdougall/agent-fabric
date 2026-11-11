@@ -81,6 +81,70 @@ func TestFileEditOnlyFeatureClosure(t *testing.T) {
 	}
 }
 
+func TestOptionalContextInvocationCeiling(t *testing.T) {
+	settings := codex.FileEditSettings()["features"].(map[string]any)
+	for _, name := range []string{"context_management", "token_budget"} {
+		value, exists := settings[name]
+		if !exists || value != false {
+			t.Fatalf("optional feature %s lacks explicit false setting", name)
+		}
+	}
+	app, err := codex.FileEditCommand("/pinned/codex", "fabric_demo_test", "/owned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := codex.FileEditFeatureCommand(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, argv := range [][]string{app, metadata} {
+		for _, key := range []string{"features.context_management=false", "features.token_budget=false", "features.hooks=true"} {
+			count := 0
+			for i := 1; i < len(argv); i++ {
+				if argv[i] == key && argv[i-1] == "-c" {
+					count++
+				}
+			}
+			if count != 1 {
+				t.Fatal("shared invocation lost a required literal feature setting")
+			}
+		}
+	}
+}
+
+func TestOptionalContextMetadataCeiling(t *testing.T) {
+	// The two rows below are independent literals. An old settings-derived
+	// fixture alone would omit unknown features and hide the original gap.
+	var base strings.Builder
+	for _, line := range strings.Split(string(featureMetadata(nil)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] != "context_management" && fields[0] != "token_budget" {
+			base.WriteString(line + "\n")
+		}
+	}
+	const rows = "context_management under_development false\ntoken_budget under_development false\n"
+	valid := base.String() + rows
+	if err := codex.CheckFileEditFeatures([]byte(valid)); err != nil {
+		t.Fatal("independent false feature rows refused")
+	}
+	for _, name := range []string{"context_management", "token_budget"} {
+		for _, mutation := range []struct{ name, replacement string }{
+			{"true", name + " under_development true\n"},
+			{"missing", ""},
+			{"duplicate", name + " under_development false\n" + name + " under_development false\n"},
+			{"conflicting", name + " under_development false\n" + name + " under_development true\n"},
+			{"malformed", name + " under_development not_boolean\n"},
+		} {
+			t.Run(name+"/"+mutation.name, func(t *testing.T) {
+				changed := strings.Replace(valid, name+" under_development false\n", mutation.replacement, 1)
+				if err := codex.CheckFileEditFeatures([]byte(changed)); err == nil {
+					t.Fatal("optional context feature metadata failed open")
+				}
+			})
+		}
+	}
+}
+
 func TestDisableIDsAreValuesNotDottedOverrides(t *testing.T) {
 	argv, err := codex.FileEditCommand("/pinned/codex", "fabric_demo_test", "/owned", codex.DisabledIntegration{Kind: "mcp_servers", ID: `with.dot"quote`})
 	if err != nil {
