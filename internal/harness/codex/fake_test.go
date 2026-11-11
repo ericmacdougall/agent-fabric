@@ -59,6 +59,18 @@ func runFake(path string) {
 			arg := expand(r.arg, n, text, string(params), resp)
 			arg = strings.ReplaceAll(arg, "{{child_script}}", filepath.Join(filepath.Dir(path), "child_wait.script"))
 			switch r.action {
+			case "require-ephemeral":
+				var p struct {
+					Ephemeral bool            `json:"ephemeral"`
+					Daybreak  json.RawMessage `json:"daybreakEnabled"`
+				}
+				if json.Unmarshal(params, &p) != nil || !p.Ephemeral || len(p.Daybreak) != 0 {
+					os.Exit(95)
+				}
+			case "require-unit-params":
+				if p := strings.TrimSpace(string(params)); p != "" && p != "null" {
+					os.Exit(94)
+				}
 			case "stderr":
 				fmt.Fprintln(os.Stderr, arg)
 			case "reply":

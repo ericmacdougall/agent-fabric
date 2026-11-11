@@ -125,7 +125,7 @@ func TestControlledProfileBeforeTurn(t *testing.T) {
 			cb, _ := json.Marshal(profiles)
 			rb, _ := json.Marshal(reply)
 			scriptPath := filepath.Join(t.TempDir(), "controlled.script")
-			if err := os.WriteFile(scriptPath, []byte("on initialize reply {}\non config/requirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\non config/read exit 98\non hooks/list reply "+string(hb)+"\non permissionProfile/list reply "+string(cb)+"\non model/list reply {\"data\":[{\"model\":\"gpt-6-luna\",\"hidden\":false,\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\"}]}],\"nextCursor\":null}\non thread/start reply "+string(rb)+"\non turn/start exit 99\n"), 0600); err != nil {
+			if err := os.WriteFile(scriptPath, []byte("on initialize reply {}\non configRequirements/read require-unit-params\non configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\non config/read exit 98\non hooks/list reply "+string(hb)+"\non permissionProfile/list reply "+string(cb)+"\non model/list reply {\"data\":[{\"model\":\"gpt-6-luna\",\"hidden\":false,\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\"}]}],\"nextCursor\":null}\non thread/start require-ephemeral\non thread/start reply "+string(rb)+"\non turn/start exit 99\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
 			a := &codex.Adapter{Command: []string{"/usr/bin/env", "GOMAXPROCS=1", exe(t), "--fabric-test-script", scriptPath}, Control: &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{source}, PreflightOnly: true, CatalogOnly: mut == "catalog", Home: "/home/owned"}, KillGrace: 300 * time.Millisecond, RequestTimeout: time.Second}
@@ -179,7 +179,7 @@ func TestControlledFixedRunAndRuntimeRefusals(t *testing.T) {
 				hooks = []byte(strings.Replace(string(hooks), `"trustStatus":"trusted"`, `"trustStatus":"untrusted"`, 1))
 			}
 			reply, _ := json.Marshal(map[string]any{"thread": map[string]any{"id": "thr_1"}, "cwd": spec.Dir, "approvalPolicy": "never", "modelProvider": "openai", "model": codex.DemoModel, "activePermissionProfile": map[string]any{"id": "fabric_demo_test"}, "runtimeWorkspaceRoots": []string{spec.Dir}, "instructionSources": []string{source}})
-			text := "on initialize reply {}\non config/requirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\non config/read exit 98\non hooks/list reply " + string(hooks) + "\non permissionProfile/list reply {\"data\":[{\"id\":\"fabric_demo_test\",\"allowed\":true}],\"nextCursor\":null}\non model/list reply {\"data\":[{\"model\":\"gpt-6-luna\",\"hidden\":false,\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\"}]}],\"nextCursor\":null}\non thread/start reply " + string(reply) + "\n"
+			text := "on initialize reply {}\non configRequirements/read require-unit-params\non configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\non config/read exit 98\non hooks/list reply " + string(hooks) + "\non permissionProfile/list reply {\"data\":[{\"id\":\"fabric_demo_test\",\"allowed\":true}],\"nextCursor\":null}\non model/list reply {\"data\":[{\"model\":\"gpt-6-luna\",\"hidden\":false,\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\"}]}],\"nextCursor\":null}\non thread/start require-ephemeral\non thread/start reply " + string(reply) + "\n"
 			if mode == "provider_unsupported" {
 				text += "on turn/start error subscription-model-unsupported-private-canary\n"
 			} else {

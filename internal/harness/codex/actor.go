@@ -352,7 +352,7 @@ func (s *session) onResponse(pk packet, raw []byte) {
 			// is a verified private reduction or session failure/teardown.
 			s.requirementsPhase = true
 			s.requirementsID = strconv.FormatUint(s.nextReq+1, 10)
-			if err := s.request("config/requirements/read", map[string]any{}, "controlled_requirements"); err != nil {
+			if err := s.request("configRequirements/read", nil, "controlled_requirements"); err != nil {
 				s.fail(errRequirementsRequest.Error())
 				return
 			}

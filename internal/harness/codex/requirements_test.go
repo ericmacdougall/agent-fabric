@@ -65,31 +65,31 @@ func TestRequirementsWholeTransportQuarantine(t *testing.T) {
 			spec := startSpec(t, "")
 			spec.SessionID = "0123456789abcdef0123456789abcdef"
 			hooks := validHookMetadata("/home/owned", spec.Dir)
-			text := "on initialize reply {}\non config/read exit 98\non config/requirements/read stderr " + reqCanary + "\n"
+			text := "on initialize reply {}\non config/read exit 98\non config/requirements/read exit 96\non configRequirements/read require-unit-params\non configRequirements/read stderr " + reqCanary + "\n"
 			switch mode {
 			case "discarded":
-				text += "on config/requirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"],\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
+				text += "on configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"],\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
 			case "notification":
-				text += "on config/requirements/read send {\"method\":\"warning\",\"params\":{\"message\":\"" + reqCanary + "\"}}\non config/requirements/read send {\"id\":999,\"method\":\"item/fileChange/requestApproval\",\"params\":{\"message\":\"" + reqCanary + "\"}}\non config/requirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\n"
+				text += "on configRequirements/read send {\"method\":\"warning\",\"params\":{\"message\":\"" + reqCanary + "\"}}\non configRequirements/read send {\"id\":999,\"method\":\"item/fileChange/requestApproval\",\"params\":{\"message\":\"" + reqCanary + "\"}}\non configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\n"
 			case "late_reply":
-				text += "on config/requirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\non config/requirements/read send {\"id\":2,\"error\":{\"code\":-32000,\"message\":\"" + reqCanary + "\"}}\n"
+				text += "on configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\non configRequirements/read send {\"id\":2,\"error\":{\"code\":-32000,\"message\":\"" + reqCanary + "\"}}\n"
 			case "error":
-				text += "on config/requirements/read error " + reqCanary + "\n"
+				text += "on configRequirements/read error " + reqCanary + "\n"
 			case "malformed":
-				text += "on config/requirements/read send {" + reqCanary + "\n"
+				text += "on configRequirements/read send {" + reqCanary + "\n"
 			case "duplicate":
-				text += "on config/requirements/read reply {\"requirements\":null,\"requirements\":{\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
+				text += "on configRequirements/read reply {\"requirements\":null,\"requirements\":{\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
 			case "oversize":
-				text += "on config/requirements/read send {{pad:262200}}" + reqCanary + "\n"
+				text += "on configRequirements/read send {{pad:262200}}" + reqCanary + "\n"
 			case "timeout_late":
-				text += "on config/requirements/read sleep 5100\non config/requirements/read error " + reqCanary + "\n"
+				text += "on configRequirements/read sleep 5100\non configRequirements/read error " + reqCanary + "\n"
 			case "null":
-				text += "on config/requirements/read reply {\"requirements\":null}\n"
+				text += "on configRequirements/read reply {\"requirements\":null}\n"
 			case "missing":
-				text += "on config/requirements/read reply {\"requirements\":{}}\n"
+				text += "on configRequirements/read reply {\"requirements\":{}}\n"
 			default:
 				values := map[string]string{"login_null": "null", "empty": "[]", "api": "[\"api\"]", "mixed": "[\"api\",\"chatgpt\"]", "login_duplicate": "[\"chatgpt\",\"chatgpt\"]", "login_type": "\"chatgpt\""}
-				text += "on config/requirements/read reply {\"requirements\":{\"allowedLoginMethods\":" + values[mode] + ",\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
+				text += "on configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":" + values[mode] + ",\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
 			}
 			text += "on hooks/list reply " + string(hooks) + "\non permissionProfile/list reply {\"data\":[{\"id\":\"fabric_demo_test\",\"allowed\":true}],\"nextCursor\":null}\non thread/start exit 99\non turn/start exit 99\n"
 			p := filepath.Join(t.TempDir(), "requirements.script")

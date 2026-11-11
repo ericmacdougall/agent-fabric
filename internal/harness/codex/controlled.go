@@ -191,7 +191,6 @@ func (s *session) startThread() {
 		params["allowProviderModelFallback"] = false
 		params["modelProvider"] = "openai"
 		params["model"] = DemoModel
-		params["daybreakEnabled"] = false
 		params["runtimeWorkspaceRoots"] = []string{s.spec.Dir}
 		params["dynamicTools"] = []any{}
 	} else {
