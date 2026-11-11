@@ -30,6 +30,9 @@ func TestControlledThreadErrorFacts(t *testing.T) {
 		{"denied", "error creating thread: " + threadErrorCanary + ": Permission denied (os error 13)", "core_create", "permission_denied", -32603, "thread/start"},
 		{"operation", "error creating thread: " + threadErrorCanary + ": Operation not permitted (os error 1)", "core_create", "operation_not_permitted", -32603, "thread/start"},
 		{"missing", "error creating thread: " + threadErrorCanary + ": No such file or directory (os error 2)", "core_create", "missing", -32603, "thread/start"},
+		{"rules", "error creating thread: Fatal error: failed to load rules: " + threadErrorCanary, "core_create", "other", -32603, "thread/start"},
+		{"agents", "error creating thread: Fatal error: Failed to initialize session: failed to load AGENTS.md instructions for environment `" + threadErrorCanary + "`: fs sandbox helper failed with status exit status: 1: " + threadErrorCanary, "core_create", "other", -32603, "thread/start"},
+		{"mapped", "error creating thread: Fatal error: Session storage missing at " + threadErrorCanary + ". Create the directory or choose a different Codex home. (underlying error: " + threadErrorCanary + ": No such file or directory (os error 2))", "core_create", "missing", -32603, "thread/start"},
 		{"unknown", threadErrorCanary, "other", "other", -32603, "thread/start"},
 		{"misleadingPrefix", threadErrorCanary + " error creating thread: Permission denied (os error 13)", "other", "other", -32603, "thread/start"},
 		{"lookalikePrefix", "error creating threadish: " + threadErrorCanary, "other", "other", -32603, "thread/start"},
@@ -77,6 +80,13 @@ func TestControlledThreadErrorFacts(t *testing.T) {
 			if tc.category != "" {
 				if !strings.Contains(final.Reason, "category="+tc.category+" reported_io="+tc.io) {
 					t.Fatal("fixed thread classification missing")
+				}
+				family := map[string]string{"rules": "rules", "agents": "agents", "mapped": "mapped_session_io"}[tc.name]
+				if family == "" {
+					family = "other"
+				}
+				if !strings.Contains(final.Reason, "source_family="+family) {
+					t.Fatal("fixed source family missing")
 				}
 			} else if strings.Contains(final.Reason, "category=") {
 				t.Fatal("unrelated error classified")
