@@ -1,0 +1,287 @@
+package codex_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"fabric/internal/harness"
+	"fabric/internal/harness/codex"
+	"fabric/internal/harness/harnesstest"
+)
+
+func TestFinalFollowsOwnedGroupCleanup(t *testing.T) {
+	a := adapter(t, "child_exit")
+	a.RequestTimeout = 300 * time.Millisecond
+	spec := startSpec(t, "go")
+	s, rec := begin(t, a, spec)
+	if !rec.WaitFor(5*time.Second, func(e []harness.Event) bool { return hasText(e, "pid:") }) {
+		t.Fatal("child pid was not reported")
+	}
+	pid := pidFrom(t, rec.Snapshot())
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	f := finish(t, s)
+	if f.Outcome != harness.OutcomeFailed {
+		t.Fatalf("unanswered parent: %+v", f)
+	}
+	if liveChild(pid) {
+		t.Fatal("Final was emitted while the owned child was still alive")
+	}
+}
+func liveChild(pid int) bool {
+	if !alive(pid) {
+		return false
+	}
+	// Linux may retain an orphan zombie until the bounded supervisor reaps it.
+	b, e := os.ReadFile(filepath.Join("/proc", fmtInt(pid), "stat"))
+	if e == nil {
+		i := strings.LastIndex(string(b), ") ")
+		return i < 0 || len(b) <= i+2 || b[i+2] != 'Z'
+	}
+	return true
+}
+func fmtInt(n int) string { return strconv.Itoa(n) }
+
+func featureMetadata(overrides map[string]bool) []byte {
+	var b strings.Builder
+	for name, want := range codex.FileEditSettings()["features"].(map[string]any) {
+		enabled := want.(bool)
+		if name == "unified_exec" {
+			enabled = true
+		}
+		if v, ok := overrides[name]; ok {
+			enabled = v
+		}
+		fmt.Fprintf(&b, "%s stable %t\n", name, enabled)
+	}
+	return []byte(b.String())
+}
+
+func TestFileEditOnlyFeatureClosure(t *testing.T) {
+	if err := codex.CheckFileEditFeatures(featureMetadata(nil)); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"shell_tool", "apps", "plugins", "multi_agent", "memories", "code_mode_host", "browser_use"} {
+		if err := codex.CheckFileEditFeatures(featureMetadata(map[string]bool{name: true})); err == nil {
+			t.Errorf("allowed %s", name)
+		}
+	}
+	if err := codex.CheckFileEditFeatures(featureMetadata(map[string]bool{"hooks": false})); err == nil {
+		t.Fatal("allowed disabled hooks")
+	}
+	if err := codex.CheckFileEditFeatures([]byte("shell_tool stable false\n")); err == nil {
+		t.Fatal("accepted incomplete metadata")
+	}
+}
+
+func TestOptionalContextInvocationCeiling(t *testing.T) {
+	settings := codex.FileEditSettings()["features"].(map[string]any)
+	for _, name := range []string{"context_management", "token_budget"} {
+		value, exists := settings[name]
+		if !exists || value != false {
+			t.Fatalf("optional feature %s lacks explicit false setting", name)
+		}
+	}
+	app, err := codex.FileEditCommand("/pinned/codex", "fabric_demo_test", "/owned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := codex.FileEditFeatureCommand(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, argv := range [][]string{app, metadata} {
+		for _, key := range []string{"features.context_management=false", "features.token_budget=false", "features.hooks=true"} {
+			count := 0
+			for i := 1; i < len(argv); i++ {
+				if argv[i] == key && argv[i-1] == "-c" {
+					count++
+				}
+			}
+			if count != 1 {
+				t.Fatal("shared invocation lost a required literal feature setting")
+			}
+		}
+	}
+}
+
+func TestOptionalContextMetadataCeiling(t *testing.T) {
+	// The two rows below are independent literals. An old settings-derived
+	// fixture alone would omit unknown features and hide the original gap.
+	var base strings.Builder
+	for _, line := range strings.Split(string(featureMetadata(nil)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] != "context_management" && fields[0] != "token_budget" {
+			base.WriteString(line + "\n")
+		}
+	}
+	const rows = "context_management under_development false\ntoken_budget under_development false\n"
+	valid := base.String() + rows
+	if err := codex.CheckFileEditFeatures([]byte(valid)); err != nil {
+		t.Fatal("independent false feature rows refused")
+	}
+	for _, name := range []string{"context_management", "token_budget"} {
+		for _, mutation := range []struct{ name, replacement string }{
+			{"true", name + " under_development true\n"},
+			{"missing", ""},
+			{"duplicate", name + " under_development false\n" + name + " under_development false\n"},
+			{"conflicting", name + " under_development false\n" + name + " under_development true\n"},
+			{"malformed", name + " under_development not_boolean\n"},
+		} {
+			t.Run(name+"/"+mutation.name, func(t *testing.T) {
+				changed := strings.Replace(valid, name+" under_development false\n", mutation.replacement, 1)
+				if err := codex.CheckFileEditFeatures([]byte(changed)); err == nil {
+					t.Fatal("optional context feature metadata failed open")
+				}
+			})
+		}
+	}
+}
+
+func TestDisableIDsAreValuesNotDottedOverrides(t *testing.T) {
+	argv, err := codex.FileEditCommand("/pinned/codex", "fabric_demo_test", "/owned", codex.DisabledIntegration{Kind: "mcp_servers", ID: `with.dot"quote`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, "\n")
+	if !strings.Contains(joined, `mcp_servers={"with.dot\"quote"={enabled=false}}`) || strings.Contains(joined, "mcp_servers.with.dot") {
+		t.Fatal("ID did not stay inside quoted TOML value")
+	}
+	if !strings.Contains(joined, `"/owned"="read"`) || !strings.Contains(joined, `"/owned/demo.txt"="write"`) || strings.Contains(joined, `.extends=`) {
+		t.Fatal("profile failed exact-file boundary")
+	}
+	if _, err := codex.FileEditCommand("/pinned/codex", "fabric_demo_test", "/owned", codex.DisabledIntegration{Kind: "command", ID: "bad"}); err == nil {
+		t.Fatal("accepted unapproved override kind")
+	}
+}
+
+func TestControlledProfileBeforeTurn(t *testing.T) {
+	for _, mut := range []string{"valid", "profile", "roots", "instructions", "unavailable", "paginated", "provider", "model", "catalog"} {
+		t.Run(mut, func(t *testing.T) {
+			spec := startSpec(t, "")
+			source := filepath.Join(spec.Dir, "AGENTS.md")
+			profiles := map[string]any{"data": []any{map[string]any{"id": "fabric_demo_test", "allowed": true}}, "nextCursor": nil}
+			reply := map[string]any{"thread": map[string]any{"id": "thr_1"}, "cwd": spec.Dir, "approvalPolicy": "never", "modelProvider": "openai", "model": codex.DemoModel, "activePermissionProfile": map[string]any{"id": "fabric_demo_test"}, "runtimeWorkspaceRoots": []string{spec.Dir}, "instructionSources": []string{source}}
+			switch mut {
+			case "profile":
+				reply["activePermissionProfile"] = map[string]any{"id": "widened"}
+			case "roots":
+				reply["runtimeWorkspaceRoots"] = []string{"/"}
+			case "instructions":
+				reply["instructionSources"] = []string{"/private/history"}
+			case "unavailable":
+				profiles["data"] = []any{map[string]any{"id": "fabric_demo_test", "allowed": false}}
+			case "paginated":
+				profiles["nextCursor"] = "more"
+			case "provider":
+				reply["modelProvider"] = "other"
+			case "model":
+				reply["model"] = "unapproved"
+			}
+			hb := validHookMetadata("/home/owned", spec.Dir)
+			cb, _ := json.Marshal(profiles)
+			rb, _ := json.Marshal(reply)
+			scriptPath := filepath.Join(t.TempDir(), "controlled.script")
+			if err := os.WriteFile(scriptPath, []byte("on initialize reply {}\non configRequirements/read require-unit-params\non configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\non config/read exit 98\non hooks/list reply "+string(hb)+"\non permissionProfile/list reply "+string(cb)+"\non model/list reply {\"data\":[{\"model\":\"gpt-6-luna\",\"hidden\":false,\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\"}]}],\"nextCursor\":null}\non thread/start require-ephemeral\non thread/start reply "+string(rb)+"\non turn/start exit 99\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			a := &codex.Adapter{Command: []string{"/usr/bin/env", "GOMAXPROCS=1", exe(t), "--fabric-test-script", scriptPath}, Control: &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{source}, PreflightOnly: true, CatalogOnly: mut == "catalog", Home: "/home/owned"}, KillGrace: 300 * time.Millisecond, RequestTimeout: time.Second}
+			sess, rec := begin(t, a, spec)
+			f := finish(t, sess)
+			want := harness.OutcomeFailed
+			if mut == "valid" || mut == "catalog" {
+				want = harness.OutcomeStopped
+			}
+			if f.Outcome != want {
+				t.Fatalf("outcome %+v, want %s", f, want)
+			}
+			if mut == "catalog" && f.Reason != "controlled profile metadata checked; no thread or model turn" {
+				t.Fatal("catalog check started a thread")
+			}
+			if mut == "valid" && f.Reason != "controlled preflight complete; no model turn" {
+				t.Fatalf("valid preflight did not reach checked thread: %+v", f)
+			}
+			for _, e := range rec.Snapshot() {
+				if e.Kind == harness.KindTurn || e.Kind == harness.KindMessage {
+					t.Fatal("model input emitted during preflight")
+				}
+			}
+		})
+	}
+}
+
+func TestControlledModeRejectsAmbientEnvironmentAndResume(t *testing.T) {
+	a := adapter(t, "normal")
+	a.Command = []string{exe(t), "--fabric-test-script", script(t, "normal")}
+	a.BaseEnv = nil
+	a.Control = &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{"/owned/AGENTS.md"}, PreflightOnly: true, Home: "/home/owned"}
+	for _, spec := range []harness.StartSpec{
+		{SessionID: "x", Dir: t.TempDir(), Prompt: "x", Env: map[string]string{"OPENAI_API_KEY": "canary"}},
+		{SessionID: "x", Dir: t.TempDir(), Prompt: "x", Extra: json.RawMessage(`{"resume_thread":"history"}`)},
+	} {
+		if s, e := a.Start(context.Background(), spec, &harnesstest.Recorder{}); e == nil {
+			_ = s.Stop(context.Background())
+			t.Fatal("unsafe input accepted")
+		}
+	}
+}
+
+func TestControlledFixedRunAndRuntimeRefusals(t *testing.T) {
+	for _, mode := range []string{"complete", "untrusted", "forbidden_tool", "pending_hook", "provider_unsupported"} {
+		t.Run(mode, func(t *testing.T) {
+			spec := startSpec(t, codex.DemoPrompt)
+			source := filepath.Join(spec.Dir, "AGENTS.md")
+			hooks := validHookMetadata("/home/owned", spec.Dir)
+			if mode == "untrusted" {
+				hooks = []byte(strings.Replace(string(hooks), `"trustStatus":"trusted"`, `"trustStatus":"untrusted"`, 1))
+			}
+			reply, _ := json.Marshal(map[string]any{"thread": map[string]any{"id": "thr_1"}, "cwd": spec.Dir, "approvalPolicy": "never", "modelProvider": "openai", "model": codex.DemoModel, "activePermissionProfile": map[string]any{"id": "fabric_demo_test"}, "runtimeWorkspaceRoots": []string{spec.Dir}, "instructionSources": []string{source}})
+			text := "on initialize reply {}\non configRequirements/read require-unit-params\non configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\non config/read exit 98\non hooks/list reply " + string(hooks) + "\non permissionProfile/list reply {\"data\":[{\"id\":\"fabric_demo_test\",\"allowed\":true}],\"nextCursor\":null}\non model/list reply {\"data\":[{\"model\":\"gpt-6-luna\",\"hidden\":false,\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\"}]}],\"nextCursor\":null}\non thread/start require-ephemeral\non thread/start reply " + string(reply) + "\n"
+			if mode == "provider_unsupported" {
+				text += "on turn/start error subscription-model-unsupported-private-canary\n"
+			} else {
+				text += "on turn/start reply {\"turn\":{\"id\":\"turn_1\"}}\non turn/start send {\"method\":\"hook/started\",\"params\":{\"run\":{\"id\":\"hook1\",\"status\":\"running\"}}}\n"
+				if mode != "pending_hook" {
+					text += "on turn/start send {\"method\":\"hook/completed\",\"params\":{\"run\":{\"id\":\"hook1\",\"status\":\"completed\"}}}\n"
+				}
+				if mode == "forbidden_tool" {
+					text += "on turn/start send {\"method\":\"item/started\",\"params\":{\"threadId\":\"thr_1\",\"turnId\":\"turn_1\",\"item\":{\"type\":\"commandExecution\",\"id\":\"cmd1\",\"command\":\"setsid double-fork private-canary\"}}}\n"
+				}
+				text += "on turn/start send {\"method\":\"turn/completed\",\"params\":{\"threadId\":\"thr_1\",\"turn\":{\"id\":\"turn_1\",\"status\":\"completed\"}}}\n"
+			}
+			scriptPath := filepath.Join(t.TempDir(), "fixed.script")
+			if err := os.WriteFile(scriptPath, []byte(text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			a := &codex.Adapter{Command: []string{"/usr/bin/env", "GOMAXPROCS=1", exe(t), "--fabric-test-script", scriptPath}, Control: &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{source}, Home: "/home/owned"}, KillGrace: 300 * time.Millisecond, RequestTimeout: time.Second}
+			sess, rec := begin(t, a, spec)
+			f := finish(t, sess)
+			want := harness.OutcomeFailed
+			if mode == "complete" {
+				want = harness.OutcomeDone
+			}
+			if f.Outcome != want {
+				t.Fatalf("got %+v want %s", f, want)
+			}
+			if mode == "untrusted" {
+				for _, e := range rec.Snapshot() {
+					if e.Kind == harness.KindTurn {
+						t.Fatal("untrusted hook allowed model turn")
+					}
+				}
+			}
+			for _, e := range rec.Snapshot() {
+				if strings.Contains(string(e.Payload), "private-canary") {
+					t.Fatal("sensitive failure data leaked")
+				}
+			}
+		})
+	}
+}

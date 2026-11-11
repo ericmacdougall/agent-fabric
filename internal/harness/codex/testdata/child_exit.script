@@ -1,0 +1,5 @@
+on initialize reply {}
+on thread/start reply {"thread":{"id":"thr_1"}}
+on turn/start reply {"turn":{"id":"turn_1"}}
+on turn/start child {{child_script}}
+on turn/start exit 0

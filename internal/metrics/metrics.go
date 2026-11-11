@@ -263,6 +263,13 @@ func collect(ctx context.Context, tx pgx.Tx, o Options) (*Snapshot, error) {
 	c.row(`SELECT count(*) FROM (SELECT substr(consumer, 12) AS m FROM outbox_cursors WHERE consumer LIKE 'sched.hold.%'
 		UNION SELECT mission_id FROM events WHERE kind NOT IN (`+strings.Join(known, ",")+`)) h`, &heldStreams)
 	add(gauge("fabric_held_streams", "Missions held because a stored event cannot be decoded by this build (distinct missions).", float64(heldStreams)))
+	// goodqa#15623 AC-14: row counts of the Control Room tables. Anyone holding the ingest
+	// credential can grow the source tables without limit, so the planner estimate (cheap,
+	// catalog only, no privilege on the tables needed) is exported; alert at warn 1M and
+	// critical 5M rows per table (main's decision, to be revisited after a week of data).
+	// The family has no samples before `fab control bootstrap`.
+	add(c.grouped("fabric_control_rows_estimate", "Planner row estimate per table of schema control (warn at 1M, critical at 5M rows per table; absent before fab control bootstrap).", "gauge",
+		`SELECT c.relname, greatest(c.reltuples, 0)::bigint FROM pg_class c WHERE c.relnamespace = to_regnamespace('control') AND c.relkind = 'r' ORDER BY 1`, "table"))
 
 	if c.err != nil {
 		return nil, c.err

@@ -94,10 +94,11 @@ func serveMetricsMain(args []string) error {
 	if err := metrics.CheckListen(*listen, *allowRemote); err != nil {
 		return err
 	}
-	dsn := os.Getenv("FABRIC_DSN")
-	if dsn == "" {
-		return errors.New("FABRIC_DSN is not set")
+	dsn, credential, err := appConnection()
+	if err != nil {
+		return err
 	}
+	defer credential.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	openCtx, cancel := context.WithTimeout(ctx, 30*time.Second)

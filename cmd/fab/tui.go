@@ -71,10 +71,11 @@ func tuiMain(args []string) error {
 	if err != nil {
 		return err
 	}
-	dsn := os.Getenv("FABRIC_DSN")
-	if dsn == "" {
-		return errors.New("FABRIC_DSN is not set")
+	dsn, credential, err := appConnection()
+	if err != nil {
+		return err
 	}
+	defer credential.Close()
 	pool, err := tui.OpenPool(dsn)
 	if err != nil {
 		return err

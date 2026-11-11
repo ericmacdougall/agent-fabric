@@ -1,0 +1,3 @@
+# scripted codex app-server session; see fake_test.go
+on initialize reply {"userAgent":"fake-codex/0"}
+on thread/resume reply {"thread":{"id":"thr_other"}}

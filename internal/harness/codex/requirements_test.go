@@ -1,0 +1,151 @@
+package codex_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fabric/internal/harness"
+	"fabric/internal/harness/codex"
+	"fabric/internal/harness/harnesstest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+const reqCanary = "PUBLIC_REQUIREMENTS_CANARY_73bd"
+
+func TestRequirementsReducerFixedFacts(t *testing.T) {
+	good := []string{`{"requirements":null}`, `{"requirements":{}}`, `{"requirements":{"modelProvider":"openai","modelProviders":{},"chatgptBaseUrl":"https://chatgpt.com/backend-api/","additionalDeveloperInstructions":"` + reqCanary + `"},"supportsIndependentSpeedModes":true}`}
+	bad := []string{`{}`, `{"requirements":{"modelProvider":"other"}}`, `{"requirements":{"modelProviders":{"openai":{"secret":"` + reqCanary + `"}}}}`, `{"requirements":{"chatgptBaseUrl":"https://chatgpt.com/backend-api/?token=` + reqCanary + `"}}`, `{"requirements":{"unknown":"` + reqCanary + `"}}`, `{"requirements":{"network":{}}}`, `{"requirements":{},"requirements":null}`, `{"requirements":{"modelProviders":{"x":1,"x":2}}}`, `{"requirements":`, strings.Repeat("x", codex.RequirementsMaxBytes+1)}
+	for _, s := range good {
+		facts, err := codex.ReduceRequirements([]byte(s))
+		if err != nil || !facts.RouteAllowed || !facts.RequiredProviderAllowed || !facts.SupportedSchema {
+			t.Fatal("approved synthetic requirements refused")
+		}
+		b, _ := json.Marshal(facts)
+		if strings.Contains(string(b), reqCanary) {
+			t.Fatal("facts leaked text")
+		}
+	}
+	for _, s := range bad {
+		facts, err := codex.ReduceRequirements([]byte(s))
+		if err == nil || facts.RouteAllowed || strings.Contains(err.Error(), reqCanary) {
+			t.Fatal("bad requirements accepted or leaked")
+		}
+	}
+}
+
+func TestRequirementsChatGPTLoginFact(t *testing.T) {
+	facts, err := codex.ReduceRequirements([]byte(`{"requirements":{"allowedLoginMethods":["chatgpt"]}}`))
+	if err != nil || !facts.ChatGPTLoginOnly || !facts.SupportedSchema || !facts.RouteAllowed || !facts.RequiredProviderAllowed {
+		t.Fatal("source-correct forced login requirements refused")
+	}
+	for _, raw := range []string{`{"requirements":null}`, `{"requirements":{}}`, `{"requirements":{"allowedLoginMethods":null}}`} {
+		facts, err := codex.ReduceRequirements([]byte(raw))
+		if err != nil || !facts.SupportedSchema || facts.ChatGPTLoginOnly {
+			t.Fatal("generic null compatibility changed or asserted login")
+		}
+	}
+	for _, raw := range []string{`[]`, `["api"]`, `["api","chatgpt"]`, `["chatgpt","api"]`, `["chatgpt","chatgpt"]`, `["unknown"]`, `["ChatGPT"]`, `"chatgpt"`, `{}`, `true`, `1`, `[null]`, `[["chatgpt"]]`} {
+		facts, err := codex.ReduceRequirements([]byte(`{"requirements":{"allowedLoginMethods":` + raw + `}}`))
+		if err == nil || facts.ChatGPTLoginOnly || !strings.Contains(err.Error(), "category=login_methods") {
+			t.Fatal("invalid login restriction accepted")
+		}
+	}
+}
+func traceLeaks(evs []harness.Event) bool {
+	b, _ := json.Marshal(evs)
+	return strings.Contains(string(b), reqCanary)
+}
+func TestRequirementsWholeTransportQuarantine(t *testing.T) {
+	for _, mode := range []string{"discarded", "notification", "error", "malformed", "duplicate", "oversize", "late_reply", "timeout_late", "null", "missing", "login_null", "empty", "api", "mixed", "login_duplicate", "login_type"} {
+		t.Run(mode, func(t *testing.T) {
+			spec := startSpec(t, "")
+			spec.SessionID = "0123456789abcdef0123456789abcdef"
+			hooks := validHookMetadata("/home/owned", spec.Dir)
+			text := "on initialize reply {}\non config/read exit 98\non config/requirements/read exit 96\non configRequirements/read require-unit-params\non configRequirements/read stderr " + reqCanary + "\n"
+			switch mode {
+			case "discarded":
+				text += "on configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"],\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
+			case "notification":
+				text += "on configRequirements/read send {\"method\":\"warning\",\"params\":{\"message\":\"" + reqCanary + "\"}}\non configRequirements/read send {\"id\":999,\"method\":\"item/fileChange/requestApproval\",\"params\":{\"message\":\"" + reqCanary + "\"}}\non configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\n"
+			case "late_reply":
+				text += "on configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\non configRequirements/read send {\"id\":2,\"error\":{\"code\":-32000,\"message\":\"" + reqCanary + "\"}}\n"
+			case "error":
+				text += "on configRequirements/read error " + reqCanary + "\n"
+			case "malformed":
+				text += "on configRequirements/read send {" + reqCanary + "\n"
+			case "duplicate":
+				text += "on configRequirements/read reply {\"requirements\":null,\"requirements\":{\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
+			case "oversize":
+				text += "on configRequirements/read send {{pad:262200}}" + reqCanary + "\n"
+			case "timeout_late":
+				text += "on configRequirements/read sleep 5100\non configRequirements/read error " + reqCanary + "\n"
+			case "null":
+				text += "on configRequirements/read reply {\"requirements\":null}\n"
+			case "missing":
+				text += "on configRequirements/read reply {\"requirements\":{}}\n"
+			default:
+				values := map[string]string{"login_null": "null", "empty": "[]", "api": "[\"api\"]", "mixed": "[\"api\",\"chatgpt\"]", "login_duplicate": "[\"chatgpt\",\"chatgpt\"]", "login_type": "\"chatgpt\""}
+				text += "on configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":" + values[mode] + ",\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
+			}
+			text += "on hooks/list reply " + string(hooks) + "\non permissionProfile/list reply {\"data\":[{\"id\":\"fabric_demo_test\",\"allowed\":true}],\"nextCursor\":null}\non thread/start exit 99\non turn/start exit 99\n"
+			p := filepath.Join(t.TempDir(), "requirements.script")
+			if err := os.WriteFile(p, []byte(text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			a := &codex.Adapter{Command: []string{"/usr/bin/env", "GOMAXPROCS=1", exe(t), "--fabric-test-script", p}, Control: &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{"/home/owned/.codex/AGENTS.md"}, Home: "/home/owned", PreflightOnly: true, CatalogOnly: true}, KillGrace: 300 * time.Millisecond, RequestTimeout: time.Second}
+			rec := &harnesstest.Recorder{}
+			var mc bytes.Buffer
+			projected, err := codex.NewLifecycleSink(&mc, rec, spec.SessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := a.Start(context.Background(), spec, projected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			f, err := s.Wait(ctx)
+			if err != nil {
+				_ = s.Stop(context.Background())
+				t.Fatal(err)
+			}
+			want := harness.OutcomeFailed
+			if mode == "discarded" || mode == "notification" || mode == "late_reply" {
+				want = harness.OutcomeStopped
+			}
+			if f.Outcome != want {
+				t.Fatalf("unexpected fixed outcome %s", f.Outcome)
+			}
+			if mode == "null" || mode == "missing" || mode == "login_null" || mode == "empty" || mode == "api" || mode == "mixed" || mode == "login_duplicate" || mode == "login_type" {
+				if !strings.Contains(f.Reason, "category=login_methods") {
+					t.Fatal("controlled login absence lacks static refusal")
+				}
+			}
+			evs := rec.Snapshot()
+			if strings.Contains(mc.String(), reqCanary) {
+				t.Fatal("requirements data leaked to MC lifecycle output")
+			}
+			if traceLeaks(evs) {
+				t.Fatal("private transport data reached event trace")
+			}
+			for _, e := range evs {
+				if e.Kind == harness.KindTurn || e.Kind == harness.KindMessage || e.Kind == harness.KindToolCall {
+					t.Fatal("sensitive phase dispatched a model/tool/message")
+				}
+			}
+		})
+	}
+}
+func TestBrokenRequirementsForwarderIsDetected(t *testing.T) {
+	rec := &harnesstest.Recorder{}
+	em, _ := harness.NewEmitter("codex", "owned", rec, harness.PatternRedactor())
+	_ = em.Unknown(context.Background(), "broken-forwarder", reqCanary)
+	if !traceLeaks(rec.Snapshot()) {
+		t.Fatal("public canary control failed to detect deliberately broken forwarding")
+	}
+}

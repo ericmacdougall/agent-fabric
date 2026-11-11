@@ -1,0 +1,10 @@
+# scripted codex app-server session; see fake_test.go
+on initialize reply {"userAgent":"fake-codex/0"}
+on thread/start reply {"thread":{"id":"{{thread}}"}}
+on turn/start reply {"turn":{"id":"turn_{{seq}}","status":"inProgress","items":[]}}
+on turn/start send {"method":"turn/started","params":{"threadId":"{{thread}}","turn":{"id":"turn_{{seq}}","status":"inProgress"}}}
+on turn/start send {"id":"srv1","method":"item/commandExecution/requestApproval","params":{"threadId":"{{thread}}","turnId":"turn_{{seq}}","itemId":"cmd_9","command":"rm -rf /"}}
+on turn/start send {"id":"srv2","method":"item/tool/requestUserInput","params":{"threadId":"{{thread}}","turnId":"turn_{{seq}}","questions":[]}}
+on response:srv1 send {"method":"item/completed","params":{"threadId":"{{thread}}","turnId":"turn_1","completedAtMs":1,"item":{"type":"agentMessage","id":"r1","text":"resp1:{{resp}}"}}}
+on response:srv2 send {"method":"item/completed","params":{"threadId":"{{thread}}","turnId":"turn_1","completedAtMs":1,"item":{"type":"agentMessage","id":"r2","text":"resp2:{{resp}}"}}}
+on response:srv2 send {"method":"turn/completed","params":{"threadId":"{{thread}}","turn":{"id":"turn_1","status":"completed"}}}

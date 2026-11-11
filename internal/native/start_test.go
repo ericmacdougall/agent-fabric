@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/sys/unix"
 
+	"fabric/internal/connref"
 	"fabric/internal/domain"
 	"fabric/internal/hostid"
 	"fabric/internal/native"
@@ -272,7 +273,7 @@ func TestNativeRunsAdmittedMission(t *testing.T) {
 			t.Fatal(err)
 		}
 		child := exec.Command(os.Args[0], "-test.run=^TestNativeChildHelper$", "-test.count=1")
-		child.Env = append(os.Environ(), storetest.ChildDSNEnv+"="+storetest.DSN, "FABRIC_NATIVE_CHILD_GRANT="+grant)
+		child.Env = append(connref.ChildEnvironment(os.Environ()), storetest.ChildDSNEnv+"="+storetest.DSN, "FABRIC_NATIVE_CHILD_GRANT="+grant)
 		if err := child.Start(); err != nil {
 			t.Fatal(err)
 		}

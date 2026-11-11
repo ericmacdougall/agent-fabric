@@ -51,6 +51,9 @@ func TestWorkerNeverGetsSchedulerDSN(t *testing.T) {
 	}
 
 	t.Run("ungated with a checked runner login: the worker gets exactly it", func(t *testing.T) {
+		t.Setenv("FABRIC_DSN_DATABASE", "unapproved_parent_target")
+		t.Setenv("FABRIC_RUNNER_DSN_DATABASE", "unapproved_parent_target")
+		t.Setenv("FABRIC_REVIEW_DSN_PASSWORD_FILE", "discard_parent_source")
 		t.Setenv("FABRIC_DSN", canary)
 		st := storetest.Open(t)
 		setCap(t, st, 5)
@@ -77,6 +80,9 @@ func TestWorkerNeverGetsSchedulerDSN(t *testing.T) {
 		ln.mu.Unlock()
 		var got []string
 		for _, e := range env {
+			if strings.Contains(e, "unapproved_parent_target") || strings.Contains(e, "discard_parent_source") {
+				t.Fatal("worker inherited parent source metadata or target")
+			}
 			if strings.Contains(e, "K1-CANARY") {
 				t.Fatal("the worker environment carries the scheduler's FABRIC_DSN")
 			}

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fabric/internal/connref"
 	"fabric/internal/domain"
 )
 
@@ -34,31 +34,42 @@ var freshSeq atomic.Int64
 // shared per-process database cannot go back to an older schema.
 func freshStore(t *testing.T, upTo string) (*Store, context.Context, string) {
 	t.Helper()
-	admin := os.Getenv("FABRIC_TEST_DSN")
-	if admin == "" {
-		t.Fatal("FABRIC_TEST_DSN is not set")
+	adminRef, err := connref.ResolveEnv("FABRIC_TEST_DSN", connref.TestAdmin)
+	if err != nil {
+		t.Fatal("test admin credential reference unavailable")
+	}
+	t.Cleanup(func() { adminRef.Close() })
+	admin, err := adminRef.DSN()
+	if err != nil || admin == "" {
+		t.Fatal("FABRIC_TEST_DSN or FABRIC_TEST_DSN_FILE is required")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
 	ap, err := pgxpool.New(ctx, admin)
 	if err != nil {
-		t.Fatalf("admin connect: %v", err)
+		t.Fatal("test admin connection failed")
 	}
 	name := fmt.Sprintf("fabric_t_%d_f%d", os.Getpid(), freshSeq.Add(1))
 	if _, err := ap.Exec(ctx, "CREATE DATABASE "+quoteIdent(name)); err != nil {
 		ap.Close()
-		t.Fatalf("create database: %v", err)
+		t.Fatal("create test database failed")
 	}
+	var dbRef *connref.Ref
 	t.Cleanup(func() {
 		ap.Exec(context.Background(), "DROP DATABASE "+quoteIdent(name)+" WITH (FORCE)") //nolint:errcheck
+		if dbRef != nil {
+			dbRef.Close()
+		}
 		ap.Close()
 	})
-	u, err := url.Parse(admin)
+	dbRef, err = connref.ForTestDatabase(adminRef, name)
 	if err != nil {
-		t.Fatal("admin dsn does not parse")
+		t.Fatal("derive test database reference failed")
 	}
-	u.Path = "/" + name
-	dsn := u.String()
+	dsn, err := dbRef.DSN()
+	if err != nil {
+		t.Fatal("test database reference unavailable")
+	}
 	st, err := Open(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open fresh: %v", err)
@@ -389,12 +400,16 @@ func TestTruncateOptInNeedsOwner(t *testing.T) {
 	if err := st.CreateMission(ctx, "m_tr", domain.ProviderClaudeCode, "GoodQA goodqa#15087", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	u, err := url.Parse(dsn)
+	fixture, err := connref.NewFixture(dsn, connref.App, r.App(), pw, privateCredentialFixtureDirectory(t))
 	if err != nil {
-		t.Fatal("dsn does not parse")
+		t.Fatal("app credential fixture failed")
 	}
-	u.User = url.UserPassword(r.App(), pw)
-	app, err := pgxpool.New(ctx, u.String())
+	defer fixture.Close()
+	appDSN, err := fixture.DSN()
+	if err != nil {
+		t.Fatal("app credential fixture unavailable")
+	}
+	app, err := pgxpool.New(ctx, appDSN)
 	if err != nil {
 		t.Fatal("app login pool failed")
 	}
@@ -581,4 +596,13 @@ func TestStartAttemptWrongPath(t *testing.T) {
 	if n := count(t, st, ctx, "SELECT count(*) FROM attempts WHERE id = 'r_sc' AND path = 'claude-code' AND lock_path IS NULL AND worktree IS NULL"); n != 1 {
 		t.Fatalf("claude-code attempt row not recorded with its path and no lock_path or worktree")
 	}
+}
+
+func privateCredentialFixtureDirectory(t *testing.T) string {
+	t.Helper()
+	dir, err := connref.NewFixtureDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal("create private credential fixture directory failed")
+	}
+	return dir
 }
