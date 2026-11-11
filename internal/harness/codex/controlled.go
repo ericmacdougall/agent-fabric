@@ -62,6 +62,7 @@ func FileEditSettings() map[string]any {
 		"skills":    map[string]any{"include_instructions": false, "bundled": map[string]any{"enabled": false}},
 		"code_mode": map[string]any{"disable_in_process_fallback": false},
 		"features": map[string]any{
+			"context_management": false, "token_budget": false,
 			"shell_tool": false, "unified_exec": false, "shell_snapshot": false, "multi_agent": false, "multi_agent_v2": false,
 			"apps": false, "plugins": false, "remote_plugin": false, "plugin_discovery_prefetch": false, "plugin_sharing": false,
 			"memories": false, "external_agent_memory_import": false, "deferred_executor": false, "hooks": true,
