@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +25,27 @@ type Control struct {
 	PreflightOnly      bool
 	CatalogOnly        bool
 	Home               string
+	// ProxyURL binds literal native proxy variables; the launcher must apply
+	// the independently tested forced-egress OS boundary as well.
+	ProxyURL string
+}
+
+func (c *Control) checkProxyEnv(env map[string]string) error {
+	if c.ProxyURL == "" {
+		return nil
+	}
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		if env[k] != c.ProxyURL {
+			return errors.New("codex: incomplete owned proxy environment")
+		}
+	}
+	for _, k := range []string{"NO_PROXY", "no_proxy"} {
+		v, ok := env[k]
+		if !ok || v != "" {
+			return errors.New("codex: proxy bypass refused")
+		}
+	}
+	return nil
 }
 
 // FileEditSettings is the minimum explicit configuration ceiling. Inherited
@@ -30,7 +54,8 @@ type Control struct {
 func FileEditSettings() map[string]any {
 	return map[string]any{
 		"approval_policy": "never", "web_search": "disabled", "allow_login_shell": false,
-		"model_provider": "openai", "forced_login_method": "chatgpt", "notify": []any{},
+		"check_for_update_on_startup": false,
+		"model_provider":              "openai", "forced_login_method": "chatgpt", "notify": []any{},
 		"openai_base_url": InferenceBootstrapURL, "chatgpt_base_url": ChatGPTBootstrapURL,
 		"analytics": map[string]any{"enabled": false},
 		"model":     DemoModel, "model_reasoning_effort": "low",
@@ -110,6 +135,17 @@ func (c *Control) checkThread(raw json.RawMessage, dir string) error {
 var profileID = regexp.MustCompile(`^[a-z][a-z0-9_]{0,79}$`)
 
 func (c *Control) validate() error {
+	if c.ProxyURL != "" {
+		u, e := url.Parse(c.ProxyURL)
+		if e != nil || u.Scheme != "http" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+			return errors.New("codex: invalid owned proxy")
+		}
+		h, p, e := net.SplitHostPort(u.Host)
+		n, ne := strconv.ParseUint(p, 10, 16)
+		if e != nil || ne != nil || h != "127.0.0.1" || n == 0 {
+			return errors.New("codex: invalid owned proxy")
+		}
+	}
 	if !profileID.MatchString(c.Profile) {
 		return errors.New("codex: invalid controlled profile")
 	}

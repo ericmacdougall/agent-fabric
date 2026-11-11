@@ -64,6 +64,7 @@ type Limits struct {
 // official Claude login endpoints compiled into this package; arbitrary hosts
 // and ports are rejected before DNS resolution or listening.
 type Config struct {
+	Provider               Provider
 	AdditionalDestinations []string
 	Resolver               Resolver
 	ResolveTimeout         time.Duration
@@ -126,17 +127,9 @@ func Start(ctx context.Context, cfg Config) (*Mediator, error) {
 		return nil, err
 	}
 
-	names := []string{DefaultDestination}
-	seen := map[string]bool{DefaultDestination: true}
-	for _, name := range cfg.AdditionalDestinations {
-		key, _, _, parseErr := parseDestination(name)
-		if parseErr != nil || !officialLoginDestinations[key] {
-			return nil, fmt.Errorf("egress: destination is not an explicitly supported Claude login endpoint")
-		}
-		if !seen[key] {
-			seen[key] = true
-			names = append(names, key)
-		}
+	names, err := providerDestinations(cfg.Provider, cfg.AdditionalDestinations)
+	if err != nil {
+		return nil, err
 	}
 
 	resolver := cfg.Resolver
