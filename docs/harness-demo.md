@@ -49,5 +49,6 @@ Codex uses one fresh task-private directory for both `sqlite_home` and `log_dir`
 so the pinned client's legacy log path is absent. Existing user log SQLite files
 and their journal siblings, and the old log directory, deny all writes in the
 outer profile. Preventing unlink alone would not prevent SQL row retention from
-deleting old records. The proxy allowance uses TCP specifically; same-port UDP
-denial needs its own public fixture control.
+deleting old records. Apple's filter requires the `localhost` spelling; the
+proxy allowance uses `tcp4` while the validated mediator endpoint stays numeric
+IPv4. Same-port UDP and IPv6 denial need their own public fixture controls.

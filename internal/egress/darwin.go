@@ -21,7 +21,10 @@ func DarwinWorkerProfile(p PolicyDescriptor) (string, error) {
 	if err != nil || r.Action != "allow" || r.Protocol != "tcp" || r.Address != "127.0.0.1" || r.Port == 0 || r.Host != "" || u.Scheme != "http" || u.Host != "127.0.0.1:"+strconv.Itoa(int(r.Port)) || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("egress: invalid loopback proxy policy")
 	}
-	return fmt.Sprintf("(version 1)\n(allow default)\n(deny network*)\n(allow network-outbound (remote tcp \"127.0.0.1:%d\"))\n", r.Port), nil
+	// Apple's native compiler accepts only localhost or * in this filter.
+	// tcp4 keeps the compiler alias restricted to the numeric IPv4 listener;
+	// it must not admit an unrelated IPv6 listener sharing the same port.
+	return fmt.Sprintf("(version 1)\n(allow default)\n(deny network*)\n(allow network-outbound (remote tcp4 \"localhost:%d\"))\n", r.Port), nil
 }
 
 // DarwinPreserveLogs prevents this native client and its descendants from

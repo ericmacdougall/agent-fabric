@@ -8,7 +8,7 @@ import (
 func TestDarwinWorkerOnlyExactProxy(t *testing.T) {
 	p := PolicyDescriptor{Version: 1, DefaultDeny: true, ProxyURL: "http://127.0.0.1:31234", WorkerRules: []FirewallRule{{Action: "allow", Protocol: "tcp", Address: "127.0.0.1", Port: 31234}}}
 	text, err := DarwinWorkerProfile(p)
-	if err != nil || !strings.Contains(text, "(deny network*)") || !strings.Contains(text, `(remote tcp "127.0.0.1:31234")`) || strings.Contains(text, "localhost") || strings.Contains(text, "remote ip") {
+	if err != nil || !strings.Contains(text, "(deny network*)") || !strings.Contains(text, `(remote tcp4 "localhost:31234")`) || strings.Contains(text, "remote ip") || strings.Contains(text, `(remote tcp `) || strings.Contains(text, "tcp6") {
 		t.Fatalf("bad profile %v %s", err, text)
 	}
 	mutations := []func(*PolicyDescriptor){func(p *PolicyDescriptor) { p.DefaultDeny = false }, func(p *PolicyDescriptor) { p.WorkerRules[0].Address = "::1" }, func(p *PolicyDescriptor) { p.WorkerRules[0].Port = 0 }, func(p *PolicyDescriptor) { p.ProxyURL = "http://localhost:31234" }, func(p *PolicyDescriptor) { p.ProxyURL += "/other" }, func(p *PolicyDescriptor) { p.WorkerRules = append(p.WorkerRules, p.WorkerRules[0]) }}
