@@ -28,6 +28,11 @@ func (s *session) handleFixed(line []byte) {
 		PermissionMode  string            `json:"permissionMode"`
 		Model           string            `json:"model"`
 		IsError         bool              `json:"is_error"`
+		HookID          string            `json:"hook_id"`
+		HookEvent       string            `json:"hook_event"`
+		HookName        string            `json:"hook_name"`
+		HookExit        *int              `json:"exit_code"`
+		HookOutcome     string            `json:"outcome"`
 		Message         *struct {
 			Content json.RawMessage `json:"content"`
 		} `json:"message"`
@@ -68,13 +73,17 @@ func (s *session) handleFixed(line []byte) {
 				return
 			}
 			s.fixedInit = true
-		case "hook_started", "hook_response", "status", "api_retry":
-			// Trusted native lifecycle dependency; payload remains native-private.
+		case "hook_started", "hook_response":
+			if !s.fixedHooks.observe(w.Subtype, w.HookID, w.HookEvent, w.HookName, w.HookExit, w.HookOutcome) {
+				fail()
+				return
+			}
+		case "status", "api_retry":
 		default:
 			fail()
 		}
 	case "control_request":
-		if !s.fixedInit || s.stopping.Load() {
+		if !s.fixedInit || s.stopping.Load() || !s.fixedHooks.readyForWrite() {
 			fail()
 			return
 		}

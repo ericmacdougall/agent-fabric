@@ -15,11 +15,12 @@ import (
 // updates and never returns provider text, tool arguments, or a caller's path.
 // It does not sandbox the process: a reviewed native launcher is required.
 type FixedWrite struct {
-	Path     string
-	mu       sync.Mutex
-	seen     map[string]bool
-	approved bool
-	failed   bool
+	Path          string
+	RequiredHooks map[string]int
+	mu            sync.Mutex
+	seen          map[string]bool
+	approved      bool
+	failed        bool
 }
 
 var controlID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)

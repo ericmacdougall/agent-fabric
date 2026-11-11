@@ -127,6 +127,7 @@ type session struct {
 	endedSelf  bool
 	fixedInit  bool
 	fixedBytes int
+	fixedHooks *fixedHookState
 
 	done  chan struct{}
 	final harness.Final
@@ -152,6 +153,14 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 	if a.FixedWrite != nil && (!a.SingleTurn || !cleanAbsentArtifact(a.FixedWrite.Path)) {
 		return nil, errors.New("claudecode: invalid fixed write job")
 	}
+	var fixedHooks *fixedHookState
+	if a.FixedWrite != nil {
+		var err error
+		fixedHooks, err = newFixedHookState(a.FixedWrite.RequiredHooks)
+		if err != nil {
+			return nil, err
+		}
+	}
 	red := a.Redact
 	if red == nil {
 		red = harness.PatternRedactor()
@@ -167,6 +176,7 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 	s := &session{a: a, id: spec.SessionID, em: em, proc: proc, tools: map[string]toolInfo{}, done: make(chan struct{}),
 		wq: make(chan qmsg, queueSize+8), closeIn: make(chan struct{}),
 		sendSem: make(chan struct{}, 1), slots: make(chan struct{}, queueSize)}
+	s.fixedHooks = fixedHooks
 	go s.write()
 	go s.read()
 	if spec.Prompt != "" {
@@ -475,7 +485,7 @@ func (s *session) read() {
 
 func (s *session) settle(code int, werr error, stopping bool, pending, results int, lastOK bool, lastSub string, panicked any) harness.Final {
 	if s.a.FixedWrite != nil {
-		if code == 0 && werr == nil && results == 1 && lastOK && pending <= 0 && panicked == nil && s.a.FixedWrite.Approved() {
+		if code == 0 && werr == nil && results == 1 && lastOK && pending <= 0 && panicked == nil && s.a.FixedWrite.Approved() && s.fixedHooks.complete() {
 			return harness.Final{Outcome: harness.OutcomeDone, ExitCode: 0}
 		}
 		return harness.Final{Outcome: harness.OutcomeFailed, Reason: "controlled job failed or cleanup uncertain", ExitCode: code}

@@ -65,7 +65,15 @@ func runCodexFileEdit(ctx context.Context, bin, dir string, wait time.Duration, 
 	}
 	id := hex.EncodeToString(nonce[:])
 	profile := "fabric_demo_" + id
-	argv, err := codex.FileEditCommand(bin, profile, dir, disabled...)
+	kit := dir + ".control"
+	if err := os.Mkdir(kit, 0700); err != nil {
+		return errors.New("codex: fresh owned control directory unavailable")
+	}
+	storage := filepath.Join(kit, "sqlite")
+	if err := os.Mkdir(storage, 0700); err != nil {
+		return errors.New("codex: fresh owned SQLite directory unavailable")
+	}
+	argv, err := codex.FileEditStorageCommand(bin, profile, dir, storage, disabled...)
 	if err != nil {
 		return err
 	}

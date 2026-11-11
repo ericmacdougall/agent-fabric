@@ -38,3 +38,16 @@ Each job has a 120-second controller deadline and bounded output. An unknown
 tool/catalog/input, missing callback, quota/auth error, unsupported model or
 unexpected artifact ends that attempt. There is no automatic provider retry,
 new login or fallback. Existing logs and owned failure evidence are retained.
+
+Hook completion is part of success: starts and responses bind the same private
+ID/event/name, every required selected hook must return exit zero and success,
+and no hook may remain outstanding. The pinned snapshot selects three startup,
+four prompt, two Write pre-tool and five Stop executions; all 32 registrations
+remain installed. Hook output is never copied to the public journal.
+
+Codex uses one fresh task-private directory for both `sqlite_home` and `log_dir`,
+so the pinned client's legacy log path is absent. Existing user log SQLite files
+and their journal siblings, and the old log directory, deny all writes in the
+outer profile. Preventing unlink alone would not prevent SQL row retention from
+deleting old records. The proxy allowance uses TCP specifically; same-port UDP
+denial needs its own public fixture control.

@@ -95,3 +95,20 @@ type DisabledIntegration struct {
 	Kind string
 	ID   string
 }
+
+// FileEditStorageCommand keeps both SQLite state and logs in the same fresh
+// task-owned directory. In the pinned source, equal sqlite_home/log_dir means
+// legacy_logs_db_path is None; old user log databases are never selected.
+// The CLI creates these paths with exclusive Mkdir, before native startup.
+func FileEditStorageCommand(bin, profile, dir, storage string, disabled ...DisabledIntegration) ([]string, error) {
+	if !filepath.IsAbs(storage) || filepath.Clean(storage) != storage || storage != filepath.Join(dir+".control", "sqlite") {
+		return nil, errors.New("codex: fresh owned storage path required")
+	}
+	argv, err := FileEditCommand(bin, profile, dir, disabled...)
+	if err != nil {
+		return nil, err
+	}
+	q, _ := json.Marshal(storage)
+	argv = append(argv[:len(argv)-1], "-c", "sqlite_home="+string(q), "-c", "log_dir="+string(q), "app-server")
+	return argv, nil
+}

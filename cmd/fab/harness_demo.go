@@ -135,6 +135,10 @@ func runClaudeFixed(ctx context.Context, dir string, sink harness.Sink) error {
 	if err != nil {
 		return err
 	}
+	requiredHooks, err := claudecode.FixedRequiredHookCounts(settings)
+	if err != nil {
+		return err
+	}
 	for name, sha := range claudeHookScriptSHA {
 		if err := binaryIdentity(filepath.Join(home, ".claude/hooks", name), sha); err != nil {
 			return errors.New("claude: mandatory hook script identity changed")
@@ -179,7 +183,7 @@ func runClaudeFixed(ctx context.Context, dir string, sink harness.Sink) error {
 	if err := checkClaudeManagedRuntime(ctx, profile, filepath.Join(kit, "settings.json"), env, dir); err != nil {
 		return err
 	}
-	fixed := &claudecode.FixedWrite{Path: filepath.Join(dir, "demo.txt")}
+	fixed := &claudecode.FixedWrite{Path: filepath.Join(dir, "demo.txt"), RequiredHooks: requiredHooks}
 	a := &claudecode.Adapter{Launch: claudecode.FixedLauncher(mediatedCommand(profile, append([]string{claudeDemoBinary}, args...))), FixedWrite: fixed, SingleTurn: true, StopGrace: 2 * time.Second, DrainGrace: time.Second, DrainHardCap: 3 * time.Second}
 	session, err := a.Start(ctx, harness.StartSpec{SessionID: id, Dir: dir, Env: env, Prompt: "Use only Write to create " + fixed.Path + " with exactly fabric followed by one newline. Stop after that single write. Do not read any other file, run commands, or use other tools."}, &demoArtifactSink{dir: dir, next: sink})
 	if err != nil {

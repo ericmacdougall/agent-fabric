@@ -21,7 +21,7 @@ func DarwinWorkerProfile(p PolicyDescriptor) (string, error) {
 	if err != nil || r.Action != "allow" || r.Protocol != "tcp" || r.Address != "127.0.0.1" || r.Port == 0 || r.Host != "" || u.Scheme != "http" || u.Host != "127.0.0.1:"+strconv.Itoa(int(r.Port)) || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("egress: invalid loopback proxy policy")
 	}
-	return fmt.Sprintf("(version 1)\n(allow default)\n(deny network*)\n(allow network-outbound (remote ip \"127.0.0.1:%d\"))\n", r.Port), nil
+	return fmt.Sprintf("(version 1)\n(allow default)\n(deny network*)\n(allow network-outbound (remote tcp \"127.0.0.1:%d\"))\n", r.Port), nil
 }
 
 // DarwinPreserveLogs prevents this native client and its descendants from
@@ -37,6 +37,13 @@ func DarwinPreserveLogs(profile, home string) (string, error) {
 	}
 	for _, suffix := range []string{".claude/projects", ".claude/wals", ".claude/debug", ".claude/history.jsonl", ".codex/sessions", ".codex/log", ".codex/logs_2.sqlite", ".agent-harness/codex-wals", ".agent-harness/logs"} {
 		profile += fmt.Sprintf("(deny file-write-unlink (subpath %q))\n", filepath.Join(home, suffix))
+	}
+	// Codex's immediate maintenance deletes SQL rows without unlinking the
+	// database. Protect both existing current-log subtree and the legacy root
+	// database, including WAL/SHM/rollback journals, against ALL writes. New
+	// session SQLite/log directories are separate, fresh and outside these roots.
+	for _, suffix := range []string{".codex/log", ".codex/logs_2.sqlite", ".codex/logs_2.sqlite-wal", ".codex/logs_2.sqlite-shm", ".codex/logs_2.sqlite-journal"} {
+		profile += fmt.Sprintf("(deny file-write* (subpath %q))\n", filepath.Join(home, suffix))
 	}
 	return profile, nil
 }
