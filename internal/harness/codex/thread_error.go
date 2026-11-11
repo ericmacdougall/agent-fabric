@@ -37,6 +37,10 @@ func controlledCoreSource(message string) (family, ioMessage string) {
 	const fatal = "error creating thread: Fatal error: "
 	const session = fatal + "Failed to initialize session: "
 	const agents = session + "failed to load AGENTS.md instructions for environment `"
+	body, core := strings.CutPrefix(message, "error creating thread: ")
+	if !core {
+		return "other", message
+	}
 	switch {
 	case strings.HasPrefix(message, fatal+"failed to load rules: "):
 		return "rules", message
@@ -50,13 +54,18 @@ func controlledCoreSource(message string) (family, ioMessage string) {
 		return "session_init", message
 	case strings.HasPrefix(message, "error creating thread: sandbox error: "):
 		return "sandbox", message
+	case strings.HasPrefix(message, fatal+"failed to start rollout recording: ") && len(message) > len(fatal+"failed to start rollout recording: "):
+		return "rollout_recording", message
 	}
 	if !strings.HasPrefix(message, fatal) {
-		return "other", message
+		return controlledDisplaySignature(body), message
 	}
 	hint, underlying, ok := strings.Cut(strings.TrimPrefix(message, fatal), " (underlying error: ")
 	if !ok {
-		return "other", message
+		if message == fatal {
+			return "other", message
+		}
+		return "fatal", message
 	}
 	if !strings.HasSuffix(underlying, ")") {
 		return "other", ""
@@ -68,6 +77,70 @@ func controlledCoreSource(message string) (family, ioMessage string) {
 	// Restore a fixed separator so a bare known IO message and a contextual IO
 	// message both match the existing exact terminal signature checks.
 	return "mapped_session_io", ": " + underlying
+}
+
+// Display is not an injective representation of CodexErrorDetails: free-form
+// errors can imitate these strings. Report only the matched public signature,
+// never an asserted Rust variant, entitlement, or private suffix.
+func controlledDisplaySignature(body string) string {
+	switch body {
+	case "Required managed configuration has not been loaded; authenticate and reload configuration before starting a session":
+		return "managed_config_unloaded"
+	case "turn aborted. Something went wrong? Hit `/feedback` to report the issue.":
+		return "turn_aborted"
+	case "shared rollout token budget exhausted":
+		return "session_budget_exceeded"
+	case "stream disconnected before completion: Incomplete response returned, reason: content_filter":
+		return "content_filter"
+	case "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.":
+		return "context_window_exceeded"
+	case "agent thread limit reached":
+		return "agent_limit_reached"
+	case "session configured event was not the first event in the stream":
+		return "session_configured_not_first_event"
+	case "timeout waiting for child process to exit":
+		return "timeout"
+	case "request timed out":
+		return "request_timeout"
+	case "spawn failed: child stdout/stderr not captured":
+		return "spawn"
+	case "interrupted (Ctrl-C). Something went wrong? Hit `/feedback` to report the issue.":
+		return "interrupted"
+	case "Image poisoning":
+		return "invalid_image_request"
+	case "Selected model is at capacity. Please try a different model.":
+		return "server_overloaded"
+	case "Policy-restricted capacity is unavailable. Please try again later.":
+		return "policy_capacity_unavailable"
+	case "Flex capacity unavailable.":
+		return "flex_unavailable"
+	case "Quota exceeded. Check your plan and billing details.":
+		return "quota_exceeded"
+	case "To use Codex with your ChatGPT plan, upgrade to Plus: https://chatgpt.com/explore/plus.":
+		return "usage_not_included"
+	case "We’re currently experiencing high demand, which may cause temporary errors.":
+		return "internal_server_error"
+	case "internal error; agent loop died unexpectedly":
+		return "internal_agent_died"
+	case "codex-linux-sandbox was required but not provided":
+		return "landlock_sandbox_executable_not_provided"
+	}
+	for _, shape := range []struct{ prefix, label string }{
+		{"stream disconnected before completion: ", "stream"},
+		{"Incomplete response returned, reason: ", "response_incomplete"},
+		{"rate limit exceeded: ", "rate_limit_exceeded"},
+		{"no thread with id: ", "thread_not_found"},
+		{"duplicate tool: ", "tool_collision"},
+		{"Error while reading the server response: ", "response_stream_failed"},
+		{"Connection failed: ", "connection_failed"},
+		{"exceeded retry limit, last status: ", "retry_limit"},
+		{"Missing environment variable: ", "env_var"},
+	} {
+		if strings.HasPrefix(body, shape.prefix) && len(body) > len(shape.prefix) {
+			return shape.label
+		}
+	}
+	return "other"
 }
 
 func knownSessionIOHint(hint string) bool {

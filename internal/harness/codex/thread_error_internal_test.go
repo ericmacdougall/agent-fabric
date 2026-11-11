@@ -35,7 +35,7 @@ func TestControlledCoreWrapperShapes(t *testing.T) {
 		{"lookalikeHint", wrap("Session storage missing atish "+canary, "Permission denied (os error 13)"), "other", "other"},
 		{"misleadingOuter", canary + wrap(missing, "Permission denied (os error 13)"), "other", "other"},
 		{"lookalikeOuter", "error creating threadish: " + wrap(missing, "Permission denied (os error 13)"), "other", "other"},
-		{"closeNotMapped", fatal + canary + ": Permission denied (os error 13))", "other", "other"},
+		{"closeNotMapped", fatal + canary + ": Permission denied (os error 13))", "fatal", "other"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result := controlledThreadFailure(tc.message)
@@ -47,4 +47,78 @@ func TestControlledCoreWrapperShapes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestControlledCompleteDisplayRegistry(t *testing.T) {
+	const outer = "error creating thread: "
+	const canary = "PUBLIC_DISPLAY_PRIVATE_CANARY"
+	constants := []struct{ body, label string }{
+		{"Required managed configuration has not been loaded; authenticate and reload configuration before starting a session", "managed_config_unloaded"},
+		{"turn aborted. Something went wrong? Hit `/feedback` to report the issue.", "turn_aborted"},
+		{"shared rollout token budget exhausted", "session_budget_exceeded"},
+		{"stream disconnected before completion: Incomplete response returned, reason: content_filter", "content_filter"},
+		{"Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.", "context_window_exceeded"},
+		{"agent thread limit reached", "agent_limit_reached"},
+		{"session configured event was not the first event in the stream", "session_configured_not_first_event"},
+		{"timeout waiting for child process to exit", "timeout"},
+		{"request timed out", "request_timeout"},
+		{"spawn failed: child stdout/stderr not captured", "spawn"},
+		{"interrupted (Ctrl-C). Something went wrong? Hit `/feedback` to report the issue.", "interrupted"},
+		{"Image poisoning", "invalid_image_request"},
+		{"Selected model is at capacity. Please try a different model.", "server_overloaded"},
+		{"Policy-restricted capacity is unavailable. Please try again later.", "policy_capacity_unavailable"},
+		{"Flex capacity unavailable.", "flex_unavailable"},
+		{"Quota exceeded. Check your plan and billing details.", "quota_exceeded"},
+		{"To use Codex with your ChatGPT plan, upgrade to Plus: https://chatgpt.com/explore/plus.", "usage_not_included"},
+		{"We’re currently experiencing high demand, which may cause temporary errors.", "internal_server_error"},
+		{"internal error; agent loop died unexpectedly", "internal_agent_died"},
+		{"codex-linux-sandbox was required but not provided", "landlock_sandbox_executable_not_provided"},
+	}
+	prefixes := []struct{ body, label string }{
+		{"stream disconnected before completion: ", "stream"},
+		{"Incomplete response returned, reason: ", "response_incomplete"},
+		{"rate limit exceeded: ", "rate_limit_exceeded"},
+		{"no thread with id: ", "thread_not_found"},
+		{"duplicate tool: ", "tool_collision"},
+		{"Error while reading the server response: ", "response_stream_failed"},
+		{"Connection failed: ", "connection_failed"},
+		{"exceeded retry limit, last status: ", "retry_limit"},
+		{"Missing environment variable: ", "env_var"},
+		{"Fatal error: failed to start rollout recording: ", "rollout_recording"},
+		{"Fatal error: ", "fatal"},
+	}
+	check := func(t *testing.T, message, label string) {
+		t.Helper()
+		result := controlledThreadFailure(message)
+		if !strings.HasSuffix(result, "source_family="+label) || strings.Contains(result, canary) {
+			t.Fatal("closed Display registry mismatch or private output")
+		}
+	}
+	for _, tc := range constants {
+		t.Run(tc.label, func(t *testing.T) {
+			check(t, outer+tc.body, tc.label)
+			// A transparent IO/string error can spoof the same native Display. The
+			// output is only the signature, never proof of the native Rust variant.
+			mutant := controlledThreadFailure(outer + tc.body + canary)
+			if strings.HasSuffix(mutant, "source_family="+tc.label) || strings.Contains(mutant, canary) {
+				t.Fatal("constant accepted private trailing prose")
+			}
+			check(t, canary+outer+tc.body, "other")
+		})
+	}
+	for _, tc := range prefixes {
+		t.Run(tc.label, func(t *testing.T) {
+			check(t, outer+tc.body+canary, tc.label)
+			check(t, canary+outer+tc.body+canary, "other")
+			if tc.label != "fatal" && tc.label != "rollout_recording" {
+				check(t, outer+tc.body, "other")
+				check(t, outer+strings.TrimSuffix(tc.body, " ")+canary, "other")
+			}
+		})
+	}
+	for _, body := range []string{canary, "model unsupported for account " + canary, "unsupported operation: " + canary, "error creating threadish: " + canary} {
+		check(t, outer+body, "other")
+	}
+	check(t, outer+"Fatal error: ", "other")
+	check(t, outer+"Fatal error: failed to start rollout recording: ", "fatal")
 }

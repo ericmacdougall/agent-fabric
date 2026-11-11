@@ -33,6 +33,14 @@ func TestControlledThreadErrorFacts(t *testing.T) {
 		{"rules", "error creating thread: Fatal error: failed to load rules: " + threadErrorCanary, "core_create", "other", -32603, "thread/start"},
 		{"agents", "error creating thread: Fatal error: Failed to initialize session: failed to load AGENTS.md instructions for environment `" + threadErrorCanary + "`: fs sandbox helper failed with status exit status: 1: " + threadErrorCanary, "core_create", "other", -32603, "thread/start"},
 		{"mapped", "error creating thread: Fatal error: Session storage missing at " + threadErrorCanary + ". Create the directory or choose a different Codex home. (underlying error: " + threadErrorCanary + ": No such file or directory (os error 2))", "core_create", "missing", -32603, "thread/start"},
+		{"managed", "error creating thread: Required managed configuration has not been loaded; authenticate and reload configuration before starting a session", "core_create", "other", -32603, "thread/start"},
+		{"abort", "error creating thread: turn aborted. Something went wrong? Hit `/feedback` to report the issue.", "core_create", "other", -32603, "thread/start"},
+		{"event", "error creating thread: session configured event was not the first event in the stream", "core_create", "other", -32603, "thread/start"},
+		{"loop", "error creating thread: internal error; agent loop died unexpectedly", "core_create", "other", -32603, "thread/start"},
+		{"fatal", "error creating thread: Fatal error: " + threadErrorCanary, "core_create", "other", -32603, "thread/start"},
+		{"rollout", "error creating thread: Fatal error: failed to start rollout recording: " + threadErrorCanary, "core_create", "other", -32603, "thread/start"},
+		{"provider", "error creating thread: Connection failed: " + threadErrorCanary, "core_create", "other", -32603, "thread/start"},
+		{"opaqueModel", "error creating thread: model not available for " + threadErrorCanary, "core_create", "other", -32603, "thread/start"},
 		{"unknown", threadErrorCanary, "other", "other", -32603, "thread/start"},
 		{"misleadingPrefix", threadErrorCanary + " error creating thread: Permission denied (os error 13)", "other", "other", -32603, "thread/start"},
 		{"lookalikePrefix", "error creating threadish: " + threadErrorCanary, "other", "other", -32603, "thread/start"},
@@ -40,6 +48,7 @@ func TestControlledThreadErrorFacts(t *testing.T) {
 		{"signatureSuffix", "error creating thread: Permission denied (os error 13)" + threadErrorCanary, "core_create", "other", -32603, "thread/start"},
 		{"wrongErrno", "error creating thread: " + threadErrorCanary + ": Permission denied (os error 130)", "core_create", "other", -32603, "thread/start"},
 		{"wrongCode", "error creating thread: " + threadErrorCanary, "", "", -32602, "thread/start"},
+		{"knownWrongCode", "error creating thread: Required managed configuration has not been loaded; authenticate and reload configuration before starting a session", "", "", -32602, "thread/start"},
 		{"wrongMethod", "error creating thread: " + threadErrorCanary, "", "", -32603, "model/list"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -81,7 +90,7 @@ func TestControlledThreadErrorFacts(t *testing.T) {
 				if !strings.Contains(final.Reason, "category="+tc.category+" reported_io="+tc.io) {
 					t.Fatal("fixed thread classification missing")
 				}
-				family := map[string]string{"rules": "rules", "agents": "agents", "mapped": "mapped_session_io"}[tc.name]
+				family := map[string]string{"rules": "rules", "agents": "agents", "mapped": "mapped_session_io", "managed": "managed_config_unloaded", "abort": "turn_aborted", "event": "session_configured_not_first_event", "loop": "internal_agent_died", "fatal": "fatal", "rollout": "rollout_recording", "provider": "connection_failed"}[tc.name]
 				if family == "" {
 					family = "other"
 				}
