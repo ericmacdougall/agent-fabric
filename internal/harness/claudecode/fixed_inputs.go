@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 )
 
 // InputIdentity binds reviewed source bytes, never an approval or clearance.
@@ -96,7 +99,7 @@ func FixedInputSnapshot(policyPath, settingsPath string, identity InputIdentity)
 		"autoMemoryEnabled": false,
 		"claudeMdExcludes":  []string{"**/CLAUDE.md", "**/CLAUDE.local.md", "**/AGENTS.md", "**/.claude/rules/**"},
 		"pluginConfigs":     map[string]any{"cc-plugin-agents-md@builtin": map[string]any{"options": map[string]string{"instructionFiles": "managed-only"}}},
-		"permissions":       map[string]any{"ask": []string{"Edit"}, "deny": []string{"Bash", "Read", "Agent", "Task", "WebFetch", "WebSearch", "mcp__*"}},
+		"permissions":       map[string]any{"ask": []string{"Edit"}, "deny": []string{"Bash", "Agent", "Task", "WebFetch", "WebSearch", "mcp__*"}},
 	})
 	if err != nil {
 		return refuse()
@@ -108,7 +111,7 @@ func FixedInputSnapshot(policyPath, settingsPath string, identity InputIdentity)
 // trusted hooks. No shell profile, API key, provider or root-CA env is inherited.
 func FixedEnvironment(home string) map[string]string {
 	return map[string]string{
-		"PATH": "/usr/bin:/bin:/opt/homebrew/bin", "HOME": home, "LANG": "C.UTF-8", "LC_ALL": "C", "SHELL": "/bin/sh",
+		"PATH": "/usr/bin:/bin:/opt/homebrew/bin", "HOME": home, "USER": "eric", "LANG": "C.UTF-8", "LC_ALL": "C", "SHELL": "/bin/sh",
 		"PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1",
 		"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1", "CLAUDE_CODE_DISABLE_ATTACHMENTS": "1",
 		// Optional detached backup/prune maintenance; WAL/security hooks stay on.
@@ -116,6 +119,32 @@ func FixedEnvironment(home string) map[string]string {
 		"DISABLE_TELEMETRY":               "1", "DISABLE_ERROR_REPORTING": "1",
 		"DISABLE_AUTOUPDATER": "1", "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
 	}
+}
+
+// CheckFixedOwner binds the nonsecret native-store account name to the actual
+// process UID and real home owner before any authentication metadata command.
+func CheckFixedOwner(home string) error {
+	current, err := user.Current()
+	if err != nil {
+		return errors.New("claudecode: owned user identity unavailable")
+	}
+	st, err := os.Lstat(home)
+	if err != nil {
+		return errors.New("claudecode: owned user home unavailable")
+	}
+	metadata, ok := st.Sys().(*syscall.Stat_t)
+	if !ok || !fixedOwnerMatches(home, current, os.Getuid(), metadata.Uid, st.IsDir() && st.Mode()&os.ModeSymlink == 0) {
+		return errors.New("claudecode: owned user identity refused")
+	}
+	return nil
+}
+
+func fixedOwnerMatches(home string, current *user.User, uid int, homeUID uint32, realDirectory bool) bool {
+	if current == nil {
+		return false
+	}
+	accountUID, err := strconv.Atoi(current.Uid)
+	return err == nil && current.Username == "eric" && current.HomeDir == home && filepath.IsAbs(home) && filepath.Clean(home) == home && accountUID == uid && homeUID == uint32(uid) && realDirectory
 }
 
 // FixedArguments accepts only internally generated paths and an owned UUID.

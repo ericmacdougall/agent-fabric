@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -36,6 +37,18 @@ func TestFixedSnapshotPreservesOnlyReviewedMandatorySources(t *testing.T) {
 	var outHooks map[string]any
 	_ = json.Unmarshal(out["hooks"], &outHooks)
 	canonical, _ := json.Marshal(outHooks)
+	var permissions struct {
+		Deny []string `json:"deny"`
+		Ask  []string `json:"ask"`
+	}
+	if json.Unmarshal(out["permissions"], &permissions) != nil || !reflect.DeepEqual(permissions.Ask, []string{"Edit"}) {
+		t.Fatal("host write approval lost")
+	}
+	for _, denied := range permissions.Deny {
+		if denied == "Read" {
+			t.Fatal("blanket Read rule also blocks the fixed Write target")
+		}
+	}
 	if string(canonical) != string(h) || strings.Contains(string(settings), "PUBLIC_CANARY") || strings.Contains(string(settings), "public-plugin") {
 		t.Fatal("hooks changed or discarded settings leaked")
 	}
@@ -64,6 +77,9 @@ func TestFixedSnapshotPreservesOnlyReviewedMandatorySources(t *testing.T) {
 
 func TestFixedInvocationHasNoInheritedStartupControls(t *testing.T) {
 	env := FixedEnvironment("/public/home")
+	if env["USER"] != "eric" {
+		t.Fatal("native store account identity absent")
+	}
 	if env["AGENT_HARNESS_TASK_OUTPUT_PRUNE"] != "off" {
 		t.Fatal("detached maintenance enabled")
 	}
@@ -97,6 +113,33 @@ func TestFixedInvocationHasNoInheritedStartupControls(t *testing.T) {
 	}
 	if _, err := FixedArguments("unowned", "/public/settings", "/public/policy", "/public/mcp"); err == nil {
 		t.Fatal("unowned identity")
+	}
+}
+
+func TestFixedOwnerBindsNativeAccountToUIDAndHome(t *testing.T) {
+	identity := &user.User{Username: "eric", Uid: "501", HomeDir: "/Users/eric"}
+	if !fixedOwnerMatches("/Users/eric", identity, 501, 501, true) {
+		t.Fatal("valid owner refused")
+	}
+	for _, test := range []struct {
+		home     string
+		identity user.User
+		uid      int
+		homeUID  uint32
+		real     bool
+	}{
+		{"/Users/eric", *identity, 501, 502, true},
+		{"/Users/eric", *identity, 502, 502, true},
+		{"/Users/other", *identity, 501, 501, true},
+		{"/Users/eric", user.User{Username: "other", Uid: "501", HomeDir: "/Users/eric"}, 501, 501, true},
+		{"/Users/eric", *identity, 501, 501, false},
+	} {
+		if fixedOwnerMatches(test.home, &test.identity, test.uid, test.homeUID, test.real) {
+			t.Fatal("foreign user/home accepted")
+		}
+	}
+	if CheckFixedOwner(t.TempDir()) == nil {
+		t.Fatal("arbitrary workspace accepted as native account home")
 	}
 }
 
