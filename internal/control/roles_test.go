@@ -369,7 +369,7 @@ func TestVerifyRolesDetectsGrantDrift(t *testing.T) {
 	for name, c := range map[string]struct{ grant, revoke, want string }{
 		"ingest-select-mirror":    {"GRANT SELECT ON control.mc_chat_mirror TO " + r.Ingest(), "REVOKE SELECT ON control.mc_chat_mirror FROM " + r.Ingest(), "ingest SELECT on control.mc_chat_mirror"},
 		"ingest-mirror-content":   {"GRANT SELECT, INSERT ON control.mirror_content TO " + r.Ingest(), "REVOKE ALL ON control.mirror_content FROM " + r.Ingest(), "ingest INSERT on control.mirror_content"},
-		"export-missions":         {"GRANT SELECT ON public.missions TO " + r.Export(), "REVOKE SELECT ON public.missions FROM " + r.Export(), "export SELECT on public.missions"},
+		"export-missions":         {"GRANT SELECT ON public.missions TO " + r.Export(), "REVOKE SELECT ON public.missions FROM " + r.Export() + "; GRANT SELECT (id, ticket) ON public.missions TO " + r.Export(), "export SELECT on public.missions"},
 		"export-control-usage":    {"GRANT USAGE ON SCHEMA control TO " + r.Export(), "REVOKE USAGE ON SCHEMA control FROM " + r.Export(), "export schema control"},
 		"service-allowed-sources": {"GRANT INSERT ON control.allowed_sources TO " + r.Service(), "REVOKE INSERT ON control.allowed_sources FROM " + r.Service(), "service INSERT on control.allowed_sources"},
 		"service-sequence":        {"GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO " + r.Service(), "REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM " + r.Service(), "service has USAGE on sequence"},
@@ -387,8 +387,12 @@ func TestVerifyRolesDetectsGrantDrift(t *testing.T) {
 		if err != nil || !found {
 			t.Errorf("%s: VerifyRoles did not report %q (problems %v, err %v)", name, c.want, problems, err)
 		}
-		if _, err := p.Exec(ctx, c.revoke); err != nil {
-			t.Fatalf("%s revoke: %v", name, err)
+		// REVOKE of a table privilege also drops the contracted column grants, so a
+		// revoke entry may carry a restoring statement after a semicolon.
+		for _, stmt := range strings.Split(c.revoke, "; ") {
+			if _, err := p.Exec(ctx, stmt); err != nil {
+				t.Fatalf("%s revoke: %v", name, err)
+			}
 		}
 	}
 	if problems, _, err := VerifyRoles(ctx, p, r); err != nil || len(problems) != 0 {
