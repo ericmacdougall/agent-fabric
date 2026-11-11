@@ -48,6 +48,10 @@ func result(sub string, isErr bool) map[string]any {
 
 // fakeClaude plays the part of `claude --input-format stream-json` over stdio.
 func fakeClaude(mode string) {
+	if strings.HasPrefix(mode, "fixed") {
+		fakeFixed(mode)
+		return
+	}
 	emit(map[string]any{"type": "system", "subtype": "init", "session_id": "s1", "model": "m"})
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 1<<20), 8<<20)

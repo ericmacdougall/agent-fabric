@@ -28,6 +28,9 @@ import (
 func usageErr(msg string) error { return usageError{errors.New(msg)} }
 
 func harnessMain(args []string) error {
+	if len(args) > 0 && args[0] == "demo" {
+		return harnessDemoMain(args[1:])
+	}
 	if len(args) == 0 || args[0] != "run" {
 		return usageErr("usage: fab harness run --adapter native|claude-code|codex --events FILE ...")
 	}

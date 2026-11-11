@@ -191,6 +191,9 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 		if err := control.validate(); err != nil {
 			return nil, err
 		}
+		if err := control.checkProxyEnv(a.BaseEnv); err != nil {
+			return nil, err
+		}
 		if len(spec.Extra) > 0 || a.KeepOpen || spec.Model != "" {
 			return nil, errors.New("codex: controlled mode cannot resume or override options")
 		}
@@ -216,6 +219,14 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 				case "PYTHONNOUSERSITE", "PYTHONDONTWRITEBYTECODE":
 					if v != "1" {
 						return nil, errors.New("codex: controlled Python startup rejected")
+					}
+				case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy":
+					if control.ProxyURL == "" || v != control.ProxyURL {
+						return nil, errors.New("codex: owned proxy mismatch")
+					}
+				case "NO_PROXY", "no_proxy":
+					if control.ProxyURL == "" || v != "" {
+						return nil, errors.New("codex: proxy bypass refused")
 					}
 				default:
 					return nil, errors.New("codex: controlled environment rejected")

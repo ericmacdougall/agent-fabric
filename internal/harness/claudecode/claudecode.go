@@ -41,7 +41,10 @@ const Name = "claude-code"
 // Adapter is the interactive Claude Code adapter.
 type Adapter struct {
 	Launch Launcher
-	Redact harness.Redactor // nil means harness.PatternRedactor()
+	// FixedWrite enables the narrow callback and lifecycle-only event reducer.
+	// Native tool/settings/OS enforcement is the launcher's responsibility.
+	FixedWrite *FixedWrite
+	Redact     harness.Redactor // nil means harness.PatternRedactor()
 	// SingleTurn closes stdin after the first result, so the process exits and
 	// the session ends done. Without it the session lives until Stop.
 	SingleTurn bool
@@ -120,8 +123,10 @@ type session struct {
 	closeIn  chan struct{}
 
 	// owned by the reader goroutine until done is closed
-	tools     map[string]toolInfo
-	endedSelf bool
+	tools      map[string]toolInfo
+	endedSelf  bool
+	fixedInit  bool
+	fixedBytes int
 
 	done  chan struct{}
 	final harness.Final
@@ -143,6 +148,9 @@ type toolInfo struct {
 func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harness.Sink) (harness.Session, error) {
 	if a.Launch == nil {
 		return nil, errors.New("claudecode: no launcher")
+	}
+	if a.FixedWrite != nil && (!a.SingleTurn || !cleanAbsentArtifact(a.FixedWrite.Path)) {
+		return nil, errors.New("claudecode: invalid fixed write job")
 	}
 	red := a.Redact
 	if red == nil {
@@ -281,7 +289,9 @@ func (s *session) send(ctx context.Context, text string) error {
 	// otherwise make the sink fail and end the session.
 	rctx := context.WithoutCancel(ctx)
 	_ = s.em.Turn(rctx, n)
-	_ = s.em.Message(rctx, "user", text)
+	if s.a.FixedWrite == nil {
+		_ = s.em.Message(rctx, "user", text)
+	}
 	b, err := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}})
 	if err == nil {
 		select {
@@ -376,7 +386,12 @@ func (s *session) read() {
 			busy.Store(true)
 			defer busy.Store(false)
 			if oversize {
-				_ = s.em.Unknown(context.Background(), "event exceeds the maximum line size", string(line))
+				if s.a.FixedWrite != nil {
+					s.a.FixedWrite.refuse()
+					_ = s.proc.Kill()
+				} else {
+					_ = s.em.Unknown(context.Background(), "event exceeds the maximum line size", string(line))
+				}
 			} else if len(line) > 0 {
 				s.handle(line)
 			}
@@ -428,7 +443,11 @@ func (s *session) read() {
 			}
 		}
 		if cut != "" {
-			_ = s.em.Unknown(context.Background(), "stdout cut: "+cut, "")
+			if s.a.FixedWrite != nil {
+				s.a.FixedWrite.refuse()
+			} else {
+				_ = s.em.Unknown(context.Background(), "stdout cut: "+cut, "")
+			}
 		}
 	}
 	_ = out.Close()
@@ -455,6 +474,12 @@ func (s *session) read() {
 }
 
 func (s *session) settle(code int, werr error, stopping bool, pending, results int, lastOK bool, lastSub string, panicked any) harness.Final {
+	if s.a.FixedWrite != nil {
+		if code == 0 && werr == nil && results == 1 && lastOK && pending <= 0 && panicked == nil && s.a.FixedWrite.Approved() {
+			return harness.Final{Outcome: harness.OutcomeDone, ExitCode: 0}
+		}
+		return harness.Final{Outcome: harness.OutcomeFailed, Reason: "controlled job failed or cleanup uncertain", ExitCode: code}
+	}
 	switch {
 	case panicked != nil:
 		return harness.Final{Outcome: harness.OutcomeFailed, Reason: fmt.Sprintf("adapter panic: %v", panicked), ExitCode: code}
@@ -516,6 +541,10 @@ type wire struct {
 }
 
 func (s *session) handle(line []byte) {
+	if s.a.FixedWrite != nil {
+		s.handleFixed(line)
+		return
+	}
 	ctx := context.Background()
 	var w wire
 	if err := json.Unmarshal(line, &w); err != nil {

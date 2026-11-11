@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"fabric/internal/egress"
 	"fabric/internal/harness"
 	"fabric/internal/harness/codex"
 )
@@ -69,8 +70,15 @@ func runCodexFileEdit(ctx context.Context, bin, dir string, wait time.Duration, 
 		return err
 	}
 	env := map[string]string{"PATH": "/usr/bin:/bin", "HOME": home, "LANG": "C.UTF-8", "LC_ALL": "C", "SHELL": "/bin/sh", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1", "RUST_LOG": "off"}
+	m, networkProfile, err := startDemoEgress(bounded, egress.ProviderCodex)
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+	addProxyEnv(env, m)
 	featureArgs := append(append([]string(nil), argv[1:len(argv)-1]...), "features", "list")
-	featureCmd := exec.CommandContext(checkCtx, bin, featureArgs...)
+	featureCommand := mediatedCommand(networkProfile, append([]string{bin}, featureArgs...))
+	featureCmd := exec.CommandContext(checkCtx, featureCommand[0], featureCommand[1:]...)
 	featureCmd.Dir = dir
 	featureCmd.Env = []string{}
 	for k, v := range env {
@@ -83,12 +91,9 @@ func runCodexFileEdit(ctx context.Context, bin, dir string, wait time.Duration, 
 	if err := codex.CheckFileEditFeatures(metadata); err != nil {
 		return err
 	}
-	// The installed API reports a provider ID but cannot attest the endpoint
-	// behind managed provider overrides without a full secret-bearing response.
-	// Do not turn an operator flag into permission to guess the route.
-	if !preflight {
-		return errors.New("codex: effective first-party provider route is not attested; model execution refused")
-	}
+	// Native configuration is not the egress boundary. The outer profile and
+	// compiled mediator constrain both implicit authenticated startup and turns.
+	// Their actual public-canary proofs and main's runtime gate remain required.
 	var out harness.Sink = &boundedCodexSink{next: sink}
 	if mcPath != "" {
 		mc, err := os.OpenFile(mcPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -101,10 +106,13 @@ func runCodexFileEdit(ctx context.Context, bin, dir string, wait time.Duration, 
 			return err
 		}
 	}
-	a := &codex.Adapter{Command: argv, BaseEnv: env, Control: &codex.Control{Profile: profile, InstructionSources: []string{source}, PreflightOnly: preflight, CatalogOnly: preflight, Home: home}, MaxLine: 1 << 20, MaxTotal: 8 << 20, RequestTimeout: 10 * time.Second, KillGrace: 2 * time.Second}
+	a := &codex.Adapter{Command: mediatedCommand(networkProfile, argv), BaseEnv: env, Control: &codex.Control{Profile: profile, InstructionSources: []string{source}, PreflightOnly: preflight, CatalogOnly: preflight, Home: home, ProxyURL: m.URL()}, MaxLine: 1 << 20, MaxTotal: 8 << 20, RequestTimeout: 10 * time.Second, KillGrace: 2 * time.Second}
 	prompt := ""
 	if !preflight {
 		prompt = codex.DemoPrompt
+	}
+	if !preflight {
+		out = &demoArtifactSink{dir: dir, next: out}
 	}
 	session, err := a.Start(bounded, harness.StartSpec{SessionID: id, Dir: dir, Prompt: prompt}, out)
 	if err != nil {
