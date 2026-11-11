@@ -36,41 +36,67 @@ func TestRequirementsReducerFixedFacts(t *testing.T) {
 		}
 	}
 }
+
+func TestRequirementsChatGPTLoginFact(t *testing.T) {
+	facts, err := codex.ReduceRequirements([]byte(`{"requirements":{"allowedLoginMethods":["chatgpt"]}}`))
+	if err != nil || !facts.ChatGPTLoginOnly || !facts.SupportedSchema || !facts.RouteAllowed || !facts.RequiredProviderAllowed {
+		t.Fatal("source-correct forced login requirements refused")
+	}
+	for _, raw := range []string{`{"requirements":null}`, `{"requirements":{}}`, `{"requirements":{"allowedLoginMethods":null}}`} {
+		facts, err := codex.ReduceRequirements([]byte(raw))
+		if err != nil || !facts.SupportedSchema || facts.ChatGPTLoginOnly {
+			t.Fatal("generic null compatibility changed or asserted login")
+		}
+	}
+	for _, raw := range []string{`[]`, `["api"]`, `["api","chatgpt"]`, `["chatgpt","api"]`, `["chatgpt","chatgpt"]`, `["unknown"]`, `["ChatGPT"]`, `"chatgpt"`, `{}`, `true`, `1`, `[null]`, `[["chatgpt"]]`} {
+		facts, err := codex.ReduceRequirements([]byte(`{"requirements":{"allowedLoginMethods":` + raw + `}}`))
+		if err == nil || facts.ChatGPTLoginOnly || !strings.Contains(err.Error(), "category=login_methods") {
+			t.Fatal("invalid login restriction accepted")
+		}
+	}
+}
 func traceLeaks(evs []harness.Event) bool {
 	b, _ := json.Marshal(evs)
 	return strings.Contains(string(b), reqCanary)
 }
 func TestRequirementsWholeTransportQuarantine(t *testing.T) {
-	for _, mode := range []string{"discarded", "notification", "error", "malformed", "duplicate", "oversize", "late_reply", "timeout_late"} {
+	for _, mode := range []string{"discarded", "notification", "error", "malformed", "duplicate", "oversize", "late_reply", "timeout_late", "null", "missing", "login_null", "empty", "api", "mixed", "login_duplicate", "login_type"} {
 		t.Run(mode, func(t *testing.T) {
 			spec := startSpec(t, "")
 			spec.SessionID = "0123456789abcdef0123456789abcdef"
 			hooks := validHookMetadata("/home/owned", spec.Dir)
-			text := "on initialize reply {}\non config/read exit 98\non config/requirements/read stderr " + reqCanary + "\n"
+			text := "on initialize reply {}\non config/read exit 98\non config/requirements/read exit 96\non configRequirements/read require-unit-params\non configRequirements/read stderr " + reqCanary + "\n"
 			switch mode {
 			case "discarded":
-				text += "on config/requirements/read reply {\"requirements\":{\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
+				text += "on configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"],\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
 			case "notification":
-				text += "on config/requirements/read send {\"method\":\"warning\",\"params\":{\"message\":\"" + reqCanary + "\"}}\non config/requirements/read send {\"id\":999,\"method\":\"item/fileChange/requestApproval\",\"params\":{\"message\":\"" + reqCanary + "\"}}\non config/requirements/read reply {\"requirements\":null}\n"
+				text += "on configRequirements/read send {\"method\":\"warning\",\"params\":{\"message\":\"" + reqCanary + "\"}}\non configRequirements/read send {\"id\":999,\"method\":\"item/fileChange/requestApproval\",\"params\":{\"message\":\"" + reqCanary + "\"}}\non configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\n"
 			case "late_reply":
-				text += "on config/requirements/read reply {\"requirements\":null}\non config/requirements/read send {\"id\":2,\"error\":{\"code\":-32000,\"message\":\"" + reqCanary + "\"}}\n"
+				text += "on configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":[\"chatgpt\"]}}\non configRequirements/read send {\"id\":2,\"error\":{\"code\":-32000,\"message\":\"" + reqCanary + "\"}}\n"
 			case "error":
-				text += "on config/requirements/read error " + reqCanary + "\n"
+				text += "on configRequirements/read error " + reqCanary + "\n"
 			case "malformed":
-				text += "on config/requirements/read send {" + reqCanary + "\n"
+				text += "on configRequirements/read send {" + reqCanary + "\n"
 			case "duplicate":
-				text += "on config/requirements/read reply {\"requirements\":null,\"requirements\":{\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
+				text += "on configRequirements/read reply {\"requirements\":null,\"requirements\":{\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
 			case "oversize":
-				text += "on config/requirements/read send {{pad:262200}}" + reqCanary + "\n"
+				text += "on configRequirements/read send {{pad:262200}}" + reqCanary + "\n"
 			case "timeout_late":
-				text += "on config/requirements/read sleep 5100\non config/requirements/read error " + reqCanary + "\n"
+				text += "on configRequirements/read sleep 5100\non configRequirements/read error " + reqCanary + "\n"
+			case "null":
+				text += "on configRequirements/read reply {\"requirements\":null}\n"
+			case "missing":
+				text += "on configRequirements/read reply {\"requirements\":{}}\n"
+			default:
+				values := map[string]string{"login_null": "null", "empty": "[]", "api": "[\"api\"]", "mixed": "[\"api\",\"chatgpt\"]", "login_duplicate": "[\"chatgpt\",\"chatgpt\"]", "login_type": "\"chatgpt\""}
+				text += "on configRequirements/read reply {\"requirements\":{\"allowedLoginMethods\":" + values[mode] + ",\"additionalDeveloperInstructions\":\"" + reqCanary + "\"}}\n"
 			}
 			text += "on hooks/list reply " + string(hooks) + "\non permissionProfile/list reply {\"data\":[{\"id\":\"fabric_demo_test\",\"allowed\":true}],\"nextCursor\":null}\non thread/start exit 99\non turn/start exit 99\n"
 			p := filepath.Join(t.TempDir(), "requirements.script")
 			if err := os.WriteFile(p, []byte(text), 0600); err != nil {
 				t.Fatal(err)
 			}
-			a := &codex.Adapter{Command: []string{exe(t), "--fabric-test-script", p}, Control: &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{"/home/owned/.codex/AGENTS.md"}, Home: "/home/owned", PreflightOnly: true, CatalogOnly: true}, KillGrace: 300 * time.Millisecond, RequestTimeout: time.Second}
+			a := &codex.Adapter{Command: []string{"/usr/bin/env", "GOMAXPROCS=1", exe(t), "--fabric-test-script", p}, Control: &codex.Control{Profile: "fabric_demo_test", InstructionSources: []string{"/home/owned/.codex/AGENTS.md"}, Home: "/home/owned", PreflightOnly: true, CatalogOnly: true}, KillGrace: 300 * time.Millisecond, RequestTimeout: time.Second}
 			rec := &harnesstest.Recorder{}
 			var mc bytes.Buffer
 			projected, err := codex.NewLifecycleSink(&mc, rec, spec.SessionID)
@@ -94,6 +120,11 @@ func TestRequirementsWholeTransportQuarantine(t *testing.T) {
 			}
 			if f.Outcome != want {
 				t.Fatalf("unexpected fixed outcome %s", f.Outcome)
+			}
+			if mode == "null" || mode == "missing" || mode == "login_null" || mode == "empty" || mode == "api" || mode == "mixed" || mode == "login_duplicate" || mode == "login_type" {
+				if !strings.Contains(f.Reason, "category=login_methods") {
+					t.Fatal("controlled login absence lacks static refusal")
+				}
 			}
 			evs := rec.Snapshot()
 			if strings.Contains(mc.String(), reqCanary) {
