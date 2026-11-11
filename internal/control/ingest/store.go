@@ -29,7 +29,7 @@ const insertSQL = `INSERT INTO control.ingested_events
 	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	ON CONFLICT DO NOTHING` // no conflict target: a target needs SELECT, which the ingest role does not have
 
-// Column limits of control.ingested_events (migration 0039) that are tighter
+// Column limits of control.ingested_events (bootstrap file control/sql/001_schema.sql, not a numbered migration) that are tighter
 // than the mc.event/1 schema. A value over its limit is cut (never refused), so
 // one long field cannot abort a whole batch with a check violation.
 const (

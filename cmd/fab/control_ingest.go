@@ -39,6 +39,9 @@ func controlIngestMain(args []string) error {
 	if err := ingest.ValidSource(*source); err != nil {
 		return usageError{err}
 	}
+	if err := ingest.CheckAllowedSource(*source); err != nil {
+		return usageError{err}
+	}
 	dsn, credential, err := appConnection()
 	if err != nil {
 		return err

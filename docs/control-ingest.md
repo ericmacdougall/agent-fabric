@@ -8,7 +8,7 @@ table only: never fabric `events`, `outbox` or any other table.
 
 ## Contract
 
-- The producer is pinned by `--source` (`^[a-z][a-z0-9_-]{0,31}$`), never by the line.
+- The producer is pinned by `--source` (`^[a-z][a-z0-9_-]{0,31}$`), never by the line. The name must also be in the allowed list (`harness`, `mission-control`, the seed of `control.allowed_sources`); any other name is refused with exit 3 before the command connects.
   `fabric` is reserved for `fab control export` and refused (exit 3). Every `id` must start
   with `NAME:` and match the schema pattern. A line with an `id` starting `fabric:` (any
   case) is rejected as `reserved-id-prefix`. A `source` field in a line must equal NAME.

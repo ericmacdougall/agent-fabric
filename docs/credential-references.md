@@ -91,3 +91,15 @@ repository. Review packets identify code, executable inputs and opaque source
 revisions; they never contain credential bytes or credential-content hashes.
 Installation, database use, rehearsals and release remain separate reviewed
 gates. Passing the synthetic reference tests is not live release evidence.
+
+## Scope of this protection (goodqa#15661 F5)
+
+The no-password-in-environment protection is opt-in: it applies only when a client
+is started with `FABRIC_DSN_FILE` or `FABRIC_DSN_PASSWORD_FILE` (and the test,
+runner and review variants). `tools/fabd-install/install.sh` still builds DSNs with
+the password embedded and writes them to the service environment file, so the
+installed service runs in the raw mode until a later reviewed change switches it.
+The role password files read by `fab db roles` (`--*-password-file`) are read
+without the owner and mode checks that connection reference files get; keep them
+mode 0600 and owned by the operator. A full release that claims no password in an
+environment must first move the installer to the reference modes.

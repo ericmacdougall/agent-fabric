@@ -46,6 +46,23 @@ var (
 	subjectFields = map[string]bool{"repo": true, "branch": true, "ref": true, "ticket": true, "initiative": true}
 )
 
+// AllowedSources are the producers the ingest may name. It must equal the seed of
+// control.allowed_sources in control/sql/001_schema.sql (a test in internal/control
+// pins that); the database trigger remains the backstop for direct SQL.
+var AllowedSources = []string{"harness", "mission-control"}
+
+// CheckAllowedSource refuses a well-formed source that the database would reject,
+// so the command exits as a refusal before connecting instead of failing the
+// first insert with an error of unknown effect.
+func CheckAllowedSource(name string) error {
+	for _, a := range AllowedSources {
+		if name == a {
+			return nil
+		}
+	}
+	return errors.New("source is not in the allowed list (" + strings.Join(AllowedSources, ", ") + ")")
+}
+
 // ValidSource reports whether name may pin an external producer.
 func ValidSource(name string) error {
 	if !sourceRE.MatchString(name) {
