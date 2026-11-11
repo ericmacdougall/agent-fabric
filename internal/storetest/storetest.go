@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -120,8 +121,32 @@ type fixtureFactories struct {
 // at the end of the test.
 func AppRunnerDSNs(t *testing.T, st *store.Store) (string, string) {
 	t.Helper()
-	return appRunnerDSNs(t, st, fixtureFactories{directory: connref.NewFixtureDirectory, credential: connref.NewFixture})
+	// One claim per test: a second call in the same test (a setup helper that
+	// calls it after another helper did) returns the same borrowed DSNs instead of
+	// colliding with the roles the first call claimed. They stay valid until the
+	// test's cleanup, which runs after the test's own connection cleanup.
+	pairsMu.Lock()
+	if p, ok := pairs[t]; ok {
+		pairsMu.Unlock()
+		return p[0], p[1]
+	}
+	pairsMu.Unlock()
+	app, runner := appRunnerDSNs(t, st, fixtureFactories{directory: connref.NewFixtureDirectory, credential: connref.NewFixture})
+	pairsMu.Lock()
+	pairs[t] = [2]string{app, runner}
+	pairsMu.Unlock()
+	t.Cleanup(func() {
+		pairsMu.Lock()
+		delete(pairs, t)
+		pairsMu.Unlock()
+	})
+	return app, runner
 }
+
+var (
+	pairsMu sync.Mutex
+	pairs   = map[*testing.T][2]string{}
+)
 
 func appRunnerDSNs(t *testing.T, st *store.Store, factories fixtureFactories) (string, string) {
 	t.Helper()

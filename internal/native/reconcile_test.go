@@ -33,7 +33,7 @@ import (
 func lockChild(t *testing.T, path string, mode os.FileMode, exit bool) (stop func()) {
 	t.Helper()
 	c := exec.Command(os.Args[0], "-test.run=^TestNativeLockChildHelper$", "-test.count=1")
-	c.Env = append(connref.ChildEnvironment(os.Environ()), "FABRIC_LOCK_CHILD_PATH="+path, "FABRIC_LOCK_CHILD_MODE="+mode.String())
+	c.Env = append(connref.ChildEnvironment(os.Environ()), storetest.ChildDSNEnv+"="+storetest.DSN, "FABRIC_LOCK_CHILD_PATH="+path, "FABRIC_LOCK_CHILD_MODE="+mode.String())
 	if exit {
 		c.Env = append(c.Env, "FABRIC_LOCK_CHILD_EXIT=1")
 	}
