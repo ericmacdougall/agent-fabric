@@ -454,7 +454,7 @@ func (s *session) read() {
 		}
 		if cut != "" {
 			if s.a.FixedWrite != nil {
-				s.a.FixedWrite.refuse()
+				s.a.FixedWrite.refuseAs(fixedCleanup)
 			} else {
 				_ = s.em.Unknown(context.Background(), "stdout cut: "+cut, "")
 			}
@@ -488,7 +488,22 @@ func (s *session) settle(code int, werr error, stopping bool, pending, results i
 		if code == 0 && werr == nil && results == 1 && lastOK && pending <= 0 && panicked == nil && s.a.FixedWrite.Approved() && s.fixedHooks.complete() {
 			return harness.Final{Outcome: harness.OutcomeDone, ExitCode: 0}
 		}
-		return harness.Final{Outcome: harness.OutcomeFailed, Reason: "controlled job failed or cleanup uncertain", ExitCode: code}
+		reason := s.a.FixedWrite.failureReason()
+		if reason == "" {
+			switch {
+			case code != 0 || werr != nil || panicked != nil:
+				reason = fixedCleanup
+			case !s.fixedInit:
+				reason = fixedInit
+			case !s.fixedHooks.complete():
+				reason = fixedHook
+			case !s.a.FixedWrite.Approved():
+				reason = fixedPermission
+			default:
+				reason = fixedResult
+			}
+		}
+		return harness.Final{Outcome: harness.OutcomeFailed, Reason: fmt.Sprintf("controlled job failed category=%s hooks_started=%d hooks_completed=%d hooks_progress=%d", reason, s.fixedHooks.starts, len(s.fixedHooks.finished), s.fixedHooks.progress), ExitCode: code}
 	}
 	switch {
 	case panicked != nil:

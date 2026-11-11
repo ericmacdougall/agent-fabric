@@ -14,7 +14,7 @@ func TestFixedHooksBindCompletionAndRequiredPhases(t *testing.T) {
 	}
 	for _, event := range []string{"SessionStart", "UserPromptSubmit", "PreToolUse"} {
 		id := "h_" + event
-		if !h.observe("hook_started", id, event, event, nil, "") || !h.observe("hook_response", id, event, event, &zero, "success") {
+		if !h.observe("hook_started", id, event, event, nil, "") || !h.observe("hook_progress", id, event, event, nil, "") || !h.observe("hook_progress", id, event, event, nil, "") || !h.observe("hook_response", id, event, event, &zero, "success") {
 			t.Fatal("valid lifecycle refused")
 		}
 	}
@@ -50,6 +50,33 @@ func TestFixedHooksBindCompletionAndRequiredPhases(t *testing.T) {
 				t.Fatal("invalid completion accepted")
 			}
 		})
+	}
+}
+
+func TestFixedHooksProgressRequiresActiveIdentity(t *testing.T) {
+	required := map[string]int{"SessionStart": 1, "UserPromptSubmit": 1, "PreToolUse": 1, "Stop": 1}
+	for _, tc := range []struct{ name, id, event, hook string }{
+		{"unbound", "other", "Stop", "Stop"},
+		{"wrongEvent", "h", "PreToolUse", "Stop"},
+		{"wrongName", "h", "Stop", "other"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newFixedHookState(required)
+			h.observe("hook_started", "h", "Stop", "Stop", nil, "")
+			if h.observe("hook_progress", tc.id, tc.event, tc.hook, nil, "") {
+				t.Fatal("unbound progress accepted")
+			}
+		})
+	}
+	h, _ := newFixedHookState(required)
+	h.observe("hook_started", "h", "Stop", "Stop", nil, "")
+	if !h.observe("hook_progress", "h", "Stop", "Stop", nil, "") || h.complete() || h.counts["Stop"] != 0 {
+		t.Fatal("progress completed hook")
+	}
+	zero := 0
+	h.observe("hook_response", "h", "Stop", "Stop", &zero, "success")
+	if h.observe("hook_progress", "h", "Stop", "Stop", nil, "") {
+		t.Fatal("terminal progress accepted")
 	}
 }
 

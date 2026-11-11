@@ -46,6 +46,8 @@ type fixedHookState struct {
 	started  map[string]fixedHookIdentity
 	finished map[string]bool
 	counts   map[string]int
+	starts   int
+	progress int
 }
 
 func newFixedHookState(required map[string]int) (*fixedHookState, error) {
@@ -74,6 +76,14 @@ func (h *fixedHookState) observe(phase, id, event, name string, exit *int, outco
 			return false
 		}
 		h.started[id] = identity
+		h.starts++
+		return true
+	case "hook_progress":
+		prior, exists := h.started[id]
+		if !exists || prior != identity || h.finished[id] {
+			return false
+		}
+		h.progress++
 		return true
 	case "hook_response":
 		prior, exists := h.started[id]
