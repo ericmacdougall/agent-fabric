@@ -11,10 +11,10 @@ import (
 // frames, permission suggestions and tool arguments never enter the journal.
 func (s *session) handleFixed(line []byte) {
 	f := s.a.FixedWrite
-	fail := func() { f.refuse(); _ = s.proc.Kill() }
+	fail := func(reason fixedFailure) { f.refuseAs(reason); _ = s.proc.Kill() }
 	s.fixedBytes += len(line)
 	if s.fixedBytes > 8<<20 {
-		fail()
+		fail(fixedProtocol)
 		return
 	}
 	var w struct {
@@ -38,11 +38,11 @@ func (s *session) handleFixed(line []byte) {
 		} `json:"message"`
 	}
 	if strictJSON(line, &w) != nil {
-		fail()
+		fail(fixedProtocol)
 		return
 	}
 	if w.SessionID != "" && w.SessionID != s.id || w.ParentToolUseID != nil || w.AgentID != "" {
-		fail()
+		fail(fixedProtocol)
 		return
 	}
 	switch w.Type {
@@ -50,7 +50,7 @@ func (s *session) handleFixed(line []byte) {
 		switch w.Subtype {
 		case "init":
 			if s.fixedInit || w.SessionID != s.id || len(w.MCP) != 0 || w.PermissionMode != "manual" || !strings.HasPrefix(w.Model, "claude-sonnet-") {
-				fail()
+				fail(fixedInit)
 				return
 			}
 			write := false
@@ -58,53 +58,53 @@ func (s *session) handleFixed(line []byte) {
 				switch tool {
 				case "Write":
 					if write {
-						fail()
+						fail(fixedInit)
 						return
 					}
 					write = true
 				case "EndConversation":
 				default:
-					fail()
+					fail(fixedInit)
 					return
 				}
 			}
 			if !write {
-				fail()
+				fail(fixedInit)
 				return
 			}
 			s.fixedInit = true
-		case "hook_started", "hook_response":
+		case "hook_started", "hook_progress", "hook_response":
 			if !s.fixedHooks.observe(w.Subtype, w.HookID, w.HookEvent, w.HookName, w.HookExit, w.HookOutcome) {
-				fail()
+				fail(fixedHook)
 				return
 			}
 		case "status", "api_retry":
 		default:
-			fail()
+			fail(fixedProtocol)
 		}
 	case "control_request":
 		if !s.fixedInit || s.stopping.Load() || !s.fixedHooks.readyForWrite() {
-			fail()
+			fail(fixedPermission)
 			return
 		}
 		response, err := f.decide(line, s.tools)
 		if err != nil {
-			fail()
+			fail(fixedPermission)
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if s.enqueue(ctx, response) != nil {
-			fail()
+			fail(fixedPermission)
 		}
 	case "assistant":
 		if !s.fixedInit || w.Message == nil {
-			fail()
+			fail(fixedProtocol)
 			return
 		}
 		var blocks []block
 		if strictJSON(w.Message.Content, &blocks) != nil {
-			fail()
+			fail(fixedProtocol)
 			return
 		}
 		for _, b := range blocks {
@@ -112,16 +112,16 @@ func (s *session) handleFixed(line []byte) {
 			case "text", "thinking", "redacted_thinking":
 			case "tool_use":
 				if b.Name != "Write" || !controlID.MatchString(b.ID) {
-					fail()
+					fail(fixedPermission)
 					return
 				}
 				if _, seen := s.tools[b.ID]; seen {
-					fail()
+					fail(fixedPermission)
 					return
 				}
 				s.tools[b.ID] = toolInfo{name: b.Name, input: append([]byte(nil), b.Input...)}
 			default:
-				fail()
+				fail(fixedProtocol)
 				return
 			}
 		}
@@ -129,7 +129,7 @@ func (s *session) handleFixed(line []byte) {
 		// Native tool results are deliberately not published.
 	case "result":
 		if !s.fixedInit || w.SessionID != s.id {
-			fail()
+			fail(fixedResult)
 			return
 		}
 		s.mu.Lock()
@@ -143,6 +143,6 @@ func (s *session) handleFixed(line []byte) {
 	case "rate_limit_event", "stream_event", "control_response":
 		// Bounded private metadata only. It cannot approve the write.
 	default:
-		fail()
+		fail(fixedProtocol)
 	}
 }

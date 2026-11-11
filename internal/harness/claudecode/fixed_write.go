@@ -21,7 +21,19 @@ type FixedWrite struct {
 	seen          map[string]bool
 	approved      bool
 	failed        bool
+	failure       fixedFailure
 }
+
+type fixedFailure string
+
+const (
+	fixedProtocol   fixedFailure = "protocol"
+	fixedInit       fixedFailure = "init_catalog"
+	fixedHook       fixedFailure = "hook_lifecycle"
+	fixedPermission fixedFailure = "permission"
+	fixedResult     fixedFailure = "provider_result"
+	fixedCleanup    fixedFailure = "process_cleanup"
+)
 
 var controlID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
@@ -31,7 +43,22 @@ func (f *FixedWrite) Approved() bool {
 	return f.approved && !f.failed
 }
 
-func (f *FixedWrite) refuse() { f.mu.Lock(); f.failed = true; f.mu.Unlock() }
+func (f *FixedWrite) refuse() { f.refuseAs(fixedProtocol) }
+
+func (f *FixedWrite) refuseAs(reason fixedFailure) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failed = true
+	if f.failure == "" {
+		f.failure = reason
+	}
+}
+
+func (f *FixedWrite) failureReason() fixedFailure {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.failure
+}
 
 func cleanAbsentArtifact(p string) bool {
 	if !filepath.IsAbs(p) || filepath.Clean(p) != p || filepath.Base(p) != "demo.txt" {
@@ -134,6 +161,9 @@ func (f *FixedWrite) decide(line []byte, pending map[string]toolInfo) (any, erro
 	defer f.mu.Unlock()
 	bad := func() (any, error) {
 		f.failed = true
+		if f.failure == "" {
+			f.failure = fixedPermission
+		}
 		return nil, errors.New("claudecode: controlled permission request refused")
 	}
 	var r permissionFrame
@@ -175,6 +205,9 @@ func (f *FixedWrite) decide(line []byte, pending map[string]toolInfo) (any, erro
 		reply = map[string]any{"behavior": "allow", "updatedInput": map[string]string{"file_path": f.Path, "content": "fabric\n"}}
 	} else {
 		f.failed = true
+		if f.failure == "" {
+			f.failure = fixedPermission
+		}
 	}
 	return map[string]any{"type": "control_response", "response": map[string]any{"subtype": "success", "request_id": r.RequestID, "response": reply}}, nil
 }
