@@ -84,8 +84,11 @@ func runCodexFileEdit(ctx context.Context, bin, dir string, wait time.Duration, 
 	}
 	defer m.Close()
 	addProxyEnv(env, m)
-	featureArgs := append(append([]string(nil), argv[1:len(argv)-1]...), "features", "list")
-	featureCommand := mediatedCommand(networkProfile, append([]string{bin}, featureArgs...))
+	featureArgs, err := codex.FileEditFeatureCommand(argv)
+	if err != nil {
+		return err
+	}
+	featureCommand := mediatedCommand(networkProfile, featureArgs)
 	featureCmd := exec.CommandContext(checkCtx, featureCommand[0], featureCommand[1:]...)
 	featureCmd.Dir = dir
 	featureCmd.Env = []string{}

@@ -112,3 +112,14 @@ func FileEditStorageCommand(bin, profile, dir, storage string, disabled ...Disab
 	argv = append(argv[:len(argv)-1], "-c", "sqlite_home="+string(q), "-c", "log_dir="+string(q), "app-server")
 	return argv, nil
 }
+
+// FileEditFeatureCommand preserves every pinned override for the native
+// metadata-only command. The pinned CLI rejects --strict-config on features;
+// the original app-server command retains it and is never modified here.
+func FileEditFeatureCommand(appServer []string) ([]string, error) {
+	if len(appServer) < 3 || appServer[1] != "--strict-config" || appServer[len(appServer)-1] != "app-server" {
+		return nil, errors.New("codex: invalid controlled app-server command")
+	}
+	argv := append([]string{appServer[0]}, appServer[2:len(appServer)-1]...)
+	return append(argv, "features", "list"), nil
+}

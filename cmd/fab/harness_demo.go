@@ -221,8 +221,12 @@ func ownedNonRepository(dir string) error {
 }
 
 func binaryIdentity(path, want string) error {
+	return boundedBinaryIdentity(path, want, 512<<20)
+}
+
+func boundedBinaryIdentity(path, want string, maxBytes int64) error {
 	st, err := os.Lstat(path)
-	if err != nil || !st.Mode().IsRegular() {
+	if err != nil || !st.Mode().IsRegular() || st.Size() > maxBytes {
 		return errors.New("demo: pinned executable unavailable")
 	}
 	f, err := os.Open(path)
@@ -230,9 +234,13 @@ func binaryIdentity(path, want string) error {
 		return errors.New("demo: pinned executable unavailable")
 	}
 	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil || !os.SameFile(st, opened) || opened.Size() != st.Size() {
+		return errors.New("demo: executable identity changed")
+	}
 	h := sha256.New()
-	_, err = io.Copy(h, io.LimitReader(f, 300<<20))
-	if err != nil || hex.EncodeToString(h.Sum(nil)) != want {
+	read, err := io.Copy(h, io.LimitReader(f, maxBytes+1))
+	if err != nil || read != st.Size() || hex.EncodeToString(h.Sum(nil)) != want {
 		return errors.New("demo: executable identity changed")
 	}
 	return nil

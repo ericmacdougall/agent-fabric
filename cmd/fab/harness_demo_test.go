@@ -3,13 +3,33 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"fabric/internal/harness"
 	"fabric/internal/harness/harnesstest"
 )
+
+func TestDemoBinaryIdentityRejectsTruncationAndOversize(t *testing.T) {
+	data := []byte("synthetic executable identity")
+	path := filepath.Join(t.TempDir(), "binary")
+	if err := os.WriteFile(path, data, 0700); err != nil {
+		t.Fatal(err)
+	}
+	full := sha256.Sum256(data)
+	prefix := sha256.Sum256(data[:len(data)-1])
+	if err := boundedBinaryIdentity(path, hex.EncodeToString(full[:]), int64(len(data))); err != nil {
+		t.Fatal(err)
+	}
+	if err := boundedBinaryIdentity(path, hex.EncodeToString(prefix[:]), int64(len(data)-1)); err == nil {
+		t.Fatal("accepted the digest of a truncated executable")
+	}
+}
 
 func TestDemoDoctorMetadataFailClosed(t *testing.T) {
 	if err := checkClaudeDoctor([]byte("Managed settings (remote): No server-managed settings configured\n")); err != nil {
