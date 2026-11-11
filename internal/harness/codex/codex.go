@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -203,7 +204,19 @@ func (a *Adapter) Start(ctx context.Context, spec harness.StartSpec, sink harnes
 		for _, env := range []map[string]string{a.BaseEnv} {
 			for k, v := range env {
 				switch k {
-				case "HOME", "LANG", "LC_ALL":
+				case "LANG", "LC_ALL":
+				case "HOME":
+					if v != control.Home {
+						return nil, errors.New("codex: controlled home mismatch")
+					}
+				case "CODEX_HOME":
+					if v != filepath.Join(control.Home, ".codex") {
+						return nil, errors.New("codex: controlled native home mismatch")
+					}
+				case "AGENT_HARNESS_TASK_OUTPUT_PRUNE":
+					if v != "off" {
+						return nil, errors.New("codex: controlled maintenance override refused")
+					}
 				case "PATH":
 					if v != "/usr/bin:/bin" {
 						return nil, errors.New("codex: controlled path rejected")

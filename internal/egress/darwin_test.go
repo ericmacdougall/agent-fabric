@@ -1,6 +1,8 @@
 package egress
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -17,6 +19,48 @@ func TestDarwinWorkerOnlyExactProxy(t *testing.T) {
 		mutate(&q)
 		if _, err := DarwinWorkerProfile(q); err == nil {
 			t.Fatal("unsafe worker policy compiled")
+		}
+	}
+}
+
+func TestDarwinCodexHistoryBindsUnaliasedRoots(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(home, ".codex"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	base := "(version 1)\n(allow default)\n"
+	profile, err := DarwinCodexHistory(base, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{"sessions", "archived_sessions"} {
+		path := filepath.Join(home, ".codex", root)
+		if !strings.Contains(profile, `(deny file-read* (subpath "`+path+`"))`) {
+			t.Fatal("history root unprotected")
+		}
+		if err := os.Symlink(t.TempDir(), path); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := DarwinCodexHistory(base, home); err == nil {
+			t.Fatal("aliased history root accepted")
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(home, alias); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DarwinCodexHistory(base, alias); err == nil {
+		t.Fatal("aliased home accepted")
+	}
+	for _, invalid := range []string{"relative", "/", home + "/../other"} {
+		if _, err := DarwinCodexHistory(base, invalid); err == nil {
+			t.Fatal("invalid home accepted")
 		}
 	}
 }
