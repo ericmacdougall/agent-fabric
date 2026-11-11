@@ -20,7 +20,28 @@ func fakeFixed(mode string) {
 	if mode == "fixed-progress" {
 		fakeFixedHook(id, "SessionStart", mode)
 	}
-	emit(map[string]any{"type": "system", "subtype": "init", "session_id": id, "model": "claude-sonnet-public", "permissionMode": "manual", "tools": []string{"Write", "EndConversation"}, "mcp_servers": []any{}})
+	init := map[string]any{"type": "system", "subtype": "init", "session_id": id, "model": "claude-sonnet-public", "permissionMode": "default", "tools": []string{"Write", "EndConversation"}, "mcp_servers": []any{}}
+	switch mode {
+	case "fixed-init-session":
+		init["session_id"] = "other"
+	case "fixed-init-mcp":
+		init["mcp_servers"] = []string{"public-canary-mcp"}
+	case "fixed-init-manual", "fixed-init-bypassPermissions", "fixed-init-acceptEdits", "fixed-init-dontAsk", "fixed-init-plan", "fixed-init-auto":
+		init["permissionMode"] = strings.TrimPrefix(mode, "fixed-init-")
+	case "fixed-init-model":
+		init["model"] = "public-canary-other-model"
+	case "fixed-init-tools":
+		init["tools"] = []string{"Write", "public-canary-tool"}
+	case "fixed-init-missing-write":
+		init["tools"] = []string{"EndConversation"}
+	}
+	emit(init)
+	if mode == "fixed-init-duplicate" {
+		emit(init)
+	}
+	if strings.HasPrefix(mode, "fixed-init-") {
+		return
+	}
 	sc := bufio.NewScanner(os.Stdin)
 	if !sc.Scan() {
 		return
@@ -145,5 +166,34 @@ func TestFixedFailurePreservesFirstCategory(t *testing.T) {
 	f.refuseAs(fixedCleanup)
 	if f.failureReason() != fixedHook || f.Approved() {
 		t.Fatal("first refusal changed")
+	}
+}
+
+func TestFixedSessionInitRefusalCategories(t *testing.T) {
+	for _, tc := range []struct{ mode, category string }{
+		{"duplicate", "init_duplicate"}, {"session", "init_session"}, {"mcp", "init_mcp"},
+		{"manual", "init_permission"}, {"bypassPermissions", "init_permission"}, {"acceptEdits", "init_permission"},
+		{"dontAsk", "init_permission"}, {"plan", "init_permission"}, {"auto", "init_permission"},
+		{"model", "init_model"}, {"tools", "init_tools"}, {"missing-write", "init_missing_write"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			d := t.TempDir()
+			a := &Adapter{Launch: FixedLauncher([]string{os.Args[0]}), FixedWrite: &FixedWrite{Path: filepath.Join(d, "demo.txt"), RequiredHooks: map[string]int{"SessionStart": 1, "UserPromptSubmit": 1, "PreToolUse": 1, "Stop": 1}}, SingleTurn: true}
+			rec := &harnesstest.Recorder{}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			s, err := a.Start(ctx, harness.StartSpec{SessionID: "owned-session", Dir: d, Prompt: "public-canary-prompt", Env: map[string]string{modeEnv: "fixed-init-" + tc.mode, "FIXED_SESSION": "owned-session"}}, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			final, err := s.Wait(ctx)
+			if err != nil || final.Outcome != harness.OutcomeFailed || !strings.Contains(final.Reason, "category="+tc.category+" ") {
+				t.Fatalf("wrong init refusal %+v %v", final, err)
+			}
+			b, _ := json.Marshal(rec.Snapshot())
+			if strings.Contains(string(b), "public-canary") {
+				t.Fatal("init payload escaped")
+			}
+		})
 	}
 }

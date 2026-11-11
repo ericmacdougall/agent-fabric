@@ -41,7 +41,15 @@ func (s *session) handleFixed(line []byte) {
 		fail(fixedProtocol)
 		return
 	}
-	if w.SessionID != "" && w.SessionID != s.id || w.ParentToolUseID != nil || w.AgentID != "" {
+	if w.SessionID != "" && w.SessionID != s.id {
+		reason := fixedProtocol
+		if w.Type == "system" && w.Subtype == "init" {
+			reason = fixedInitSession
+		}
+		fail(reason)
+		return
+	}
+	if w.ParentToolUseID != nil || w.AgentID != "" {
 		fail(fixedProtocol)
 		return
 	}
@@ -49,8 +57,22 @@ func (s *session) handleFixed(line []byte) {
 	case "system":
 		switch w.Subtype {
 		case "init":
-			if s.fixedInit || w.SessionID != s.id || len(w.MCP) != 0 || w.PermissionMode != "manual" || !strings.HasPrefix(w.Model, "claude-sonnet-") {
-				fail(fixedInit)
+			var invalid fixedFailure
+			switch {
+			case s.fixedInit:
+				invalid = fixedInitDuplicate
+			case w.SessionID != s.id:
+				invalid = fixedInitSession
+			case len(w.MCP) != 0:
+				invalid = fixedInitMCP
+			case w.PermissionMode != "default":
+				// Native manual is a CLI alias. Its init wire value is default.
+				invalid = fixedInitMode
+			case !strings.HasPrefix(w.Model, "claude-sonnet-"):
+				invalid = fixedInitModel
+			}
+			if invalid != "" {
+				fail(invalid)
 				return
 			}
 			write := false
@@ -58,18 +80,18 @@ func (s *session) handleFixed(line []byte) {
 				switch tool {
 				case "Write":
 					if write {
-						fail(fixedInit)
+						fail(fixedInitTools)
 						return
 					}
 					write = true
 				case "EndConversation":
 				default:
-					fail(fixedInit)
+					fail(fixedInitTools)
 					return
 				}
 			}
 			if !write {
-				fail(fixedInit)
+				fail(fixedInitMissingWrite)
 				return
 			}
 			s.fixedInit = true
