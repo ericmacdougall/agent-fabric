@@ -32,6 +32,16 @@ func TestDemoBinaryIdentityRejectsTruncationAndOversize(t *testing.T) {
 }
 
 func TestDemoDoctorMetadataFailClosed(t *testing.T) {
+	if err := checkClaudeDoctor([]byte("Managed settings (remote): none configured for this organization\n")); err != nil {
+		t.Fatal(err)
+	}
+	skip := []byte("Managed settings (remote): not fetched — requires an Enterprise or Team subscription\n")
+	if checkClaudeDoctorForConsumer(skip, false) == nil || checkClaudeDoctorForConsumer(skip, true) != nil {
+		t.Fatal("consumer skip lost its account/source gate")
+	}
+	if !checkClaudeConsumerStatus([]byte(`{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"max"}`)) || checkClaudeConsumerStatus([]byte(`{"loggedIn":true,"authMethod":"api_key","apiProvider":"firstParty","subscriptionType":"max"}`)) {
+		t.Fatal("consumer account metadata gate failed")
+	}
 	if err := checkClaudeDoctor([]byte("Managed settings (remote): No server-managed settings configured\n")); err != nil {
 		t.Fatal(err)
 	}
