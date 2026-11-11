@@ -38,6 +38,7 @@ func TestFixedWriteRefusesBoundaries(t *testing.T) {
 	}{
 		{"sibling", filepath.Join(filepath.Dir(p), "other"), "fabric\n", "Write", "", true},
 		{"wrongContent", p, "extra", "Write", "", true}, {"shell", p, "fabric\n", "Bash", "", true},
+		{"read", p, "fabric\n", "Read", "", true},
 		{"subagent", p, "fabric\n", "Write", "agent1", true}, {"unbound", p, "fabric\n", "Write", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

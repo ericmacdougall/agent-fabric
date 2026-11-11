@@ -124,6 +124,9 @@ func runClaudeFixed(ctx context.Context, dir string, sink harness.Sink) error {
 	if err != nil || home != "/Users/eric" {
 		return errors.New("claude: reviewed subscription home required")
 	}
+	if err := claudecode.CheckFixedOwner(home); err != nil {
+		return err
+	}
 	// Local managed sources are not silently excluded. Their appearance requires
 	// review of policy and explicit inclusion rather than blanket loader disable.
 	for _, p := range []string{"/Library/Application Support/ClaudeCode/CLAUDE.md", "/Library/Application Support/ClaudeCode/managed-settings.json", "/Library/Application Support/ClaudeCode/managed-settings.d", "/Library/Application Support/ClaudeCode/managed-mcp.json", "/Library/Managed Preferences/com.anthropic.claudecode.plist", "/Library/Managed Preferences/eric/com.anthropic.claudecode.plist", filepath.Join(home, "Library/Managed Preferences/com.anthropic.claudecode.plist")} {
