@@ -335,7 +335,11 @@ func (s *session) onResponse(pk packet, raw []byte) {
 			return
 		}
 		if s.control != nil {
-			s.fail(fmt.Sprintf("codex rejected %s (code %d)", kind, pk.Error.Code))
+			reason := fmt.Sprintf("codex rejected %s (code %d)", kind, pk.Error.Code)
+			if kind == "thread" && pk.Error.Code == -32603 {
+				reason += " " + controlledThreadFailure(pk.Error.Message)
+			}
+			s.fail(reason)
 		} else {
 			s.fail(fmt.Sprintf("codex rejected %s: %s", kind, pk.Error.Message))
 		}
