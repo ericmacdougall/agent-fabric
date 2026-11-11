@@ -40,3 +40,21 @@ A drifted unrelated Control Room role does not stop a clean runner or rollback.
 PUBLIC rights, cross-database access restrictions, native Windows support, and
 the SCRAM-verifier replacement remain separate open work. These changes do not
 claim to close those targets.
+
+## Before starting the previous binary after a credential-reference deploy (goodqa#15661 R1)
+
+The binary-only rollback is data-safe: PR 50 changes no numbered migration, and the
+control schema lies outside the Fabric schema guard, so the previous binary (live
+d81e7af44514) reads the same database. It does not understand the connection
+reference modes. If the deploy switched the service configuration to
+`FABRIC_DSN_FILE`, `FABRIC_DSN_FILE_KEY` or `FABRIC_DSN_PASSWORD_FILE`
+(or the `_DATABASE` selector), the previous binary will refuse to start or fail to log
+in. Restore the previous raw configuration (the saved copy of the unit environment
+taken before the deploy; never print it) before starting the previous binary, then
+check that the service is active and `fab status` works. Take the saved copy before
+any deploy that changes the connection mode.
+
+If an operator revokes a table privilege from the export role by hand (for example
+`REVOKE SELECT ON public.missions`), PostgreSQL also removes the contracted column
+grants `missions(id, ticket)`. Run `fab db roles --control-only --prefix P ...` again
+to converge instead of revoking by hand.
