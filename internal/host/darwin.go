@@ -250,6 +250,14 @@ func (d *Darwin) profile(g Grant) (string, error) {
 // Start launches argv in a new session under sandbox-exec with an
 // allow-listed environment and FAB_RUN set.
 func (d *Darwin) Start(g Grant, argv []string, env []string, stdout, stderr *os.File) (Handle, error) {
+	return d.StartIO(g, argv, env, nil, stdout, stderr)
+}
+
+var _ StdinStarter = (*Darwin)(nil)
+
+// StartIO is Start with the worker's stdin connected (goodqa#15373 D1). A
+// nil stdin is Start.
+func (d *Darwin) StartIO(g Grant, argv []string, env []string, stdin, stdout, stderr *os.File) (Handle, error) {
 	if err := g.Validate(); err != nil {
 		return Handle{}, err
 	}
@@ -280,6 +288,10 @@ func (d *Darwin) Start(g Grant, argv []string, env []string, stdout, stderr *os.
 		return Handle{}, err
 	}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
+	cmd.Stdin = nil
+	if stdin != nil {
+		cmd.Stdin = stdin // a nil *os.File in the interface would not read as no stdin
+	}
 	cmd.ExtraFiles = []*os.File{rf}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {

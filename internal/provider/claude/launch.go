@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -122,6 +123,41 @@ func Argv(g host.Grant, l Launch) (argv []string, env []string, err error) {
 		"FAB_FENCE=" + strconv.FormatInt(g.Fence, 10),
 	}
 	return argv, env, nil
+}
+
+// StreamArgv is Argv for a launch whose prompt arrives on stdin as one
+// stream-json user message (goodqa#15373 D1): `-p PROMPT` becomes
+// `-p --input-format stream-json`, every other flag and the environment are
+// Argv's. The prompt is in no argv element, so it never shows in
+// /proc/<pid>/cmdline. StreamInput builds the stdin bytes.
+func StreamArgv(g host.Grant, l Launch) (argv []string, env []string, err error) {
+	argv, env, err = Argv(g, l)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(argv) < 3 || argv[1] != "-p" || argv[2] != l.Prompt {
+		return nil, nil, fmt.Errorf("%w: unexpected argv shape from Argv", host.ErrGrantInvalid)
+	}
+	out := make([]string, 0, len(argv)+2)
+	out = append(out, argv[0], "-p", "--input-format", "stream-json")
+	out = append(out, argv[3:]...)
+	return out, env, nil
+}
+
+// StreamInput is the stdin for a StreamArgv launch: one stream-json user
+// message carrying the prompt, newline-terminated.
+func StreamInput(prompt string) ([]byte, error) {
+	if prompt == "" {
+		return nil, fmt.Errorf("%w: empty prompt", host.ErrGrantInvalid)
+	}
+	b, err := json.Marshal(map[string]any{
+		"type":    "user",
+		"message": map[string]any{"role": "user", "content": prompt}, // the claudecode adapter's shape
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(b, '\n'), nil
 }
 
 // ProductionLaunch is the launch configuration fabd uses for every

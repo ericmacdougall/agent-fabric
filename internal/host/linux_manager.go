@@ -286,6 +286,14 @@ func (l *LinuxManager) preflightUnit(uid int, policy *egress.PolicyDescriptor) e
 // owns the worker's stdio, wraps it in `fab __sandbox`, and resolves the
 // unit's cgroup path before returning, so later inventory never needs the bus.
 func (l *LinuxManager) Start(g Grant, argv []string, env []string, stdout, stderr *os.File) (Handle, error) {
+	return l.StartIO(g, argv, env, nil, stdout, stderr)
+}
+
+var _ StdinStarter = (*LinuxManager)(nil)
+
+// StartIO is Start with the worker's stdin connected (goodqa#15373 D1). A
+// nil stdin is Start.
+func (l *LinuxManager) StartIO(g Grant, argv []string, env []string, stdin, stdout, stderr *os.File) (Handle, error) {
 	if err := g.Validate(); err != nil {
 		return Handle{}, err
 	}
@@ -376,6 +384,9 @@ func (l *LinuxManager) Start(g Grant, argv []string, env []string, stdout, stder
 	cmd := l.asWorkerContext(launchContext, "systemd-run", args...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.Stdin = nil
+	if stdin != nil {
+		cmd.Stdin = stdin // a nil *os.File in the interface would not read as no stdin
+	}
 	if err := cmd.Start(); err != nil {
 		cancelLaunch()
 		startErr := fmt.Errorf("systemd-run: %w", err)
