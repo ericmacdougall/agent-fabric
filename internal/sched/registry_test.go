@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"fabric/internal/dispatch"
 	"fabric/internal/domain"
@@ -35,6 +36,7 @@ type ioLauncher struct {
 	stdinMode []os.FileMode
 	stdinFD   []*os.File
 	startErr  error
+	waitErr   error
 	stop      chan struct{}
 }
 
@@ -73,7 +75,18 @@ func (l *ioLauncher) StartIO(g host.Grant, argv, env []string, stdin, stdout, st
 	return host.Handle{Run: g.Run}, l.startErr
 }
 
-func (l *ioLauncher) Wait(host.Handle) (int, error) { <-l.stop; return 0, nil }
+func (l *ioLauncher) Wait(host.Handle) (int, error) { <-l.stop; return 0, l.waitErr }
+
+// stopIOLauncher adds a verified Stop (ExitCleanup).
+type stopIOLauncher struct {
+	*ioLauncher
+	stops int
+}
+
+func (l *stopIOLauncher) Stop(h host.Handle, _ string, _ time.Duration) (host.StopReceipt, error) {
+	l.stops++
+	return host.StopReceipt{Run: h.Run, Verified: true}, nil
+}
 
 // plainLauncher has no StartIO.
 type plainLauncher struct{ ioLauncher }
@@ -120,6 +133,15 @@ func TestCheckConfig(t *testing.T) {
 	if err := CheckConfig(base, ln); err != nil {
 		t.Fatalf("a valid registry config was refused: %v", err)
 	}
+	// AC-4 gate: a worker account is accepted only once the worker-uid stdin
+	// test is recorded (RegistryWorkerUserProven)
+	wu := base
+	wu.WorkerUser = "fab-worker"
+	if err := CheckConfig(wu, ln); RegistryWorkerUserProven != (err == nil) {
+		t.Errorf("worker user with RegistryWorkerUserProven=%v: %v", RegistryWorkerUserProven, err)
+	} else if err != nil && !strings.Contains(err.Error(), "worker-uid stdin test") {
+		t.Errorf("unnamed worker-user refusal: %v", err)
+	}
 	for _, v := range []string{"", DispatchArgv} {
 		c := base
 		c.DispatchVia, c.Registry, c.TrustProvider = v, nil, false
@@ -137,7 +159,6 @@ func TestCheckConfig(t *testing.T) {
 		"no claude-code dispatcher": {func(c *Config) { c.Registry = dispatch.NewRegistry() }, ln, `needs a "claude-code" dispatcher`},
 		"nil registry":              {func(c *Config) { c.Registry = nil }, ln, `needs a "claude-code" dispatcher`},
 		"untrusted provider":        {func(c *Config) { c.TrustProvider = false }, ln, "needs --trust-provider"},
-		"worker user before AC-4":   {func(c *Config) { c.WorkerUser = "fabworker" }, ln, "worker-uid stdin test"},
 		"negative launch limit":     {func(c *Config) { c.LaunchLimit = -1 }, ln, "negative"},
 		"no runner DSN":             {func(c *Config) { c.RunnerDSN = "" }, ln, "runner database role"},
 		"exit cleanup without Stop": {func(c *Config) { c.ExitCleanup = true }, ln, "ExitCleanup needs"},
@@ -530,3 +551,59 @@ func TestDispatchViaMarkerUnread(t *testing.T) {
 }
 
 var _ io.Reader = (*os.File)(nil)
+
+// AC-7: a replayed START launches nothing (S1).
+func TestRegistryReplay(t *testing.T) {
+	st, ln, cfg := registrySetup(t, "m_reg7")
+	if _, err := st.Execute(context.Background(), "fabd", "start:r_reg7_1", domain.Command{Kind: domain.CmdStartAttempt, Mission: "m_reg7", Attempt: "r_reg7_1",
+		Host: cfg.Host, Role: "writer", Path: domain.ProviderClaudeCode}); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(st, cfg, ln).runOnce(context.Background(), "m_reg7"); err != nil {
+		t.Fatal(err)
+	}
+	if ln.ioStarts+ln.starts != 0 {
+		t.Fatalf("a replayed START launched %d workers", ln.ioStarts+ln.starts)
+	}
+}
+
+// AC-7: a Wait error settles nothing; the attempt is left to lease expiry.
+func TestRegistryWaitError(t *testing.T) {
+	st, _, cfg := registrySetup(t, "m_reg8")
+	ln := newIOLauncher()
+	ln.waitErr = errors.New("wait: no child")
+	done := make(chan struct{})
+	s := New(st, cfg, ln)
+	s.afterWaitDone = func() { close(done) }
+	if err := s.runOnce(context.Background(), "m_reg8"); err != nil {
+		t.Fatal(err)
+	}
+	writeSuccessfulStream(t, cfg, "r_reg8_1")
+	close(ln.stop)
+	waitSettlement(t, done)
+	if n := settlementCommands(t, st, "r_reg8_1"); n != 0 {
+		t.Fatalf("%d settlement commands after a Wait error, want 0", n)
+	}
+}
+
+// AC-7: with ExitCleanup, the verified Stop runs before the settle.
+func TestRegistryExitCleanup(t *testing.T) {
+	st, _, cfg := registrySetup(t, "m_reg9")
+	cfg.ExitCleanup = true
+	ln := &stopIOLauncher{ioLauncher: newIOLauncher()}
+	done := make(chan struct{})
+	s := New(st, cfg, ln)
+	if s.cfgErr != nil {
+		t.Fatal(s.cfgErr)
+	}
+	s.afterWaitDone = func() { close(done) }
+	if err := s.runOnce(context.Background(), "m_reg9"); err != nil {
+		t.Fatal(err)
+	}
+	writeSuccessfulStream(t, cfg, "r_reg9_1")
+	close(ln.stop)
+	waitSettlement(t, done)
+	if ln.stops != 1 || settlementCommands(t, st, "r_reg9_1") == 0 {
+		t.Fatalf("stops %d, settlement commands %d; want a Stop then a settle", ln.stops, settlementCommands(t, st, "r_reg9_1"))
+	}
+}

@@ -121,10 +121,12 @@ const (
 	DispatchRegistry = "registry"
 )
 
-// RegistryWorkerUserProven is flipped in the change that records the AC-4
-// worker-uid stdin test (TestStartIOWorkerFile) on t2-dev. Until then,
-// registry mode with a worker account is refused (goodqa#15373 AC-4).
-const RegistryWorkerUserProven = false
+// RegistryWorkerUserProven records that the AC-4 worker-uid stdin test
+// (TestStartIOWorkerFile: host.Linux, worker fab-worker through sudo and
+// systemd-run, a 0600 regular-file stdin owned by fabd's uid) passed on
+// t2-dev, systemd 255, sudoers Defaults use_pty without I/O logging
+// (goodqa#15373). While false, registry mode with a worker account is refused.
+const RegistryWorkerUserProven = true
 
 // Scheduler owns one host's dispatch loop.
 type Scheduler struct {
