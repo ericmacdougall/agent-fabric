@@ -153,14 +153,18 @@ END=""
 if [[ "$NATT" == 1 && "$ATT" =~ ^r_[a-z0-9_]+$ && -f "$WR/run/$ATT/stream.jsonl" ]]; then
   END=$(jq -c 'select(.type == "result") | .structured_output.end' "$WR/run/$ATT/stream.jsonl" | tail -1)
   STREAM_SHA=$(sha "$WR/run/$ATT/stream.jsonl")
+  # who wrote the stream: the recorded delegate says fake-1; the stdin fake's own
+  # refusal says fake-stdin-2, so fake-1 proves the stdin checks passed and it exec'd
+  PRODUCER=$(jq -r 'select(.type == "system" and .subtype == "init") | .claude_code_version' "$WR/run/$ATT/stream.jsonl" | head -1)
 fi
-rec "step=6 finished=$finished attempts=$NATT attempt=${ATT:-none} state=$STATE end=${END:-none} other_start_ack=$OTHER step_unit=${STEP_STATE:-gone} stream_sha=${STREAM_SHA:-none}"
+rec "step=6 finished=$finished attempts=$NATT attempt=${ATT:-none} state=$STATE producer=${PRODUCER:-none} end=${END:-none} other_start_ack=$OTHER step_unit=${STEP_STATE:-gone} stream_sha=${STREAM_SHA:-none}"
 STEP6_OK=1
 [[ $finished == 1 ]] || STEP6_OK=0
 [[ "$NATT" == 1 ]] || STEP6_OK=0
 [[ "$STATE" != LEASED && "$STATE" != RUNNING && "$STATE" != UNKNOWN ]] || STEP6_OK=0
 [[ "$OTHER" == 0 ]] || STEP6_OK=0
 [[ "$END" != *"stdin prompt missing or wrong"* && -n "$END" ]] || STEP6_OK=0
+[[ "${PRODUCER:-}" == fake-1 ]] || STEP6_OK=0
 [[ "$STEP_STATE" != failed ]] || STEP6_OK=0
 
 # --- step 7: restore by restart, then check
