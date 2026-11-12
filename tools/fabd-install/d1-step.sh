@@ -80,10 +80,10 @@ rec "step=3 stdin_fake=$BIN/fakeclaude-stdin pin=$PIN delegate_sha=$FAKE_SHA too
 # --- step 4: the disposable mission, and the hard gate
 case "$MISSION" in m_d1live_*) NAME=d1-live-fake;; m_d1sleep_*) NAME=d1-sleep-rh;; *) NAME=d1-rh-fake;; esac
 fabw mission new --id "$MISSION" --name "$NAME" --ticket "GoodQA goodqa#15373" --provider claude-code >/dev/null
-fabw admit --mission "$MISSION" >/dev/null
+fabw admit --mission "$MISSION" --key "admit-$MISSION" >/dev/null
 ALL=$(FABRIC_DSN="$DSN" "$FAB" job dispatch-candidates | grep -c . || true)
 CANDS=$(FABRIC_DSN="$DSN" "$FAB" job dispatch-candidates --only-mission "$MISSION")
-[[ "$CANDS" == "$MISSION" ]] || { fabw release --mission "$MISSION" >/dev/null 2>&1 || true; fail "dispatchable set is not exactly $MISSION: $(tr '\n' ' ' <<<"$CANDS")"; }
+[[ "$CANDS" == "$MISSION" ]] || { fabw release --mission "$MISSION" --key "release-$MISSION" >/dev/null 2>&1 || true; fail "dispatchable set is not exactly $MISSION: $(tr '\n' ' ' <<<"$CANDS")"; }
 rec "step=4 mission=$MISSION name=$NAME gate=exactly-one dispatchable_overall=$ALL"
 
 # --- step 5: stop the unit; one transient registry-mode fabd
@@ -103,6 +103,12 @@ done
 k=0; for j in "${!args[@]}"; do [[ "${args[$j]}" == daemon ]] && { k=$((j+1)); break; }; done
 (( k > 0 )) || fail "no daemon subcommand in the saved cmdline"
 FLAGS=$(printf ' %q' "${args[@]:$k}")
+# a planned stop: the health timer (goodqa#15805) gets a maintenance window, in its own state dir
+if systemctl --user cat "$UNIT-health.service" >/dev/null 2>&1 && [[ -x "$SVC/fabd-health.sh" ]]; then
+  HSD=$(systemctl --user show -p Environment --value "$UNIT-health.service" | tr ' ' '\n' | sed -n 's/^FABD_HEALTH_STATE_DIR=//p')
+  FABD_HEALTH_STATE_DIR=${HSD:-$HOME/.local/state/fabd-health} "$SVC/fabd-health.sh" --maintenance "$UNIT" 30 >/dev/null || fail "could not set the health maintenance window"
+  rec "step=5 health_maintenance=30min state_dir=${HSD:-default}"
+fi
 systemctl --user stop "$UNIT"
 systemd-run --user --quiet --unit "$STEP_UNIT" -p Restart=no -p EnvironmentFile="$SVC/env" -- /bin/bash -c \
   "$SVC/guard.sh && exec /usr/bin/flock -n $SVC/fabd.lock $FAB daemon --dispatch-via=registry --launch-limit 1 --only-mission $MISSION --provider $BIN/fakeclaude-stdin --trust-provider$FLAGS"
@@ -159,7 +165,7 @@ systemctl --user is-active --quiet "$UNIT" || RESTORE_OK=0
 rec "step=7 unit_sha_match=$([[ $R_SHA == "$SAVED_SHA" ]] && echo yes || echo no) argv_match=$([[ "$R_ARGV" == "$SAVED_ARGV" ]] && echo yes || echo no) dropins=$(dropins) state=$R_STATE runs_launched_total=$L0..$L1 restore_ok=$RESTORE_OK"
 
 # --- step 8: clean up the disposable mission
-if fabw release --mission "$MISSION" >/dev/null 2>&1; then REL=released; else REL="refused"; fi
+if fabw release --mission "$MISSION" --key "release-$MISSION" >/dev/null 2>&1; then REL=released; else REL="refused"; fi
 if [[ "$NATT" == 1 && "$ATT" =~ ^r_[a-z0-9_]+$ && -n "$WR" ]]; then
   rm -f -- "$WR/wt/$MISSION/.fakeclaude.state"
   rmdir -- "$WR/wt/$MISSION" 2>/dev/null || true
