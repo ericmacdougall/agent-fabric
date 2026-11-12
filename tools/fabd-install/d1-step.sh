@@ -19,6 +19,14 @@
 #            "fab: permission denied" (rehearsal run 4). Use
 #            ~/.local/share/fabric/d1 on live and in the rehearsal.
 #
+# Once fabd is stopped (step 5) an EXIT/INT/TERM guard restarts it on every
+# exit path until step 7 has restarted it (review r1-pr56 F1): a failing
+# command, a database error or a signal never leaves the unit stopped.
+#
+# Test hooks (d1step_test.go only): FABD_D1_TEST_PROC (a /proc stand-in for
+# the cmdline read) and FABD_D1_TEST_FAKE_SRC (the recorded fake's path),
+# accepted only with a temporary HOME under /tmp that is not the account's.
+#
 # Database access uses the administrative credential in ~/fabric-dev/test.env
 # (as install.sh does), passed to each process by environment, never argv;
 # every check runs read-only. Prints D1STEP key=value records; exit 0 only
@@ -27,6 +35,12 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 D=$HOME/fabric-dev
+PROC=/proc
+if [[ -n "${FABD_D1_TEST_PROC:-}${FABD_D1_TEST_FAKE_SRC:-}" ]]; then
+  pwhome=$(getent passwd "$(id -un)" | cut -d: -f6)
+  [[ "$HOME" == /tmp/?* && "$HOME" != "$pwhome" ]] || { echo "d1-step: the test hooks need a temporary HOME under /tmp" >&2; exit 2; }
+  PROC=${FABD_D1_TEST_PROC:-/proc}
+fi
 [[ $# == 5 ]] || { echo "usage: DB=<db> $0 UNIT SVC FAB MISSION BIN_DIR" >&2; exit 2; }
 UNIT=$1 SVC=$2 FAB=$3 MISSION=$4 BIN=$5
 : "${DB:?DB is required}"
@@ -38,7 +52,26 @@ STEP_UNIT=fabd-d1-step
 POLL_S=${D1_POLL_S:-600}
 QUIET_S=${D1_QUIET_S:-120}
 rec() { echo "D1STEP $*"; }
-fail() { rec "result=FAIL reason=\"$*\""; exit 3; }
+FAILED=0 RESTORED=0
+fail() { rec "result=FAIL reason=\"$*\""; FAILED=1; exit 3; }
+# the exit guard, armed just before the unit is stopped (step 5)
+on_exit() {
+  local rc=$? s
+  trap - EXIT INT TERM
+  if [[ $RESTORED == 0 ]]; then
+    systemctl --user stop "$STEP_UNIT" >/dev/null 2>&1 || true
+    systemctl --user start "$UNIT" || true
+    for (( s=0; s<30; s++ )); do systemctl --user is-active --quiet "$UNIT" && break; sleep 1; done
+    rec "restore=on-exit rc=$rc unit_active=$(systemctl --user is-active "$UNIT" 2>/dev/null || true)"
+    [[ $FAILED == 1 ]] || rec "result=FAIL reason=\"aborted after stopping $UNIT (rc $rc); the exit guard restarted it: check it, and run deploy-rollback.sh if it is not healthy\""
+    exit 3
+  fi
+  if [[ $rc != 0 && $FAILED == 0 ]]; then
+    rec "result=FAIL reason=\"aborted after the restore (rc $rc): the step-7/8 checks did not complete\""
+    exit 3
+  fi
+  exit "$rc"
+}
 
 ADMIN=$(set -a; . "$D/test.env" >/dev/null; printf '%s' "${FABRIC_TEST_DSN:-}")
 [[ -n "$ADMIN" ]] || fail "test.env sets no FABRIC_TEST_DSN"
@@ -60,7 +93,7 @@ dropins() { systemctl --user cat "$UNIT" | grep -c "^# .*/$UNIT.service.d/" || t
 cmdline() {  # the fab daemon child of the flock wrapper (MainPID)
   local m c; m=$(systemctl --user show -p MainPID --value "$UNIT")
   c=$(pgrep -P "$m" | head -1); [[ -n "$c" ]] || c=$m
-  tr '\0' '\n' < "/proc/$c/cmdline"
+  tr '\0' '\n' < "$PROC/$c/cmdline"
 }
 SAVED_SHA=$(sha "$UF")
 SAVED_ARGV=$(cmdline)
@@ -74,7 +107,7 @@ rec "step=2 unit=$UNIT unit_sha=$SAVED_SHA nrestarts=$SAVED_NRESTARTS runs_launc
 PIN=$(sed -n 's/^const StdinFakeSHA256 = "\([0-9a-f]\{64\}\)"$/\1/p' "$REPO/internal/dispatch/claudecode.go")
 FAKE_SHA=$(sed -n 's/^FAKE_SHA=\([0-9a-f]\{64\}\)$/\1/p' "$HERE/install.sh")
 [[ -n "$PIN" && -n "$FAKE_SHA" ]] || fail "could not read the pins from the repo"
-FAKE_SRC=$(sed -n 's/^FAKE=\(\/[A-Za-z0-9\/._-]*\)$/\1/p' "$HERE/install.sh")
+FAKE_SRC=${FABD_D1_TEST_FAKE_SRC:-$(sed -n 's/^FAKE=\(\/[A-Za-z0-9\/._-]*\)$/\1/p' "$HERE/install.sh")}
 [[ "$BIN" == "$HOME/.local/share/fabric/"?* ]] || fail "BIN_DIR must be under $HOME/.local/share/fabric (a worker sandbox read root)"
 [[ -n "$FAKE_SRC" && "$(sha "$FAKE_SRC")" == "$FAKE_SHA" ]] || fail "the recorded fake ${FAKE_SRC:-?} does not have install.sh's FAKE_SHA"
 mkdir -p -m 0755 "$BIN"
@@ -125,57 +158,64 @@ if systemctl --user cat "$UNIT-health.service" >/dev/null 2>&1 && [[ -x "$SVC/fa
   FABD_HEALTH_STATE_DIR=${HSD:-$HOME/.local/state/fabd-health} "$SVC/fabd-health.sh" --maintenance "$UNIT" 30 >/dev/null || fail "could not set the health maintenance window"
   rec "step=5 health_maintenance=30min state_dir=${HSD:-default}"
 fi
+# a leftover failed transient from an aborted run would make systemd-run refuse the name
+systemctl --user reset-failed "$STEP_UNIT" >/dev/null 2>&1 || true
+! systemctl --user is-active --quiet "$STEP_UNIT" || fail "$STEP_UNIT is already running"
+trap on_exit EXIT
+trap 'exit 130' INT TERM
 systemctl --user stop "$UNIT"
-systemd-run --user --quiet --unit "$STEP_UNIT" -p Restart=no -p EnvironmentFile="$SVC/env" -- /bin/bash -c \
+systemd-run --user --quiet --collect --unit "$STEP_UNIT" -p Restart=no -p EnvironmentFile="$SVC/env" -- /bin/bash -c \
   "$SVC/guard.sh && exec /usr/bin/flock -n $SVC/fabd.lock $FAB daemon --dispatch-via=registry --launch-limit 1 --only-mission $MISSION --provider $BIN/fakeclaude-stdin --trust-provider$FLAGS"
 rec "step=5 transient=$STEP_UNIT flags=registry,launch-limit=1,only-mission=$MISSION host=$HOST"
 
 # --- step 6: poll read-only for the FINISH, then stop the transient unit
 finished=0
 for (( s=0; s<POLL_S; s+=5 )); do
-  n=$(qr "SELECT count(*) FROM commands WHERE mission_id = '$MISSION' AND command_id LIKE 'finish:%'")
-  [[ "$n" -ge 1 ]] && { finished=1; break; }
+  n=$(qr "SELECT count(*) FROM commands WHERE mission_id = '$MISSION' AND command_id LIKE 'finish:%'" || echo ERR)
+  [[ "$n" =~ ^[0-9]+$ && "$n" -ge 1 ]] && { finished=1; break; }
   systemctl --user is-active --quiet "$STEP_UNIT" || break
   sleep 5
 done
 STEP_STATE=$(systemctl --user is-failed "$STEP_UNIT" 2>/dev/null || true)
 systemctl --user stop "$STEP_UNIT" 2>/dev/null || true
-ATT=$(qr "SELECT id FROM attempts WHERE mission_id = '$MISSION' ORDER BY fence")
+ATT=$(qr "SELECT id FROM attempts WHERE mission_id = '$MISSION' ORDER BY fence" || echo ERR)
 if [[ $finished == 0 && "$ATT" =~ ^r_[A-Za-z0-9_]+$ ]]; then  # timeout: stop the worker's unit; the attempt is left to lease expiry
   systemctl --user stop "fab-${ATT//_/-}.service" 2>/dev/null || true
   rec "step=6 timeout=yes worker_unit=fab-${ATT//_/-}.service attempt_left_to_lease_expiry=$ATT"
 fi
-NATT=$(grep -c . <<<"$ATT" || true)
-STATE=$(qr "SELECT state FROM attempts WHERE mission_id = '$MISSION' ORDER BY fence DESC LIMIT 1")
-OTHER=$(qr "SELECT count(*) FROM commands WHERE created_at > '$T0' AND kind IN ('START_ATTEMPT','ACK_START') AND mission_id <> '$MISSION'")
+NATT=$(grep -c . <<<"$ATT" || true); [[ "$ATT" != ERR ]] || NATT=ERR
+STATE=$(qr "SELECT state FROM attempts WHERE mission_id = '$MISSION' ORDER BY fence DESC LIMIT 1" || echo ERR)
+OTHER=$(qr "SELECT count(*) FROM commands WHERE created_at > '$T0' AND kind IN ('START_ATTEMPT','ACK_START') AND mission_id <> '$MISSION'" || echo ERR)
 WR=$(grep -A1 -x -- '--work-root' <<<"$SAVED_ARGV" | tail -n +2 | head -1)
 END=""
 if [[ "$NATT" == 1 && "$ATT" =~ ^r_[a-z0-9_]+$ && -f "$WR/run/$ATT/stream.jsonl" ]]; then
-  END=$(jq -c 'select(.type == "result") | .structured_output.end' "$WR/run/$ATT/stream.jsonl" | tail -1)
+  END=$(jq -c 'select(.type == "result") | .structured_output.end' "$WR/run/$ATT/stream.jsonl" 2>/dev/null | tail -1 || true)
   STREAM_SHA=$(sha "$WR/run/$ATT/stream.jsonl")
   # who wrote the stream: the recorded delegate says fake-1; the stdin fake's own
   # refusal says fake-stdin-2, so fake-1 proves the stdin checks passed and it exec'd
-  PRODUCER=$(jq -r 'select(.type == "system" and .subtype == "init") | .claude_code_version' "$WR/run/$ATT/stream.jsonl" | head -1)
+  PRODUCER=$(jq -r 'select(.type == "system" and .subtype == "init") | .claude_code_version' "$WR/run/$ATT/stream.jsonl" 2>/dev/null | head -1 || true)
 fi
 rec "step=6 finished=$finished attempts=$NATT attempt=${ATT:-none} state=$STATE producer=${PRODUCER:-none} end=${END:-none} other_start_ack=$OTHER step_unit=${STEP_STATE:-gone} stream_sha=${STREAM_SHA:-none}"
 STEP6_OK=1
 [[ $finished == 1 ]] || STEP6_OK=0
 [[ "$NATT" == 1 ]] || STEP6_OK=0
-[[ "$STATE" != LEASED && "$STATE" != RUNNING && "$STATE" != UNKNOWN ]] || STEP6_OK=0
+[[ "$STATE" =~ ^[A-Z_]+$ && "$STATE" != ERR && "$STATE" != LEASED && "$STATE" != RUNNING && "$STATE" != UNKNOWN ]] || STEP6_OK=0
 [[ "$OTHER" == 0 ]] || STEP6_OK=0
 [[ "$END" != *"stdin prompt missing or wrong"* && -n "$END" ]] || STEP6_OK=0
 [[ "${PRODUCER:-}" == fake-1 ]] || STEP6_OK=0
 [[ "$STEP_STATE" != failed ]] || STEP6_OK=0
 
 # --- step 7: restore by restart, then check
-systemctl --user start "$UNIT"
+systemctl --user start "$UNIT" || true
+RESTORED=1  # the exit guard now only reports
 for (( s=0; s<30; s++ )); do systemctl --user is-active --quiet "$UNIT" && break; sleep 1; done
 sleep 3
-R_SHA=$(sha "$UF"); R_ARGV=$(cmdline); R_STATE=$(systemctl --user is-failed "$UNIT" || true)
-L0=$(LAUNCHED)
+R_SHA=$(sha "$UF"); R_ARGV=$(cmdline || true); R_STATE=$(systemctl --user is-failed "$UNIT" || true)
+L0=$(LAUNCHED || echo ERR)
 sleep "$QUIET_S"
-L1=$(LAUNCHED)
+L1=$(LAUNCHED || echo ERR)
 RESTORE_OK=1
+[[ "$L0" =~ ^[0-9]+$ ]] || RESTORE_OK=0
 [[ "$R_SHA" == "$SAVED_SHA" ]] || RESTORE_OK=0
 [[ "$(dropins)" == 0 ]] || RESTORE_OK=0
 [[ "$R_ARGV" == "$SAVED_ARGV" ]] || RESTORE_OK=0
