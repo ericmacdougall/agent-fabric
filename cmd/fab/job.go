@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/jackc/pgx/v5"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -32,7 +34,7 @@ import (
 // daemon launched it outside the sandbox. `show` reads legacy rows.
 func jobMain(args []string) error {
 	if len(args) == 0 {
-		return errors.New("job run|watch|show")
+		return errors.New("job run|watch|show|dispatch-candidates")
 	}
 	switch args[0] {
 	case "run", "watch":
@@ -54,8 +56,31 @@ func jobMain(args []string) error {
 			fmt.Println(string(b))
 			return nil
 		})
+	case "dispatch-candidates":
+		// goodqa#15373 live-step gate: the missions dispatch would start now,
+		// from the scheduler's own query, inside a READ ONLY transaction.
+		fs := flag.NewFlagSet("job dispatch-candidates", flag.ContinueOnError)
+		only := fs.String("only-mission", "", "restrict to this mission id, as fab daemon --only-mission does")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return withStore(func(ctx context.Context, st *store.Store) error {
+			tx, err := st.Pool().BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback(ctx) //nolint:errcheck
+			ids, err := sched.DispatchCandidates(ctx, tx, nil, domain.MissionID(*only))
+			if err != nil {
+				return err
+			}
+			for _, id := range ids {
+				fmt.Println(id)
+			}
+			return nil
+		})
 	}
-	return errors.New("job run|watch|show")
+	return errors.New("job run|watch|show|dispatch-candidates")
 }
 
 func selfPath() string {

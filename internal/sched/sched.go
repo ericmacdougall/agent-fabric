@@ -606,29 +606,10 @@ func (s *Scheduler) dispatch(ctx context.Context) (int, error) {
 	// SQL, inside the LIMIT window, so a run of anthropic-api missions at
 	// higher priority can neither crowd a claude-code one out nor be
 	// started, parked or retried here; they wait for `fab mission run`.
-	rows, err := s.st.Pool().Query(ctx, `SELECT m.id FROM missions m
-		WHERE m.execution = 'ADMITTED' AND m.terminal = 'NONE' AND m.provider = 'claude-code'
-		  AND NOT EXISTS (SELECT 1 FROM waits w WHERE w.mission_id = m.id)
-		  AND (m.not_before IS NULL OR m.not_before <= now())
-		  AND NOT (m.id = ANY($1))
-		  AND NOT EXISTS (SELECT 1 FROM outbox_cursors hc WHERE hc.consumer = 'sched.hold.' || m.id)
-		  AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = m.id
-		                  AND a.state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING'))
-		  AND ($2 = '' OR m.id = $2)
-		ORDER BY m.priority, m.id LIMIT 10`, s.parkedIDs(), string(s.cfg.OnlyMission))
+	ids, err := DispatchCandidates(ctx, s.st.Pool(), s.parkedIDs(), s.cfg.OnlyMission)
 	if err != nil {
 		return 0, err
 	}
-	var ids []domain.MissionID
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		ids = append(ids, domain.MissionID(id))
-	}
-	rows.Close()
 	n := 0
 	for _, id := range ids {
 		// goodqa#15373 AC-10: the limit is checked before START, so no
@@ -1371,4 +1352,41 @@ func writeExclusive(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Chmod(path, mode) // umask cannot widen or narrow it
+}
+
+// Querier is the read side DispatchCandidates needs (a pool or a transaction).
+type Querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// DispatchCandidates is the dispatch selection, shared by the scheduler and
+// `fab job dispatch-candidates` (the goodqa#15373 live-step gate), so the gate
+// cannot drift from what dispatch would start. It only reads.
+func DispatchCandidates(ctx context.Context, q Querier, parked []string, only domain.MissionID) ([]domain.MissionID, error) {
+	if parked == nil {
+		parked = []string{}
+	}
+	rows, err := q.Query(ctx, `SELECT m.id FROM missions m
+		WHERE m.execution = 'ADMITTED' AND m.terminal = 'NONE' AND m.provider = 'claude-code'
+		  AND NOT EXISTS (SELECT 1 FROM waits w WHERE w.mission_id = m.id)
+		  AND (m.not_before IS NULL OR m.not_before <= now())
+		  AND NOT (m.id = ANY($1))
+		  AND NOT EXISTS (SELECT 1 FROM outbox_cursors hc WHERE hc.consumer = 'sched.hold.' || m.id)
+		  AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = m.id
+		                  AND a.state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING'))
+		  AND ($2 = '' OR m.id = $2)
+		ORDER BY m.priority, m.id LIMIT 10`, parked, string(only))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []domain.MissionID
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, domain.MissionID(id))
+	}
+	return ids, rows.Err()
 }

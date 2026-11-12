@@ -4,6 +4,8 @@ package sched
 // (no units, no provider) and a real Postgres, like owner_test.go.
 
 import (
+	"github.com/jackc/pgx/v5"
+
 	"context"
 	"encoding/json"
 	"errors"
@@ -605,5 +607,30 @@ func TestRegistryExitCleanup(t *testing.T) {
 	waitSettlement(t, done)
 	if ln.stops != 1 || settlementCommands(t, st, "r_reg9_1") == 0 {
 		t.Fatalf("stops %d, settlement commands %d; want a Stop then a settle", ln.stops, settlementCommands(t, st, "r_reg9_1"))
+	}
+}
+
+// The live-step gate (fab job dispatch-candidates) runs the dispatch query
+// in a READ ONLY transaction and honours --only-mission.
+func TestDispatchCandidatesReadOnly(t *testing.T) {
+	st, _, _ := registrySetup(t, "m_dc0")
+	admitSpec(t, st, "m_dc1", domain.ProviderClaudeCode, 1)
+	admitSpec(t, st, "m_dcapi", domain.ProviderAnthropicAPI, 1)
+	ctx := context.Background()
+	tx, err := st.Pool().BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	all, err := DispatchCandidates(ctx, tx, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(all) != "[m_dc0 m_dc1]" {
+		t.Fatalf("candidates %v, want [m_dc0 m_dc1]", all)
+	}
+	one, err := DispatchCandidates(ctx, tx, nil, "m_dc0")
+	if err != nil || fmt.Sprint(one) != "[m_dc0]" {
+		t.Fatalf("only-mission candidates %v %v, want [m_dc0]", one, err)
 	}
 }
