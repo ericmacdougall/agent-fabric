@@ -91,6 +91,10 @@ type Grant struct {
 	// when FABRIC_REVIEW_GATE=1 (Options.ReviewGate); with the flag off a grant
 	// that sets it is refused rather than silently running ungated.
 	ReviewGate ReviewGateConfig `json:"review_gate,omitempty"`
+	// Compaction opts into context compaction (goodqa#15361 N3); Betas lists
+	// extra anthropic-beta values from a closed allowlist.
+	Compaction *CompactionGrant `json:"compaction,omitempty"`
+	Betas      []string         `json:"betas,omitempty"`
 }
 
 func LoadGrant(path string) (Grant, error) {
@@ -147,6 +151,7 @@ func (g Grant) Validate() error {
 	if err := validateReviewGateConfig(g.ReviewGate); err != nil {
 		p = append(p, err.Error())
 	}
+	p = append(p, validateCompaction(g)...)
 	if len(p) > 0 {
 		return errors.New("grant refused: " + strings.Join(p, "; "))
 	}
@@ -331,7 +336,11 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 	if _, err := keySrc(lctx); err != nil {
 		return nil, err
 	}
-	cl, err := anthropic.New(anthropic.Config{BaseURL: g.BaseURL, Version: g.AnthropicVersion, Key: keySrc, HTTP: o.HTTP, Vouched: &keys.vouched})
+	loopExtra, betas, err := compactionExtra(g)
+	if err != nil {
+		return nil, err
+	}
+	cl, err := anthropic.New(anthropic.Config{BaseURL: g.BaseURL, Version: g.AnthropicVersion, Key: keySrc, HTTP: o.HTTP, Vouched: &keys.vouched, Betas: betas})
 	if err != nil {
 		return nil, err
 	}
@@ -404,8 +413,9 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 		DB: db, Ledger: led, Provider: loopProvider, Tools: toolset, Guard: oracle,
 		Redact:  keys,
 		Attempt: domain.AttemptID(g.Attempt), Fence: fence,
-		Model: g.Model, MaxTokens: g.MaxTokens, System: g.System, Extra: g.Extra, Prompt: g.Prompt,
-		MaxTurns: g.MaxTurns, MaxTotalTokens: g.MaxTotalTokens, Wall: time.Duration(g.WallSeconds) * time.Second, RestartCap: restartCap(g.RestartCap),
+		Model: g.Model, MaxTokens: g.MaxTokens, System: g.System, Extra: loopExtra, Prompt: g.Prompt,
+		Compaction: g.Compaction.agentConfig(),
+		MaxTurns:   g.MaxTurns, MaxTotalTokens: g.MaxTotalTokens, Wall: time.Duration(g.WallSeconds) * time.Second, RestartCap: restartCap(g.RestartCap),
 		Prices: prices, BillingMode: agent.BillingAPIKey, Pin: g.pin(o.ReviewGate),
 	})
 	if err != nil {
@@ -746,14 +756,16 @@ func (g Grant) pin(reviewGate bool) string {
 		review = reviewGatePin(g.ReviewGate)
 	}
 	b, _ := json.Marshal(struct {
-		Allow  []string
-		Hooks  [][]string
-		Caps   any
-		Wall   int
-		Turns  int
-		Tokens int64
-		Review string `json:",omitempty"`
-	}{g.ShellAllow, g.OracleHooks, g.Caps, g.WallSeconds, g.MaxTurns, g.MaxTotalTokens, review})
+		Allow      []string
+		Hooks      [][]string
+		Caps       any
+		Wall       int
+		Turns      int
+		Tokens     int64
+		Review     string           `json:",omitempty"`
+		Compaction *CompactionGrant `json:",omitempty"`
+		Betas      []string         `json:",omitempty"`
+	}{g.ShellAllow, g.OracleHooks, g.Caps, g.WallSeconds, g.MaxTurns, g.MaxTotalTokens, review, g.Compaction, g.Betas})
 	return string(b)
 }
 

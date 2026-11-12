@@ -368,3 +368,17 @@ func Compacted(summary, text string, in, out, compIn, compOut int) []Ev {
 		ev("message_stop", `{"type":"message_stop"}`))
 	return e
 }
+
+// CompactedToolUse is Compacted but the message ends in a tool_use.
+func CompactedToolUse(summary, id, name, inputJSON string, in, out, compIn, compOut int) []Ev {
+	e := []Ev{start(in, 1),
+		ev("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"compaction","content":null}}`),
+		ev("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"compaction_delta","content":`+js(summary)+`}}`),
+		ev("content_block_stop", `{"type":"content_block_stop","index":0}`),
+		ev("content_block_start", `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":`+js(id)+`,"name":`+js(name)+`,"input":{}}}`),
+		ev("content_block_delta", `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":`+js(inputJSON)+`}}`),
+		ev("content_block_stop", `{"type":"content_block_stop","index":1}`),
+		ev("message_delta", fmt.Sprintf(`{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"input_tokens":%d,"output_tokens":%d,"iterations":[{"type":"compaction","input_tokens":%d,"output_tokens":%d},{"type":"message","input_tokens":%d,"output_tokens":%d}]}}`, in, out, compIn, compOut, in, out)),
+		ev("message_stop", `{"type":"message_stop"}`)}
+	return e
+}

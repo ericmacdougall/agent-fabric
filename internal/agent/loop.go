@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"fabric/internal/domain"
-	"fabric/internal/store"
 )
 
 // Config wires one attempt's loop. Model, prices and caps come from the
@@ -49,6 +48,9 @@ type Config struct {
 	// Pin is extra configuration the caller wants a resume to match (shell
 	// allowlist, oracle hooks, caps); it joins the config hash.
 	Pin string
+
+	// Compaction is the validated grant's compaction setting (goodqa#15361 N3).
+	Compaction CompactionConfig
 
 	// Crash is a test seam called at named points; production leaves it nil.
 	Crash func(point string)
@@ -262,7 +264,25 @@ func (l *Loop) run(ctx context.Context, start bool) (Outcome, error) {
 			}
 			// An assistant message with no tool calls is terminal: classify
 			// why (this also covers a crash between the commit and Finish).
-			return l.terminalFor(ctx, last, turns)
+			// Mode C turns a context overflow into one compact-and-retry.
+			if c.Compaction.Mode != CompactClient || classifyName(last.StopReason) != StopContext {
+				return l.terminalFor(ctx, last, turns)
+			}
+			comps, err := c.DB.Compactions(ctx, c.Attempt)
+			if err != nil {
+				return Outcome{}, err
+			}
+			if n := len(comps); n == 0 || comps[n-1].Idx <= last.Idx {
+				out, done, err := l.compactClient(ctx, msgs, comps, turns)
+				if err != nil {
+					return Outcome{}, err
+				}
+				if done {
+					return out, nil
+				}
+				continue
+			}
+			// The overflow was compacted: send the retry below.
 		}
 		if turns >= c.MaxTurns {
 			return l.finish(ctx, OutcomeMaxTurns, strconv.Itoa(turns)+" turns", turns)
@@ -360,71 +380,41 @@ func (l *Loop) turn(ctx context.Context, msgs []Message, turns int) (Outcome, bo
 	for _, t := range c.Tools {
 		req.Tools = append(req.Tools, t.Def())
 	}
-	for _, m := range msgs {
-		blocks, err := contentBlocks(m.Content)
-		if err != nil {
+	var comps []Compaction
+	if c.Compaction.Mode == CompactClient {
+		var err error
+		if comps, err = c.DB.Compactions(ctx, c.Attempt); err != nil {
 			return Outcome{}, false, err
 		}
-		req.Messages = append(req.Messages, Msg{Role: m.Role, Content: blocks})
+	}
+	rm, err := l.requestMessages(msgs, comps)
+	if err != nil {
+		return Outcome{}, false, err
+	}
+	req.Messages = rm
+	// The estimated-size trigger never fires right after a compaction (the
+	// kept history may legitimately exceed a small trigger).
+	recent := len(comps) > 0 && comps[len(comps)-1].Idx >= len(msgs)-4
+	if c.Compaction.Mode == CompactClient && c.Compaction.TriggerTokens > 0 && !recent &&
+		estTokens(requestBytes(c, rm, req.Tools)) > c.Compaction.TriggerTokens {
+		return l.compactClient(ctx, msgs, comps, turns)
 	}
 	idx := len(msgs)
 	l.crash("before_hold")
-
-	held := map[int]int64{}
-	var spent int64
-	var budgetViolation string
-	reserved := map[int][]store.Reservation{}
-	l.settleE = nil
-	hooks := Hooks{
-		BeforeAttempt: func(n, bodyBytes int) error {
-			amt := c.Prices.WorstCase(bodyBytes, c.MaxTokens, c.MaxServerToolUses)
-			rs, err := c.Ledger.Hold(ctx, l.holdKey(idx, n), amt)
-			if err != nil {
-				return err
-			}
-			held[n] = amt
-			reserved[n] = rs
-			l.crash("after_hold")
-			return nil
-		},
-		AfterAttempt: func(r AttemptRecord) {
-			actual := l.charge(r, held[r.N])
-			spent += actual
-			if r.Outcome == "ok" {
-				// The hold is the worst case; a larger actual means the bound did
-				// not hold. Settle the full actual below, then refuse the turn.
-				if actual > held[r.N] {
-					budgetViolation = fmt.Sprintf("actual cost %d exceeded held reservation %d", actual, held[r.N])
-				}
-				if r.Usage != nil && r.Usage.ServerToolUses > c.MaxServerToolUses {
-					if budgetViolation != "" {
-						budgetViolation += "; "
-					}
-					budgetViolation += fmt.Sprintf("server-tool uses %d exceeded configured maximum %d", r.Usage.ServerToolUses, c.MaxServerToolUses)
-				}
-			}
-			if err := c.Ledger.Settle(ctx, reserved[r.N], actual); err != nil && l.settleE == nil {
-				l.settleE = err
-			}
-		},
-		OnEvent: func(n int) { l.crash("mid_stream") },
-	}
-	res, err := c.Provider.Send(ctx, req, hooks)
-	if l.settleE != nil {
-		return Outcome{}, false, l.settleE
+	res, spent, budgetViolation, err := l.heldSend(ctx, req, idx, func(bodyBytes int) int64 {
+		amt := c.Prices.WorstCase(bodyBytes, c.MaxTokens, c.MaxServerToolUses)
+		if c.Compaction.Mode == CompactServer {
+			// The compaction pass: one more worst case, bounded by the grant's
+			// compaction_output_cap (goodqa#15361 FN-5).
+			amt += c.Prices.WorstCase(bodyBytes, c.Compaction.OutputCap, 0)
+		}
+		return amt
+	})
+	if errors.Is(err, ErrContextOverflow) && c.Compaction.Mode == CompactClient {
+		return l.compactClient(ctx, msgs, comps, turns)
 	}
 	if err != nil {
-		var eb *ErrBudget
-		if errors.As(err, &eb) {
-			o, ferr := l.finish(ctx, OutcomeBudgetExhausted, eb.Error(), turns)
-			return o, true, ferr
-		}
-		var pe *ParkError
-		if errors.As(err, &pe) {
-			o, ferr := l.finish(ctx, OutcomeParked, pe.Reason, turns)
-			return o, true, ferr
-		}
-		return Outcome{}, false, err
+		return l.sendFailure(ctx, err, turns)
 	}
 	if budgetViolation != "" {
 		o, ferr := l.finish(ctx, OutcomeBudgetExhausted, budgetViolation, turns)
