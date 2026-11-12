@@ -2,3 +2,9 @@ agent-fabric
 Copyright 2026 Eric MacDougall
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Portions of the edit tool design (exact-first then normalised matching of
+edit spans, atomic replace) are ported from earendil-works/pi, commit
+2443c687e3fb, MIT License (LICENSE sha256
+0457f5bcec3b3b211605dfb5d1a49042fd638f3686a410fe099c24a25af13c48).
+Only designs and algorithms are ported; no pi script or installer is run.

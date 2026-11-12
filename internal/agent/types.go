@@ -123,6 +123,14 @@ type Tool interface {
 	Run(ctx context.Context, input json.RawMessage) (out string, isError bool)
 }
 
+// InterruptNoter is implemented by side-effecting tools that can add facts to
+// the INTERRUPTED text of a call found EXECUTING on resume (for example the
+// file's current digest next to its recorded pre-image). It also lets the tool
+// remove what that call left behind. It must not execute the call again.
+type InterruptNoter interface {
+	InterruptedNote(callID string, input json.RawMessage) string
+}
+
 // ReviewPause is trusted control metadata returned by a DurableReviewTool.
 // Ordinary tool output is always data, even when it contains the same JSON.
 type ReviewPause struct {

@@ -489,7 +489,11 @@ func (l *Loop) resolveTools(ctx context.Context, last Message, calls []ToolCall)
 		case "DONE", "INTERRUPTED":
 		case "EXECUTING":
 			if tc.SideEffecting {
-				text := c.Redact.Redact(interruptedText)
+				note := ""
+				if n, ok := l.tools[tc.Name].(InterruptNoter); ok {
+					note = n.InterruptedNote(tc.ID, tc.Input)
+				}
+				text := c.Redact.Redact(interruptedText + note)
 				if err := c.DB.FinishTool(ctx, c.Attempt, c.Fence, tc.ID, "INTERRUPTED", []byte(text), true); err != nil {
 					return err
 				}
