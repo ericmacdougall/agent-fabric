@@ -39,28 +39,40 @@ func newInstall(t *testing.T, policy string) *installEnv {
 		}
 	}
 	e.fab = filepath.Join(e.bin, "fab-live")
-	writeExe(t, e.bin, "fab-live", `[[ "$1" == version ]] && echo "fab bd56178ed865"; exit 0`)
+	// fab metrics reports build info unless the file "metrics-fail" exists
+	writeExe(t, e.bin, "fab-live", `
+case "$1" in
+  version) echo "fab bd56178ed865";;
+  metrics) [[ -e "`+root+`/metrics-fail" ]] || echo 'fabric_build_info{version="bd56178ed865"} 1';;
+esac
+exit 0`)
 	e.fake = filepath.Join(e.bin, "fakeclaude")
 	writeExe(t, e.bin, "fakeclaude", "exit 0\n")
 	e.emit = filepath.Join(e.bin, "ops_watch.py")
-	writeExe(t, e.bin, "ops_watch.py", `[[ -e "`+root+`/emit-fails" ]] && exit 1; printf '%s\n' "$3" >> "`+root+`/emits.jsonl"; echo 1`)
+	// the emitter advertises the goodqa#15827 forwarder unless "no-forwarder" exists
+	writeExe(t, e.bin, "ops_watch.py", `
+if [[ "$1" == capabilities ]]; then [[ -e "`+root+`/no-forwarder" ]] || echo forward-foreign-critical; exit 0; fi
+[[ -e "`+root+`/emit-fails" ]] && exit 1; printf '%s\n' "$3" >> "`+root+`/emits.jsonl"; echo 1`)
 	os.WriteFile(filepath.Join(e.svc, "env"), []byte("FABRIC_DSN=postgres://x@127.0.0.1/fabric_live\n"), 0o600)
 	writeExe(t, e.svc, "guard.sh", "exit 0\n")
-	// systemctl: every call is logged; show answers from the file "show";
-	// starting the health service writes the state file from the file "health"
-	// (as the real oneshot would), default "0 0 0" (a passing check).
+	// systemctl: every call is logged; show answers from the file "show".
+	// Starting the health service runs the REAL installed fabd-health.sh, as the
+	// oneshot would (receipt F1); its is-enabled query for the unit answers from
+	// the file "health-enabled" (default enabled).
 	writeExe(t, e.bin, "systemctl", `
 printf '%s\n' "$*" >> "`+root+`/systemctl.log"
 shift  # --user
 case "$1" in
-  is-enabled) echo enabled;;
+  is-enabled)
+    if [[ "$2" == fabd ]]; then e=$(cat "`+root+`/health-enabled" 2>/dev/null || echo enabled); echo "$e"; [[ "$e" == enabled ]]; exit; fi
+    echo enabled;;
   is-active) echo active;;
   show) cat "`+root+`/show" 2>/dev/null || printf '`+strings.ReplaceAll(goodShow, "\n", `\n`)+`';;
   start)
     if [[ "$2" == fabd-health.service ]]; then
-      mkdir -p "`+e.healthState+`"
-      cat "`+root+`/health" 2>/dev/null > "`+e.healthState+`/fabd.state" || true
-      [[ -s "`+e.healthState+`/fabd.state" ]] || echo "0 0 0" > "`+e.healthState+`/fabd.state"
+      FABD_HEALTH_EMIT="`+e.emit+`" FABD_HEALTH_STATE_DIR="`+e.healthState+`" FABD_HEALTH_HOST=t2-dev \
+        FABRIC_DSN=postgres://x@127.0.0.1/fabric_live "`+e.svc+`/fabd-health.sh" fabd "`+e.fab+`"
+      exit $?
     fi;;
 esac
 exit 0`)
@@ -145,18 +157,55 @@ func TestInstallUnitMode(t *testing.T) {
 	})
 	t.Run("failed first health check stops the install B1", func(t *testing.T) {
 		e := newInstall(t, "always")
-		os.WriteFile(filepath.Join(e.root(), "health"), []byte("1 0 0\n"), 0o644)
+		os.WriteFile(filepath.Join(e.root(), "metrics-fail"), nil, 0o644)
 		log, code := e.run(t)
-		if code != 3 || strings.Contains(log, "health check of fabd: pass") {
+		if code != 3 || strings.Contains(log, "health check of fabd: pass") || !strings.Contains(log, "the first health check of fabd failed") {
 			t.Errorf("a failed first check must stop with exit 3, got %d:\n%s", code, log)
 		}
 	})
-	t.Run("effective settings that differ stop the install F2", func(t *testing.T) {
+	t.Run("a stale passing state does not count as this run check F1", func(t *testing.T) {
 		e := newInstall(t, "always")
+		// an earlier run left a passing state and stamp; this run's check is
+		// skipped (is-enabled answers nothing) and writes neither
+		os.WriteFile(filepath.Join(e.healthState, "fabd.state"), []byte("0 0 0\n"), 0o600)
+		os.WriteFile(filepath.Join(e.healthState, "fabd.checked"), []byte("1000\n"), 0o600)
+		os.WriteFile(filepath.Join(e.root(), "health-enabled"), []byte(""), 0o644)
+		log, code := e.run(t)
+		if code != 3 || strings.Contains(log, "health check of fabd: pass") || !strings.Contains(log, "did not complete a check in this run") {
+			t.Errorf("a skipped check over a stale passing state must stop with exit 3, got %d:\n%s", code, log)
+		}
+	})
+	t.Run("no forwarder refuses MODE unit unless overridden F2", func(t *testing.T) {
+		e := newInstall(t, "always")
+		before := read(t, filepath.Join(e.unitDir, "fabd.service"))
+		os.WriteFile(filepath.Join(e.root(), "no-forwarder"), nil, 0o644)
+		log, code := e.run(t)
+		if code != 3 || !strings.Contains(log, "goodqa#15827") || read(t, filepath.Join(e.unitDir, "fabd.service")) != before {
+			t.Errorf("want exit 3 with the unit unchanged when ops_watch lacks the forwarder, got %d:\n%s", code, log)
+		}
+		log, code = e.run(t, "FABD_ALLOW_LOCAL_ONLY_ALERTS=1")
+		if code != 0 || !strings.Contains(log, "WARNING: FABD_ALLOW_LOCAL_ONLY_ALERTS=1") {
+			t.Errorf("the explicit override must install and log a warning, got %d:\n%s", code, log)
+		}
+	})
+	t.Run("effective settings that differ stop the install and roll back F4", func(t *testing.T) {
+		e := newInstall(t, "always")
+		before := read(t, filepath.Join(e.unitDir, "fabd.service"))
 		os.WriteFile(filepath.Join(e.root(), "show"), []byte("Restart=on-failure\nRestartUSec=10s\nStartLimitIntervalUSec=0\n"), 0o644)
 		log, code := e.run(t)
 		if code != 3 || !strings.Contains(log, "effective unit settings differ") {
 			t.Errorf("want exit 3 on effective Restart=on-failure, got %d:\n%s", code, log)
+		}
+		if read(t, filepath.Join(e.unitDir, "fabd.service")) != before {
+			t.Errorf("the previous unit was not restored after a failed verify")
+		}
+		if read(t, filepath.Join(e.unitDir, "fabd.service.d/10-retry.conf")) != "[Service]\nRestart=always\n" {
+			t.Errorf("the drop-in was not restored after a failed verify")
+		}
+		for _, u := range []string{"fabd-health.service", "fabd-health.timer"} {
+			if _, err := os.Stat(filepath.Join(e.unitDir, u)); !os.IsNotExist(err) {
+				t.Errorf("%s did not exist before and was left behind", u)
+			}
 		}
 	})
 	t.Run("a changed FAB_BIN is refused before any change N5", func(t *testing.T) {
@@ -190,8 +239,9 @@ func TestInstallPreflightChangesNothing(t *testing.T) {
 			e := newInstall(t, policy)
 			before := read(t, filepath.Join(e.unitDir, "fabd.service"))
 			log, code := e.run(t, extra(e)...)
-			if code != 3 {
-				t.Errorf("want exit 3, got %d:\n%s", code, log)
+			want := map[string]string{"restart policy no": "fabric-pg does not restart on boot", "no emitter": "no ops-watch emitter"}[name]
+			if code != 3 || !strings.Contains(log, want) {
+				t.Errorf("want exit 3 with %q, got %d:\n%s", want, code, log)
 			}
 			if read(t, filepath.Join(e.unitDir, "fabd.service")) != before {
 				t.Errorf("the unit changed after a failed preflight")
@@ -364,7 +414,13 @@ func TestHealthFailedStateWriteKeepsState(t *testing.T) {
 	}
 	// bounded: with the defect the state becomes the /dev/full link and the
 	// next read never ends
-	runBash(t, h.env, `exec timeout 10 "$1" fabd "$2"`, abs(t, "fabd-health.sh"), filepath.Join(h.dir, "fab"))
+	_, _, code := runBash(t, h.env, `exec timeout 10 "$1" fabd "$2"`, abs(t, "fabd-health.sh"), filepath.Join(h.dir, "fab"))
+	if code == 0 {
+		t.Errorf("a failed state save must be an error exit (receipt F1)")
+	}
+	if _, err := os.Stat(filepath.Join(h.state, "fabd.checked")); !os.IsNotExist(err) {
+		t.Errorf("a check whose state was not saved stamped fabd.checked (receipt F1)")
+	}
 	if fi, err := os.Lstat(filepath.Join(h.state, "fabd.state")); err != nil || !fi.Mode().IsRegular() {
 		t.Fatalf("the state file was replaced by the failed temp file")
 	}

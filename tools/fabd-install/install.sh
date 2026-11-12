@@ -90,6 +90,20 @@ if [[ $MODE != remove ]]; then
   [[ -r "$OPS_WATCH" ]] || die "no ops-watch emitter at $OPS_WATCH: the health check could not raise an alert"
   say "preflight: fabric-pg restarts on boot; emitter $OPS_WATCH"
 fi
+# Delivery (PR 51 receipt F2): once installed, fabd no longer shows as a failed
+# unit, so the live-down alert must reach the digest and deadman queues. That
+# needs the ops_watch forwarder of goodqa#15827, probed by its capability. The
+# override is explicit and logged.
+if [[ $MODE == unit || $MODE == live ]]; then
+  if [[ -x "$OPS_WATCH" ]]; then caps=$("$OPS_WATCH" capabilities 2>/dev/null || true); else caps=$(python3 "$OPS_WATCH" capabilities 2>/dev/null || true); fi
+  if grep -qx 'forward-foreign-critical' <<<"$caps"; then
+    say "preflight: ops_watch forwards foreign critical alerts (goodqa#15827)"
+  elif [[ "${FABD_ALLOW_LOCAL_ONLY_ALERTS:-}" == 1 ]]; then
+    say "WARNING: FABD_ALLOW_LOCAL_ONLY_ALERTS=1: installing without the goodqa#15827 forwarder; fabric:live-down:$UNIT reaches only the local ops-watch ring"
+  else
+    die "the installed ops_watch does not forward foreign critical alerts (goodqa#15827), so a fabd outage would reach no one; install it first, or set FABD_ALLOW_LOCAL_ONLY_ALERTS=1 to accept local-only alerts"
+  fi
+fi
 
 UNITDIR=$HOME/.config/systemd/user
 MODE_LABEL=$MODE
@@ -124,20 +138,42 @@ write_unit_files() {
     done
   fi
   systemctl --user daemon-reload
-  systemd-analyze --user verify "$UNIT.service" "$UNIT-health.service" "$UNIT-health.timer" || die "systemd-analyze verify failed for $UNIT.service or its health units"
+  systemd-analyze --user verify "$UNIT.service" "$UNIT-health.service" "$UNIT-health.timer" || rollback_units "systemd-analyze verify failed for $UNIT.service or its health units"
   # the effective values, not only the file: any other drop-in would show here
   local eff; eff=$(systemctl --user show "$UNIT.service" -p Restart -p RestartUSec -p StartLimitIntervalUSec | tr '\n' ' ')
   say "effective: $eff"
-  [[ "$eff" == *"Restart=always"* && "$eff" == *"RestartUSec=10s"* && "$eff" == *"StartLimitIntervalUSec=0"* ]] || die "effective unit settings differ from the rendered unit: $eff"
+  [[ "$eff" == *"Restart=always"* && "$eff" == *"RestartUSec=10s"* && "$eff" == *"StartLimitIntervalUSec=0"* ]] || rollback_units "effective unit settings differ from the rendered unit: $eff"
+}
+# rollback_units REASON: put back what write_unit_files replaced (the prev-*
+# unit files and the kept drop-ins; files that did not exist before are
+# removed), daemon-reload, then stop (PR 51 receipt F4)
+rollback_units() {
+  local u f
+  for u in "$UNIT.service" "$UNIT-health.service" "$UNIT-health.timer"; do
+    if [[ -e "$W/prev-$u" ]]; then cp -p "$W/prev-$u" "$UNITDIR/$u"; else rm -f "$UNITDIR/$u"; fi
+  done
+  for f in "$W"/dropin-*.conf; do
+    [[ -e "$f" ]] || continue
+    mkdir -p "$UNITDIR/$UNIT.service.d"
+    cp -p "$f" "$UNITDIR/$UNIT.service.d/${f##*/dropin-}"
+  done
+  systemctl --user daemon-reload || true
+  die "$1 (the previous unit files and drop-ins were restored)"
 }
 # run_health: one check by hand (it must pass against the running daemon); then,
 # for the live unit, the timer (fabd-health.timer) runs it every 2 minutes
 run_health() {
-  local hstate="$HEALTH_STATE_DIR/$UNIT.state" fails
+  local hstate="$HEALTH_STATE_DIR/$UNIT.state" fails checked t0
   rm -f "$HEALTH_STATE_DIR/$UNIT.maintenance"  # a stale window would skip the check and read as a pass
+  t0=$(date +%s)
   systemctl --user start "$UNIT-health.service" || die "the first health check of $UNIT failed (journalctl --user -u $UNIT-health)"
   # the oneshot exits 0 after a first failed check (it raises only after 2), so
-  # the pass is read from the state it wrote, not from its exit (review B1)
+  # the pass is read from the state it wrote, not from its exit (review B1);
+  # and only from a check completed by this run: the script stamps
+  # UNIT.checked after a real check whose state was saved, never after a skip
+  # or a failed save (PR 51 receipt F1)
+  checked=$(cat "$HEALTH_STATE_DIR/$UNIT.checked" 2>/dev/null || true)
+  [[ "$checked" =~ ^[0-9]+$ ]] && (( checked >= t0 )) || die "the health check of $UNIT did not complete a check in this run (skipped, or its state could not be saved; journalctl --user -u $UNIT-health)"
   [[ -r "$hstate" ]] || die "the health check of $UNIT wrote no state at $hstate"
   read -r fails _ < "$hstate" || fails=x
   [[ "$fails" == 0 ]] || die "the first health check of $UNIT failed (state: $(cat "$hstate"); journalctl --user -u $UNIT-health)"
@@ -185,6 +221,8 @@ ROLE_RE="^${PREFIX}_(app|runner|scheduler)$"
 # --- the shared removal path (rehearse and MODE=remove)
 do_remove() {
   systemctl --user disable --now "$UNIT-health.timer" 2>/dev/null || true
+  # a check already running would save its state after the clear (receipt F3)
+  systemctl --user stop "$UNIT-health.service" 2>/dev/null || true
   # a removed unit must not leave a critical alert standing (goodqa#15805). A
   # failed clear stops here with the health script kept so it can be retried by
   # hand (review N7).

@@ -46,6 +46,11 @@ KEY="fabric:live-down:$UNIT"
 mkdir -p -m 0700 "$STATE_DIR"
 STATE=$STATE_DIR/$UNIT.state
 MAINT=$STATE_DIR/$UNIT.maintenance
+CHECKED=$STATE_DIR/$UNIT.checked
+# one run at a time per unit: a timer check, --clear and --maintenance never
+# interleave their state writes (PR 51 receipt F3)
+exec 8> "$STATE_DIR/$UNIT.lock"
+flock -w 30 8 || { echo "fabd-health: another run holds $STATE_DIR/$UNIT.lock" >&2; exit 1; }
 
 crit() { # loud even when nobody reads failed units
   echo "fabd-health: $*" >&2
@@ -164,5 +169,8 @@ else
     if emit raise critical "Fabric $UNIT on $HOST is STILL DOWN ($fails checks in a row, about $((fails * 2)) min): $reason" reasserted; then since=$now; else rc=1; fi
   fi
 fi
-save
+# CHECKED stamps a completed check whose state was saved (never a skip): the
+# installer accepts its first check only from a stamp newer than its start
+# (PR 51 receipt F1). A failed save is an error exit.
+if save; then date +%s > "$CHECKED" || rc=1; else rc=1; fi
 exit $rc

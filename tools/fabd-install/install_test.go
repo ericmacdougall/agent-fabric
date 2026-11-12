@@ -141,7 +141,8 @@ p=$(cat "`+pf+`")
 case "$1" in
   inspect)
     [[ "$p" == missing ]] && { echo "Error: No such object" >&2; exit 1; }
-    echo "$p";;
+    if [[ "$3" == *Running* ]]; then cat "`+dir+`/running" 2>/dev/null || echo "true 0"; else echo "$p"; fi;;
+  exec) exit "$(cat "`+dir+`/exec-rc" 2>/dev/null || echo 0)";;
   update) [[ "$2" == --restart ]] && echo "$3" > "`+pf+`";;
   run) echo always > "`+pf+`";;
 esac
@@ -222,6 +223,15 @@ func TestFabricPG(t *testing.T) {
 		}
 		if strings.Contains(calls, "SENTINEL-PASSWORD-VALUE") {
 			t.Errorf("the password value reached docker argv or env:\n%s", calls)
+		}
+	})
+	t.Run("create refuses a container that never becomes ready", func(t *testing.T) {
+		fd := newFakeDocker(t, "missing")
+		os.WriteFile(filepath.Join(fd.dir, "running"), []byte("true 3\n"), 0o644)
+		env := []string{"PATH=" + fd.dir + ":" + os.Getenv("PATH"), "FABRIC_PG_PASSWORD_FILE=" + pw, "FABRIC_PG_READY_TRIES=2"}
+		_, se, code := runBash(t, env, `exec "$1" create`, script)
+		if code == 0 || !strings.Contains(se, "did not become ready") {
+			t.Errorf("create reported success for a crash-looping container (exit %d): %s", code, se)
 		}
 	})
 	t.Run("create needs a password file", func(t *testing.T) {

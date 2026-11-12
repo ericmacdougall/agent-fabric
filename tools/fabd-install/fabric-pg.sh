@@ -52,6 +52,16 @@ case "${1:-}" in
       -v "$pw:/run/secrets/fabric-pg.pw:ro" \
       -e POSTGRES_PASSWORD_FILE=/run/secrets/fabric-pg.pw \
       "$IMAGE" >/dev/null
+    # a container that cannot start (say, the postgres uid cannot read the
+    # password file) crash-loops under --restart always; report it, not the
+    # policy alone (PR 51 receipt F5)
+    ready=0
+    for _ in $(seq 1 ${FABRIC_PG_READY_TRIES:-30}); do
+      st=$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' "$NAME" 2>/dev/null || true)
+      if [[ "$st" == "true 0" ]] && docker exec "$NAME" pg_isready -q >/dev/null 2>&1; then ready=1; break; fi
+      sleep 2
+    done
+    (( ready )) || { echo "fabric-pg: $NAME did not become ready (state: ${st:-unknown}); see docker logs $NAME" >&2; exit 1; }
     exec "$0" check;;
   *)
     echo "usage: fabric-pg.sh check|ensure|create" >&2; exit 2;;
