@@ -29,6 +29,12 @@ const goodShow = "Restart=always\nRestartUSec=10s\nStartLimitIntervalUSec=0\n"
 func newInstall(t *testing.T, policy string) *installEnv {
 	t.Helper()
 	root := t.TempDir()
+	// install.sh accepts its test hook only with HOME under /tmp (review N17);
+	// elsewhere (macOS, TMPDIR set) skip with the reason instead of failing
+	// (goodqa#15838 F8)
+	if !strings.HasPrefix(root, "/tmp/") {
+		t.Skipf("install exec tests need t.TempDir under /tmp for the FABD_INSTALL_TEST_FAKE guard; got %s", root)
+	}
 	e := &installEnv{home: filepath.Join(root, "home"), bin: filepath.Join(root, "bin"), work: filepath.Join(root, "evidence")}
 	e.unitDir = filepath.Join(e.home, ".config/systemd/user")
 	e.svc = filepath.Join(e.home, "fabd")
@@ -66,8 +72,15 @@ case "$1" in
   is-enabled)
     if [[ "$2" == fabd ]]; then e=$(cat "`+root+`/health-enabled" 2>/dev/null || echo enabled); echo "$e"; [[ "$e" == enabled ]]; exit; fi
     echo enabled;;
-  is-active) echo active;;
-  show) cat "`+root+`/show" 2>/dev/null || printf '`+strings.ReplaceAll(goodShow, "\n", `\n`)+`';;
+  is-active)
+    if [[ "$*" == *ops-watch.timer* && -e "`+root+`/ops-timer-inactive" ]]; then echo inactive; exit 3; fi
+    echo active;;
+  show)
+    if [[ "$*" == *ops-watch.service* ]]; then
+      cat "`+root+`/ops-show" 2>/dev/null || echo "ExecStart={ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 `+e.emit+` run ; ignore_errors=no ; start_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
+      exit 0
+    fi
+    cat "`+root+`/show" 2>/dev/null || printf '`+strings.ReplaceAll(goodShow, "\n", `\n`)+`';;
   start)
     if [[ "$2" == fabd-health.service ]]; then
       FABD_HEALTH_EMIT="`+e.emit+`" FABD_HEALTH_STATE_DIR="`+e.healthState+`" FABD_HEALTH_HOST=t2-dev \
@@ -188,9 +201,41 @@ func TestInstallUnitMode(t *testing.T) {
 			t.Errorf("the explicit override must install and log a warning, got %d:\n%s", code, log)
 		}
 	})
+	t.Run("the timer runs a copy without the forwarder 15838", func(t *testing.T) {
+		e := newInstall(t, "always")
+		before := read(t, filepath.Join(e.unitDir, "fabd.service"))
+		old := filepath.Join(e.bin, "old_ops_watch.py")
+		writeExe(t, e.bin, "old_ops_watch.py", "exit 0\n")
+		os.WriteFile(filepath.Join(e.root(), "ops-show"), []byte("ExecStart={ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 "+old+" run ; ignore_errors=no }\n"), 0o644)
+		log, code := e.run(t)
+		if code != 3 || !strings.Contains(log, old+" does not list forward-foreign-critical") || read(t, filepath.Join(e.unitDir, "fabd.service")) != before {
+			t.Errorf("want exit 3 with the unit unchanged when the timer's copy lacks the forwarder, got %d:\n%s", code, log)
+		}
+	})
+	t.Run("an inactive ops-watch timer refuses MODE unit 15838", func(t *testing.T) {
+		e := newInstall(t, "always")
+		os.WriteFile(filepath.Join(e.root(), "ops-timer-inactive"), nil, 0o644)
+		log, code := e.run(t)
+		if code != 3 || !strings.Contains(log, "ops-watch.timer is not active") {
+			t.Errorf("want exit 3 when ops-watch.timer is inactive, got %d:\n%s", code, log)
+		}
+	})
+	t.Run("an ops-watch unit without a script refuses MODE unit 15838", func(t *testing.T) {
+		e := newInstall(t, "always")
+		os.WriteFile(filepath.Join(e.root(), "ops-show"), []byte("ExecStart=\n"), 0o644)
+		log, code := e.run(t)
+		if code != 3 || !strings.Contains(log, "names no ops_watch.py") {
+			t.Errorf("want exit 3 when ops-watch.service names no script, got %d:\n%s", code, log)
+		}
+	})
 	t.Run("effective settings that differ stop the install and roll back F4", func(t *testing.T) {
 		e := newInstall(t, "always")
 		before := read(t, filepath.Join(e.unitDir, "fabd.service"))
+		// goodqa#15838 F7 and F6: an older health script is in place, and the
+		// evidence directory holds a drop-in copy from an earlier run
+		os.WriteFile(filepath.Join(e.svc, "fabd-health.sh"), []byte("# old health\n"), 0o700)
+		os.MkdirAll(e.work, 0o700)
+		os.WriteFile(filepath.Join(e.work, "dropin-05-stale.conf"), []byte("[Service]\nRestart=no\n"), 0o644)
 		os.WriteFile(filepath.Join(e.root(), "show"), []byte("Restart=on-failure\nRestartUSec=10s\nStartLimitIntervalUSec=0\n"), 0o644)
 		log, code := e.run(t)
 		if code != 3 || !strings.Contains(log, "effective unit settings differ") {
@@ -201,6 +246,12 @@ func TestInstallUnitMode(t *testing.T) {
 		}
 		if read(t, filepath.Join(e.unitDir, "fabd.service.d/10-retry.conf")) != "[Service]\nRestart=always\n" {
 			t.Errorf("the drop-in was not restored after a failed verify")
+		}
+		if got := read(t, filepath.Join(e.svc, "fabd-health.sh")); got != "# old health\n" {
+			t.Errorf("the previous health script was not restored (F7): %.60q", got)
+		}
+		if _, err := os.Stat(filepath.Join(e.unitDir, "fabd.service.d/05-stale.conf")); !os.IsNotExist(err) {
+			t.Errorf("a drop-in this run never removed was restored from an earlier run copy (F6)")
 		}
 		for _, u := range []string{"fabd-health.service", "fabd-health.timer"} {
 			if _, err := os.Stat(filepath.Join(e.unitDir, u)); !os.IsNotExist(err) {
