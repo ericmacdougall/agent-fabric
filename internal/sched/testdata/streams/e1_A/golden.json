@@ -1,0 +1,12 @@
+{
+  "command": {
+    "kind": "FINISH_ATTEMPT",
+    "mission": "m_golden",
+    "attempt": "a_golden",
+    "fence": 7,
+    "outcome": "abandoned",
+    "reason": "no structured output"
+  },
+  "error": null,
+  "usage": "{\"context_last_turn\":33695,\"cost_usd\":0.0994274,\"exit\":0,\"session\":\"8c015f10-7551-42fe-b1db-f552b3e5f672\",\"turns\":1}"
+}

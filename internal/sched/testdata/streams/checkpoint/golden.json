@@ -1,0 +1,11 @@
+{
+  "command": {
+    "kind": "FINISH_ATTEMPT",
+    "mission": "m_golden",
+    "attempt": "a_golden",
+    "fence": 7,
+    "outcome": "checkpoint"
+  },
+  "error": null,
+  "usage": "{\"context_last_turn\":1010,\"cost_usd\":0.0125,\"exit\":0,\"session\":\"00000000-0000-4000-8000-000000000001\",\"turns\":2}"
+}
