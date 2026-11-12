@@ -47,6 +47,10 @@ func TestNativeToolsetEditWrite(t *testing.T) {
 	if err != nil || strings.Join(names, ",") != "read,grep,shell,edit,write" {
 		t.Fatalf("with the gate: %v %v", names, err)
 	}
+	// edit and write never exist without the pre-image store (F1)
+	if _, err := native.ToolNamesForTest(e.g, fakehost.New(), true, ""); err == nil {
+		t.Fatal("edit and write built without a state directory")
+	}
 	// the spill and pre-image directories are runner-only: under the state dir, 0700, never under RunDir
 	for _, d := range []string{"spill", "preimage"} {
 		st, err := os.Stat(filepath.Join(state, d, e.g.Attempt))

@@ -45,7 +45,7 @@ func newEditFixture(t *testing.T) *editFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, err := tools.OpenRunnerDir(filepath.Join(base, "state", "preimage"), 64, 8<<20)
+	dir, err := tools.OpenKeepDir(filepath.Join(base, "state", "preimage"), "pre-", 64, 8<<20)
 	if err != nil {
 		t.Fatal(err)
 	}

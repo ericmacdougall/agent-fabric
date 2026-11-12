@@ -550,17 +550,24 @@ func nativeToolsetOpts(wt *tools.WorktreePin, starter tools.Starter, hg host.Gra
 	}
 	if o.FileTools {
 		var keeper *tools.PreimageKeeper
-		if o.StateDir != "" {
-			dir, err := tools.OpenRunnerDir(filepath.Join(o.StateDir, "preimage", o.Attempt), 256, 256<<20)
-			if err != nil {
-				return nil, nil, fmt.Errorf("native: pre-image directory: %w", err)
-			}
-			res.preimage = dir
-			keeper = &tools.PreimageKeeper{Dir: dir}
-			// Recorded now, at attempt start: the child can rewrite .git later.
-			if g, gerr := tools.NewGitRef(wt.Path()); gerr == nil {
-				keeper.Git = g
-			}
+		// edit and write are labelled Reversible: they never run without the
+		// pre-image store that makes that true (goodqa#15361 F1).
+		if o.StateDir == "" {
+			return nil, nil, errors.New("native: edit and write need the runner state directory for pre-image copies")
+		}
+		// A keep dir: copies are never evicted; at 256 copies or 256 MiB the
+		// call is refused with ErrPreimageStoreFull (F2). Only pre-* counts.
+		dir, err := tools.OpenKeepDir(filepath.Join(o.StateDir, "preimage", o.Attempt), "pre-", 256, 256<<20)
+		if err != nil {
+			return nil, nil, fmt.Errorf("native: pre-image directory: %w", err)
+		}
+		res.preimage = dir
+		keeper = &tools.PreimageKeeper{Dir: dir}
+		// The gitdir is recorded once per attempt in the runner-only store and
+		// a resume uses that record, never .git (F4). On any error (a replaced
+		// gitdir included) Git stays nil and every existing target is copied.
+		if g, gerr := tools.AttemptGitRef(dir, wt.Path()); gerr == nil {
+			keeper.Git = g
 		}
 		out = append(out, tools.NewEdit(rd, wt, keeper), tools.NewWrite(rd, wt, keeper))
 	}

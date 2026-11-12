@@ -44,8 +44,9 @@ type fsCore struct {
 	read *Read // path rules and root
 	// Pin is the run's recorded worktree; required.
 	Pin *WorktreePin
-	// Preimage keeps a bounded copy of an untracked or ignored target before it
-	// is replaced. Nil disables the copy.
+	// Preimage keeps a copy of a target git cannot restore (untracked,
+	// ignored, dirty, staged-only) before it is replaced. Nil disables the
+	// copy; the native toolset never builds edit or write without one.
 	Preimage *PreimageKeeper
 }
 

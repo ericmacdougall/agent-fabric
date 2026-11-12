@@ -46,6 +46,9 @@ func (c ReviewGateConfig) policy() (reviewgate.Policy, error) {
 		"shell": {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.Reversible, HumanRequired: true},
 		// Option A (goodqa#15361, decision: main (agent), on #15361): every edit
 		// and write is reviewed per call. safe_tools is the per-mission opt-out.
+		// Reversible holds because every replaced file git cannot restore
+		// (untracked, dirty, staged-only) keeps a never-evicted pre-image copy,
+		// and a full store refuses the call (goodqa#15361 r1b F1/F2).
 		"edit":  {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.Reversible, HumanRequired: true},
 		"write": {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.Reversible, HumanRequired: true},
 	}}

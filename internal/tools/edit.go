@@ -319,13 +319,18 @@ func (c *fsCore) finishWrite(ctx context.Context, parts []string, parent int, na
 		testAfterLoad()
 	}
 	rel := strings.Join(parts, "/")
-	copyName := ""
-	if pre.exists && c.Preimage.NeedsCopy(ctx, rel) {
-		n, err := c.Preimage.Keep(pre.data)
-		if err != nil {
-			return "", fmt.Errorf("cannot keep a pre-image copy of an untracked file: %v", err)
+	copyName, gitBlob := "", ""
+	if pre.exists {
+		need, blob := c.Preimage.NeedsCopy(ctx, rel, pre.data)
+		if need {
+			n, err := c.Preimage.Keep(pre.data)
+			if err != nil {
+				// Refused before the rename: the file is unchanged.
+				return "", fmt.Errorf("refused, the file is unchanged: cannot keep a pre-image copy: %w", err)
+			}
+			copyName = n
 		}
-		copyName = n
+		gitBlob = blob
 	}
 	tag := callTag(ctx)
 	if err := c.commit(tag, rel, parent, name, pre, data); err != nil {
@@ -340,6 +345,8 @@ func (c *fsCore) finishWrite(ctx context.Context, parts []string, parent int, na
 	fmt.Fprintf(&b, "%s %s\npre_sha256: %s\npost_sha256: %s\nbytes: %d -> %d\n", verb, rel, preSha, post, len(pre.data), len(data))
 	if copyName != "" {
 		fmt.Fprintf(&b, "preimage_copy: %s\n", copyName)
+	} else if gitBlob != "" {
+		fmt.Fprintf(&b, "preimage_git_blob: %s\n", gitBlob)
 	}
 	b.WriteString("diff:\n" + unifiedDiff(rel, pre.data, data, MaxDiffBytes))
 	if err := c.finish(); err != nil {

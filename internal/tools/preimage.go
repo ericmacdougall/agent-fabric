@@ -93,72 +93,184 @@ func NewGitRef(worktree string) (*GitRef, error) {
 	return (&GitRef{GitDir: filepath.Clean(gd), WorkTree: worktree}).record()
 }
 
-func (g *GitRef) run(ctx context.Context, args ...string) ([]byte, error) {
+// gitRefRecord is the per-attempt gitdir record (goodqa#15361 F4). It lives
+// in the attempt's runner-only pre-image directory (0700, our uid, never under
+// RunDir), so the confined child can neither write nor replace it.
+const gitRefRecord = "gitref"
+
+type gitRefRec struct {
+	V        int    `json:"v"`
+	WorkTree string `json:"worktree"`
+	None     bool   `json:"none,omitempty"` // the worktree had no usable .git at attempt start
+	GitDir   string `json:"gitdir,omitempty"`
+	Dev      uint64 `json:"dev,omitempty"`
+	Ino      uint64 `json:"ino,omitempty"`
+}
+
+// ErrGitDirChanged: the gitdir recorded when the attempt started is gone or
+// was replaced. The caller must not trust git for this attempt.
+var ErrGitDirChanged = errors.New("the git directory recorded at attempt start changed")
+
+// AttemptGitRef returns the attempt's git reference, recorded once per
+// attempt rather than per runner start. The first call reads worktree/.git
+// (NewGitRef) and writes the record (path, device and inode, or "none");
+// every later call, a resume included, uses only the record and never reads
+// .git again, which the child can rewrite between sessions. A recorded gitdir
+// that was replaced since is refused with ErrGitDirChanged. A nil reference
+// with a nil error means the attempt started without git: every existing
+// target is then copied.
+func AttemptGitRef(dir *RunnerDir, worktree string) (*GitRef, error) {
+	b, err := dir.readRecord(gitRefRecord)
+	switch {
+	case err == nil:
+		var r gitRefRec
+		if json.Unmarshal(b, &r) != nil || r.V != 1 {
+			return nil, errors.New("tools: the attempt's gitdir record is unreadable")
+		}
+		if r.WorkTree != worktree {
+			return nil, fmt.Errorf("%w: the record names another worktree", ErrGitDirChanged)
+		}
+		if r.None {
+			return nil, nil
+		}
+		g := &GitRef{GitDir: r.GitDir, WorkTree: r.WorkTree, dev: r.Dev, ino: r.Ino}
+		if err := g.same(); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrGitDirChanged, err)
+		}
+		return g, nil
+	case errors.Is(err, ErrExpired):
+		g, gerr := NewGitRef(worktree)
+		r := gitRefRec{V: 1, WorkTree: worktree, None: gerr != nil}
+		if gerr == nil {
+			r.GitDir, r.Dev, r.Ino = g.GitDir, g.dev, g.ino
+		}
+		out, _ := json.Marshal(r)
+		if err := dir.writeRecord(gitRefRecord, out); err != nil {
+			return nil, fmt.Errorf("tools: cannot record the attempt's gitdir: %w", err)
+		}
+		if gerr != nil {
+			return nil, nil
+		}
+		return g, nil
+	default:
+		return nil, fmt.Errorf("tools: the attempt's gitdir record: %w", err)
+	}
+}
+
+func (g *GitRef) run(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	full := append([]string{"--git-dir=" + g.GitDir, "--work-tree=" + g.WorkTree, "--literal-pathspecs"}, gitSafetyArgs...)
 	cmd := exec.CommandContext(ctx, "git", append(full, args...)...)
 	cmd.Dir = g.WorkTree
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=/nonexistent", "GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0"}
 	return cmd.Output()
 }
 
-// Tracked reports whether rel is in the index. It errors (callers then treat
-// the file as untracked and keep a copy) when the repository configuration
-// carries a risky key, when git fails, or on timeout.
-func (g *GitRef) Tracked(ctx context.Context, rel string) (bool, error) {
-	if err := g.same(); err != nil {
-		return false, err
-	}
-	out, err := g.run(ctx, "config", "--show-scope", "--name-only", "--get-regexp", riskyConfig)
+// checkConfig refuses a repository whose own configuration carries a risky
+// key (publish.go's pattern): git would act on it even for a query.
+func (g *GitRef) checkConfig(ctx context.Context) error {
+	out, err := g.run(ctx, nil, "config", "--show-scope", "--name-only", "--get-regexp", riskyConfig)
 	var ee *exec.ExitError
 	switch {
 	case err == nil:
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			if scope, _, ok := strings.Cut(line, "\t"); ok && scope != "command" {
-				return false, errors.New("repository configuration is risky")
+				return errors.New("repository configuration is risky")
 			}
 		}
+		return nil
 	case errors.As(err, &ee) && ee.ExitCode() == 1:
+		return nil
 	default:
-		return false, fmt.Errorf("git config: %w", err)
+		return fmt.Errorf("git config: %w", err)
 	}
-	_, err = g.run(ctx, "ls-files", "--error-unmatch", "--", rel)
-	if err == nil {
-		return true, nil
-	}
-	if errors.As(err, &ee) && ee.ExitCode() == 1 {
-		return false, nil
-	}
-	return false, fmt.Errorf("git ls-files: %w", err)
 }
 
-// PreimageKeeper keeps bounded pre-image copies and per-call journals in a
-// runner-only directory (m2, FN-1).
+// CleanBlob reports whether data (the exact bytes about to be replaced) is
+// already held by git: its blob id (git hash-object --no-filters, in the
+// repository's own object format) equals both the stage-0 index entry of rel
+// and HEAD:rel. Only then can git restore those bytes, and it returns that
+// blob id (goodqa#15361 F1). Anything else is "not clean": untracked, a dirty
+// tracked file, a staged-only change, a conflict, no HEAD commit, a clean
+// filter that changes the bytes, a replaced gitdir, risky configuration, a
+// git failure or a timeout. Callers keep a copy whenever ok is false.
+func (g *GitRef) CleanBlob(ctx context.Context, rel string, data []byte) (blob string, ok bool, err error) {
+	if err := g.same(); err != nil {
+		return "", false, err
+	}
+	if err := g.checkConfig(ctx); err != nil {
+		return "", false, err
+	}
+	out, err := g.run(ctx, nil, "ls-files", "-s", "-z", "--", rel)
+	if err != nil {
+		return "", false, fmt.Errorf("git ls-files: %w", err)
+	}
+	entries := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	if len(out) == 0 || len(entries) != 1 {
+		return "", false, nil // untracked, or a conflict (several stages)
+	}
+	// "<mode> <oid> <stage>\t<path>"
+	meta, path, cut := strings.Cut(entries[0], "\t")
+	f := strings.Fields(meta)
+	if !cut || path != rel || len(f) != 3 || f[2] != "0" || (f[0] != "100644" && f[0] != "100755") {
+		return "", false, nil
+	}
+	index := f[1]
+	head, err := g.run(ctx, nil, "rev-parse", "--verify", "--quiet", "HEAD:"+rel)
+	if err != nil {
+		return "", false, nil // no HEAD commit, or rel is not in it
+	}
+	disk, err := g.run(ctx, data, "hash-object", "--no-filters", "--stdin")
+	if err != nil {
+		return "", false, fmt.Errorf("git hash-object: %w", err)
+	}
+	d := strings.TrimSpace(string(disk))
+	if d == "" || d != index || d != strings.TrimSpace(string(head)) {
+		return "", false, nil
+	}
+	return d, true, nil
+}
+
+// PreimageKeeper keeps pre-image copies and per-call journals in a
+// runner-only directory (m2, FN-1). Copies are never evicted: Dir must come
+// from OpenKeepDir, and a full store refuses the write (F2).
 type PreimageKeeper struct {
 	Dir *RunnerDir
-	Git *GitRef // nil: every existing target is treated as untracked
+	Git *GitRef // nil: every existing target is copied
 }
 
-// NeedsCopy: untracked, ignored, or the query failed or was refused.
-func (k *PreimageKeeper) NeedsCopy(ctx context.Context, rel string) bool {
+// NeedsCopy reports whether a copy of data (the bytes at rel about to be
+// replaced) must be kept. It is false only when git already holds exactly
+// those bytes in both the index and HEAD; blob then names that git blob, so
+// the result can say where the restore comes from.
+func (k *PreimageKeeper) NeedsCopy(ctx context.Context, rel string, data []byte) (need bool, blob string) {
 	if k == nil || k.Dir == nil {
-		return false
+		return false, ""
 	}
 	if k.Git == nil {
-		return true
+		return true, ""
 	}
-	tracked, err := k.Git.Tracked(ctx, rel)
-	return err != nil || !tracked
+	b, clean, err := k.Git.CleanBlob(ctx, rel, data)
+	if err != nil || !clean {
+		return true, ""
+	}
+	return false, b
 }
 
-// Keep stores data (at most MaxFileBytes) and returns its name.
+// Keep stores data (at most MaxFileBytes) and returns its name. The space is
+// reserved before the file is created; when the store is at its file or byte
+// limit it returns ErrPreimageStoreFull and nothing is evicted, so the caller
+// refuses the write (goodqa#15361 F2).
 func (k *PreimageKeeper) Keep(data []byte) (string, error) {
 	if len(data) > MaxFileBytes {
 		return "", errors.New("pre-image too large")
 	}
-	f, name, err := k.Dir.Create("pre-")
+	f, name, err := k.Dir.CreateReserved("pre-", int64(len(data)))
 	if err != nil {
 		return "", err
 	}
@@ -167,8 +279,12 @@ func (k *PreimageKeeper) Keep(data []byte) (string, error) {
 		k.Dir.Abort(name)
 		return "", err
 	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		k.Dir.Abort(name)
+		return "", err
+	}
 	f.Close()
-	k.Dir.Done(name, int64(len(data)))
 	return name, nil
 }
 

@@ -35,14 +35,51 @@ Safety properties:
 - Commit is a per-(directory, name) lock, a sha256 pre-image check, a temp file
   `.fabric-<callid8>.tmp`, a second check right before `renameat`, then fsync.
   A changed file is refused with "file changed since read".
-- An untracked or ignored target keeps a bounded pre-image copy in the
-  runner-only state directory. The git query uses the gitdir recorded at
-  attempt start and refuses a repository with risky configuration; a refused or
-  failed query keeps the copy.
+- Reversibility (why the policy labels edit and write `Reversible`): before
+  an existing file is replaced, the runner keeps a copy of the exact bytes in
+  `<state_root>/preimage/<attempt>/` (0700, own uid, never under RunDir),
+  unless git already holds those bytes. "Holds" means the bytes' blob id
+  (`git hash-object --no-filters`) equals both the stage-0 index entry and
+  `HEAD:<path>`. Then the result names `preimage_git_blob: <id>` and no copy is
+  made. Untracked, ignored, dirty, staged-only and conflicted files, a
+  repository with no HEAD commit, a clean filter that changes the bytes,
+  risky repository configuration, a replaced gitdir, and any git failure or
+  timeout all keep a copy (`preimage_copy: pre-<id>`). Edit and write are
+  never built without this store.
+- Copies are never evicted. Each attempt holds at most 256 copies or 256 MiB.
+  Beyond that, edit and write are refused with "pre-image store is full ...;
+  the call was refused so that no earlier copy is removed", and the target is
+  unchanged. Only `pre-*` files count; call journals (`j-*`) and the gitdir
+  record do not.
+- The gitdir is recorded once per attempt, in the attempt's pre-image
+  directory (`gitref`: path, device and inode, or "none" when the worktree had
+  no git; created `O_EXCL` 0600 by the runner). A resumed runner uses that
+  record and never reads the worktree's `.git` again, which the child can
+  rewrite. If the recorded gitdir was replaced, the runner refuses it and
+  copies every existing target. A filesystem whose device numbers change
+  across a reboot fails closed the same way.
 - A call journal (pre and intended post sha256) lets a call found EXECUTING on
   resume say whether the write landed; it is never re-run.
 - The result carries the path, both digests, byte counts, the copy name and a
   unified diff capped at 8 KiB.
+
+Pre-image retention (operator step; nothing removes copies automatically).
+A copy is the only way to undo an overwrite of bytes git did not hold, and
+it may be needed long after its attempt ends, until a human has reviewed the
+change it made. So the runner never deletes `preimage/<attempt>/`; only the
+spill directory is reaped. An operator may remove an attempt's pre-image
+directory only when all of these hold:
+1. The attempt is terminal. It does not appear in `SELECT id FROM attempts
+   WHERE state IN ('LEASED','PREPARING','RUNNING')`, and no runner holds its
+   lock.
+2. The attempt's changes were reviewed and accepted, or deliberately thrown
+   away, by a human.
+3. The retention period has passed: 14 days after the attempt ended, by
+   default.
+Then remove that one directory by its literal path (for example
+`rm -r <state_root>/preimage/<attempt-id>`), never with a wildcard over
+`preimage/`. Disk use: `du -sh <state_root>/preimage/*`. Each attempt is
+capped at 256 MiB.
 
 Known limit: the review request shows the model's exact `oldText` and
 `newText` (which is the change) and the optional `expect_sha256`; the computed

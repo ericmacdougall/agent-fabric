@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -49,7 +50,7 @@ func newEditEnv(t *testing.T) *editEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rdir, err := tools.OpenRunnerDir(e.keep, 256, 256<<20)
+	rdir, err := tools.OpenKeepDir(e.keep, "pre-", 256, 256<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,11 +417,8 @@ func TestWritePreimageUntrackedKeepsCopy(t *testing.T) {
 	e := newEditEnv(t)
 	e.gitInit(t)
 	e.put(t, "tracked.txt", "T0")
-	c := exec.Command("git", "add", "tracked.txt")
-	c.Dir = e.wt
-	if o, err := c.CombinedOutput(); err != nil {
-		t.Fatal(string(o))
-	}
+	e.git(t, "add", "tracked.txt")
+	e.git(t, "commit", "-q", "-m", "c0")
 	e.put(t, "untracked.txt", "U0")
 	out, isErr := e.wr.Run(context.Background(), wr("untracked.txt", "U1"))
 	if isErr || !strings.Contains(out, "preimage_copy: pre-") {
@@ -431,8 +429,247 @@ func TestWritePreimageUntrackedKeepsCopy(t *testing.T) {
 		t.Fatalf("copy holds %q", got)
 	}
 	out, isErr = e.wr.Run(context.Background(), wr("tracked.txt", "T1"))
-	if isErr || strings.Contains(out, "preimage_copy") {
-		t.Fatalf("tracked file must not be copied: %s", out)
+	if isErr || strings.Contains(out, "preimage_copy") || !strings.Contains(out, "preimage_git_blob: ") {
+		t.Fatalf("a clean tracked file is restored from git, not copied: %s", out)
+	}
+}
+
+func (e *editEnv) git(t *testing.T, args ...string) string {
+	t.Helper()
+	c := exec.Command("git", args...)
+	c.Dir = e.wt
+	o, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v %s", args, err, o)
+	}
+	return string(o)
+}
+
+func copyName(t *testing.T, out string) string {
+	t.Helper()
+	parts := strings.SplitN(out, "preimage_copy: ", 2)
+	if len(parts) != 2 {
+		t.Fatalf("no pre-image copy: %s", out)
+	}
+	return strings.TrimSpace(strings.SplitN(parts[1], "\n", 2)[0])
+}
+
+// F1 (goodqa#15361 r1b): a tracked file with uncommitted changes is not
+// restorable from git, so the edit keeps a copy, and the copy restores the
+// dirty bytes.
+func TestEditPreimageDirtyTrackedKeepsCopy(t *testing.T) {
+	e := newEditEnv(t)
+	e.gitInit(t)
+	p := e.put(t, "d.txt", "committed alpha\n")
+	e.git(t, "add", "d.txt")
+	e.git(t, "commit", "-q", "-m", "c0")
+	e.put(t, "d.txt", "dirty alpha, uncommitted work\n")
+	out, isErr := e.ed.Run(context.Background(), edits("d.txt", "dirty alpha", "edited"))
+	if isErr {
+		t.Fatal(out)
+	}
+	name := copyName(t, out)
+	saved := mustFile(t, filepath.Join(e.keep, name))
+	if saved != "dirty alpha, uncommitted work\n" {
+		t.Fatalf("the copy holds %q, not the dirty bytes", saved)
+	}
+	// restore from the copy: the uncommitted work comes back
+	if err := os.WriteFile(p, []byte(saved), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustFile(t, p); got != "dirty alpha, uncommitted work\n" {
+		t.Fatalf("restore gave %q", got)
+	}
+}
+
+// F1: a staged change (index equals the file, HEAD does not) and a file that
+// is only staged (no HEAD commit) both keep a copy; a file equal to both the
+// index and HEAD does not, and names its blob.
+func TestWritePreimageStagedAndCleanTracked(t *testing.T) {
+	e := newEditEnv(t)
+	e.gitInit(t)
+	e.put(t, "new.txt", "N0")
+	e.git(t, "add", "new.txt") // staged, no commit yet
+	if out, isErr := e.wr.Run(context.Background(), wr("new.txt", "N1")); isErr || copyName(t, out) == "" {
+		t.Fatalf("staged-only file: %s", out)
+	}
+	e.put(t, "s.txt", "S0")
+	e.git(t, "add", "s.txt", "new.txt")
+	e.git(t, "commit", "-q", "-m", "c0")
+	e.put(t, "s.txt", "S1 staged")
+	e.git(t, "add", "s.txt") // index == disk, HEAD differs
+	out, isErr := e.wr.Run(context.Background(), wr("s.txt", "S2"))
+	if isErr || mustFile(t, filepath.Join(e.keep, copyName(t, out))) != "S1 staged" {
+		t.Fatalf("staged change: %s", out)
+	}
+	e.git(t, "add", "s.txt")
+	e.git(t, "commit", "-q", "-m", "c1")
+	out, isErr = e.wr.Run(context.Background(), wr("s.txt", "S3"))
+	blob := strings.TrimSpace(e.git(t, "rev-parse", "HEAD:s.txt"))
+	if isErr || strings.Contains(out, "preimage_copy") || !strings.Contains(out, "preimage_git_blob: "+blob) {
+		t.Fatalf("clean tracked file: %s", out)
+	}
+}
+
+func newKeepEnv(t *testing.T, maxFiles int, maxBytes int64) *editEnv {
+	t.Helper()
+	e := newEditEnv(t)
+	dir, err := tools.OpenKeepDir(filepath.Join(filepath.Dir(e.keep), "small"), "pre-", maxFiles, maxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(dir.Close)
+	e.keep = dir.Path()
+	e.pre = &tools.PreimageKeeper{Dir: dir}
+	e.ed, e.wr = tools.NewEdit(e.rd, e.pin, e.pre), tools.NewWrite(e.rd, e.pin, e.pre)
+	return e
+}
+
+// F2: at the file limit the call is refused by name, the target is
+// unchanged, and every earlier copy is still there (nothing is evicted).
+func TestPreimageStoreFullRefusesNoEviction(t *testing.T) {
+	e := newKeepEnv(t, 2, 1<<20)
+	var names []string
+	for _, f := range []string{"a", "b"} {
+		e.put(t, f+".txt", f+"0")
+		out, isErr := e.wr.Run(context.Background(), wr(f+".txt", f+"1"))
+		if isErr {
+			t.Fatal(out)
+		}
+		names = append(names, copyName(t, out))
+	}
+	p := e.put(t, "c.txt", "c0")
+	out, isErr := e.ed.Run(context.Background(), edits("c.txt", "c0", "c1"))
+	if !isErr || !strings.Contains(out, "pre-image store is full") || !strings.Contains(out, "unchanged") {
+		t.Fatalf("a full store must refuse the call by name: %v %s", isErr, out)
+	}
+	if got := mustFile(t, p); got != "c0" {
+		t.Fatalf("refused call changed the file: %q", got)
+	}
+	for i, n := range names {
+		if got := mustFile(t, filepath.Join(e.keep, n)); got != []string{"a0", "b0"}[i] {
+			t.Fatalf("copy %s evicted or changed: %q", n, got)
+		}
+	}
+	// a new file needs no copy and still works
+	if out, isErr := e.wr.Run(context.Background(), wr("fresh.txt", "x")); isErr {
+		t.Fatal(out)
+	}
+}
+
+// F2: the byte limit refuses too, and a refused or aborted copy releases
+// nothing it did not hold.
+func TestPreimageStoreByteLimit(t *testing.T) {
+	e := newKeepEnv(t, 100, 10)
+	e.put(t, "a.txt", "12345678")
+	if out, isErr := e.wr.Run(context.Background(), wr("a.txt", "x")); isErr {
+		t.Fatal(out)
+	}
+	e.put(t, "b.txt", "12345678")
+	out, isErr := e.wr.Run(context.Background(), wr("b.txt", "x"))
+	if !isErr || !strings.Contains(out, "pre-image store is full") {
+		t.Fatalf("byte limit: %v %s", isErr, out)
+	}
+	if got := mustFile(t, filepath.Join(e.wt, "b.txt")); got != "12345678" {
+		t.Fatalf("refused write changed the file: %q", got)
+	}
+}
+
+// F2: call journals (j-*) and the gitdir record left by an earlier run do
+// not count toward the copy limit after a restart; earlier copies do.
+func TestPreimageJournalsNotCounted(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "keep")
+	d, err := tools.OpenKeepDir(dir, "pre-", 2, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("j-toolu_%02d", i)), []byte(`{"path":"x","pre":"a","post":"b"}`), 0o600)
+	}
+	os.WriteFile(filepath.Join(dir, "gitref"), []byte(`{"v":1}`), 0o600)
+	d.Close()
+	d, err = tools.OpenKeepDir(dir, "pre-", 2, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for i := 0; i < 2; i++ {
+		f, _, err := d.CreateReserved("pre-", 1)
+		if err != nil {
+			t.Fatalf("copy %d refused although only journals are present: %v", i, err)
+		}
+		f.Close()
+	}
+	if _, _, err := d.CreateReserved("pre-", 1); !errors.Is(err, tools.ErrPreimageStoreFull) {
+		t.Fatalf("third copy: %v", err)
+	}
+	d.Close()
+	// the two copies survive a restart and still count
+	d2, err := tools.OpenKeepDir(dir, "pre-", 2, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d2.Close()
+	if _, _, err := d2.CreateReserved("pre-", 1); !errors.Is(err, tools.ErrPreimageStoreFull) {
+		t.Fatalf("after restart: %v", err)
+	}
+}
+
+// F4: the gitdir is recorded once per attempt. A resume uses the record even
+// when the child repointed the worktree's gitfile at a planted repository
+// where the file is tracked and clean; a recorded gitdir that was replaced is
+// refused; an attempt that started without git stays without git.
+func TestAttemptGitRefResume(t *testing.T) {
+	e := newEditEnv(t)
+	gd := filepath.Join(filepath.Dir(e.wt), "gd")
+	c := exec.Command("git", "init", "-q", "--separate-git-dir="+gd)
+	c.Dir = e.wt
+	if o, err := c.CombinedOutput(); err != nil {
+		t.Fatal(string(o))
+	}
+	g1, err := tools.AttemptGitRef(e.pre.Dir, e.wt)
+	if err != nil || g1 == nil || g1.GitDir != gd {
+		t.Fatalf("first record: %+v %v", g1, err)
+	}
+	e.put(t, "x.txt", "X0") // untracked in gd
+	planted := filepath.Join(filepath.Dir(e.wt), "planted")
+	os.MkdirAll(planted, 0o755)
+	os.WriteFile(filepath.Join(planted, "x.txt"), []byte("X0"), 0o644)
+	for _, a := range [][]string{{"init", "-q"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}, {"add", "x.txt"}, {"commit", "-q", "-m", "p"}} {
+		c := exec.Command("git", a...)
+		c.Dir = planted
+		if o, err := c.CombinedOutput(); err != nil {
+			t.Fatal(string(o))
+		}
+	}
+	os.WriteFile(filepath.Join(e.wt, ".git"), []byte("gitdir: "+filepath.Join(planted, ".git")+"\n"), 0o644)
+	// resume: a new runner process for the same attempt
+	g2, err := tools.AttemptGitRef(e.pre.Dir, e.wt)
+	if err != nil || g2 == nil || g2.GitDir != gd {
+		t.Fatalf("resume trusted the rewritten .git: %+v %v", g2, err)
+	}
+	e.pre.Git = g2
+	if out, isErr := e.wr.Run(context.Background(), wr("x.txt", "X1")); isErr || copyName(t, out) == "" {
+		t.Fatalf("resume: %s", out)
+	}
+	// the recorded gitdir itself replaced by another directory (moved aside
+	// first, so ext4 cannot hand the new directory the freed inode)
+	if err := os.Rename(gd, gd+".old"); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(gd, 0o755)
+	if _, err := tools.AttemptGitRef(e.pre.Dir, e.wt); !errors.Is(err, tools.ErrGitDirChanged) {
+		t.Fatalf("a replaced recorded gitdir must be refused: %v", err)
+	}
+	// an attempt that started without git: a later .git is never adopted
+	e2 := newEditEnv(t)
+	if g, err := tools.AttemptGitRef(e2.pre.Dir, e2.wt); g != nil || err != nil {
+		t.Fatalf("no git at start: %+v %v", g, err)
+	}
+	e2.gitInit(t)
+	if g, err := tools.AttemptGitRef(e2.pre.Dir, e2.wt); g != nil || err != nil {
+		t.Fatalf("resume adopted a .git created after the start: %+v %v", g, err)
 	}
 }
 
@@ -449,9 +686,14 @@ func TestWritePreimagePlantedGitdir(t *testing.T) {
 		c.CombinedOutput()
 	}
 	os.WriteFile(filepath.Join(planted, "x.txt"), []byte("X0"), 0o644)
-	c := exec.Command("git", "add", "x.txt")
-	c.Dir = planted
-	c.CombinedOutput()
+	// committed and clean there, so only the gitdir check can force the copy
+	for _, a := range [][]string{{"add", "x.txt"}, {"commit", "-q", "-m", "p"}} {
+		c := exec.Command("git", a...)
+		c.Dir = planted
+		if o, err := c.CombinedOutput(); err != nil {
+			t.Fatal(string(o))
+		}
+	}
 	os.RemoveAll(filepath.Join(e.wt, ".git"))
 	os.WriteFile(filepath.Join(e.wt, ".git"), []byte("gitdir: "+filepath.Join(planted, ".git")+"\n"), 0o644)
 	out, isErr := e.wr.Run(context.Background(), wr("x.txt", "X1"))
@@ -464,11 +706,10 @@ func TestWritePreimageRiskyConfigKeepsCopy(t *testing.T) {
 	e := newEditEnv(t)
 	e.gitInit(t)
 	e.put(t, "t.txt", "T0")
-	for _, a := range [][]string{{"add", "t.txt"}, {"config", "url.https://x/.insteadOf", "y:"}} {
-		c := exec.Command("git", a...)
-		c.Dir = e.wt
-		c.CombinedOutput()
-	}
+	// committed and clean, so only the risky configuration can force the copy
+	e.git(t, "add", "t.txt")
+	e.git(t, "commit", "-q", "-m", "c0")
+	e.git(t, "config", "url.https://x/.insteadOf", "y:")
 	out, isErr := e.wr.Run(context.Background(), wr("t.txt", "T1"))
 	if isErr || !strings.Contains(out, "preimage_copy: pre-") {
 		t.Fatalf("a refused git query must keep the copy: %s", out)
