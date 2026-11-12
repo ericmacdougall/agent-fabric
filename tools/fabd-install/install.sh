@@ -7,6 +7,16 @@
 #   MODE=unit     FAB_BIN=/srv/fabric/bin/fab-live   tools/fabd-install/install.sh   (upgrade the unit
 #                 and health files of an existing live install; no roles, data or binary change)
 #
+# MODE=unit and live need the ops-watch timer active and the script its
+# ops-watch.service runs to list forward-foreign-critical (goodqa#15827,
+# goodqa#15838). A failed systemd-analyze verify or effective-settings check
+# restores the previous unit files, health script and the drop-ins this run
+# removed. A failed FIRST health check does not roll back (goodqa#15838 F10):
+# the install stops (exit 3) with the new unit files in place, the hand-made
+# drop-in removed and the health timer not enabled; fabd itself keeps running.
+# To undo it, copy back $WORKDIR/prev-* and $WORKDIR/dropin-* by hand and run
+# `systemctl --user daemon-reload`, or fix the cause and rerun MODE=unit.
+#
 # rehearse: restores a streamed dump of fabric_live into a scratch database,
 #   creates roles under the prefix fabric_svcrh (roles are cluster-wide, so a
 #   rehearsal never touches fabric_svc_*), installs a unit fabd-rh.service
@@ -94,14 +104,24 @@ fi
 # unit, so the live-down alert must reach the digest and deadman queues. That
 # needs the ops_watch forwarder of goodqa#15827, probed by its capability. The
 # override is explicit and logged.
+# goodqa#15838: the copy that delivers is the one the ops-watch timer runs, which
+# need not be the emitter copy above; probe the script its service's ExecStart
+# names, and require the timer to be active.
 if [[ $MODE == unit || $MODE == live ]]; then
-  if [[ -x "$OPS_WATCH" ]]; then caps=$("$OPS_WATCH" capabilities 2>/dev/null || true); else caps=$(python3 "$OPS_WATCH" capabilities 2>/dev/null || true); fi
-  if grep -qx 'forward-foreign-critical' <<<"$caps"; then
-    say "preflight: ops_watch forwards foreign critical alerts (goodqa#15827)"
+  FWD=$(systemctl --user show -p ExecStart ops-watch.service 2>/dev/null | grep -o '[^ ;=]*ops_watch\.py' | head -1 || true)
+  caps=""; fwd_why=""
+  if [[ -z "$FWD" ]]; then fwd_why="ops-watch.service names no ops_watch.py in its ExecStart"
+  elif [[ ! -r "$FWD" ]]; then fwd_why="the ops-watch.service script $FWD is not readable"
+  elif ! systemctl --user is-active --quiet ops-watch.timer; then fwd_why="ops-watch.timer is not active"
+  elif [[ -x "$FWD" ]]; then caps=$("$FWD" capabilities 2>/dev/null || true)
+  else caps=$(python3 "$FWD" capabilities 2>/dev/null || true); fi
+  [[ -z "$fwd_why" ]] && ! grep -qx 'forward-foreign-critical' <<<"$caps" && fwd_why="the ops-watch.service script $FWD does not list forward-foreign-critical"
+  if [[ -z "$fwd_why" ]]; then
+    say "preflight: the ops-watch timer's $FWD forwards foreign critical alerts (goodqa#15827)"
   elif [[ "${FABD_ALLOW_LOCAL_ONLY_ALERTS:-}" == 1 ]]; then
-    say "WARNING: FABD_ALLOW_LOCAL_ONLY_ALERTS=1: installing without the goodqa#15827 forwarder; fabric:live-down:$UNIT reaches only the local ops-watch ring"
+    say "WARNING: FABD_ALLOW_LOCAL_ONLY_ALERTS=1 ($fwd_why): installing without the goodqa#15827 forwarder; fabric:live-down:$UNIT reaches only the local ops-watch ring"
   else
-    die "the installed ops_watch does not forward foreign critical alerts (goodqa#15827), so a fabd outage would reach no one; install it first, or set FABD_ALLOW_LOCAL_ONLY_ALERTS=1 to accept local-only alerts"
+    die "$fwd_why: the running ops_watch does not forward foreign critical alerts (goodqa#15827), so a fabd outage would reach no one; install it first, or set FABD_ALLOW_LOCAL_ONLY_ALERTS=1 to accept local-only alerts"
   fi
 fi
 
@@ -122,6 +142,11 @@ write_unit_files() {
     cp -p "$UNITDIR/$u" "$W/prev-$u" && cmp -s "$UNITDIR/$u" "$W/prev-$u" || die "could not keep a copy of $UNITDIR/$u"
     say "previous $u kept as $W/prev-$u"
   done
+  # the health script too (goodqa#15838 F7): a rollback must not pair the old
+  # health unit with the new script
+  if [[ -e "$SVC/fabd-health.sh" ]]; then
+    cp -p "$SVC/fabd-health.sh" "$W/prev-fabd-health.sh" && cmp -s "$SVC/fabd-health.sh" "$W/prev-fabd-health.sh" || die "could not keep a copy of $SVC/fabd-health.sh"
+  fi
   render_unit "$MODE_LABEL" "$SVC" "$FAB" "$FAKE" "$HOSTLABEL" > "$UNITDIR/$UNIT.service"
   install -m 0700 "$HERE/fabd-health.sh" "$SVC/fabd-health.sh"
   render_health_service "$UNIT" "$SVC" "$FAB" "$SVC/fabd-health.sh" "$OPS_WATCH" "$HEALTH_STATE_DIR" > "$UNITDIR/$UNIT-health.service"
@@ -134,6 +159,7 @@ write_unit_files() {
       [[ -e "$f" ]] || continue
       cp -p "$f" "$W/dropin-$(basename "$f")" && cmp -s "$f" "$W/dropin-$(basename "$f")" || die "could not keep a copy of drop-in $f"
       rm -f "$f"
+      REMOVED_DROPINS+=("$(basename "$f")")
       say "drop-in $f kept as $W/dropin-$(basename "$f") and removed (its settings are in the rendered unit now)"
     done
   fi
@@ -145,17 +171,20 @@ write_unit_files() {
   [[ "$eff" == *"Restart=always"* && "$eff" == *"RestartUSec=10s"* && "$eff" == *"StartLimitIntervalUSec=0"* ]] || rollback_units "effective unit settings differ from the rendered unit: $eff"
 }
 # rollback_units REASON: put back what write_unit_files replaced (the prev-*
-# unit files and the kept drop-ins; files that did not exist before are
+# unit files, the health script and the drop-ins this run removed; files that did not exist before are
 # removed), daemon-reload, then stop (PR 51 receipt F4)
+REMOVED_DROPINS=()
 rollback_units() {
   local u f
   for u in "$UNIT.service" "$UNIT-health.service" "$UNIT-health.timer"; do
     if [[ -e "$W/prev-$u" ]]; then cp -p "$W/prev-$u" "$UNITDIR/$u"; else rm -f "$UNITDIR/$u"; fi
   done
-  for f in "$W"/dropin-*.conf; do
-    [[ -e "$f" ]] || continue
+  if [[ -e "$W/prev-fabd-health.sh" ]]; then cp -p "$W/prev-fabd-health.sh" "$SVC/fabd-health.sh"; else rm -f "$SVC/fabd-health.sh"; fi
+  # only the drop-ins this run removed (goodqa#15838 F6): a resumed WORKDIR can
+  # hold copies from an earlier run
+  for f in "${REMOVED_DROPINS[@]}"; do
     mkdir -p "$UNITDIR/$UNIT.service.d"
-    cp -p "$f" "$UNITDIR/$UNIT.service.d/${f##*/dropin-}"
+    cp -p "$W/dropin-$f" "$UNITDIR/$UNIT.service.d/$f"
   done
   systemctl --user daemon-reload || true
   die "$1 (the previous unit files and drop-ins were restored)"
