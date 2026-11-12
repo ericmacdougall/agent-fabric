@@ -401,7 +401,9 @@ func (l *Loop) turn(ctx context.Context, msgs []Message, turns int) (Outcome, bo
 	}
 	idx := len(msgs)
 	l.crash("before_hold")
-	res, spent, budgetViolation, err := l.heldSend(ctx, req, idx, func(bodyBytes int) int64 {
+	// Each compaction generation has its own hold keys: the same message index
+	// is sent again, with a different body, after a compact-and-retry.
+	res, spent, budgetViolation, err := l.heldSend(ctx, req, idx+len(comps)<<20, func(bodyBytes int) int64 {
 		amt := c.Prices.WorstCase(bodyBytes, c.MaxTokens, c.MaxServerToolUses)
 		if c.Compaction.Mode == CompactServer {
 			// The compaction pass: one more worst case, bounded by the grant's

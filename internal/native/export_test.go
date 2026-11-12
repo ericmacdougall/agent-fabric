@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"encoding/json"
 	"regexp"
 	"time"
 
@@ -134,3 +135,11 @@ func PolicyFor(c ReviewGateConfig) (map[string]bool, error) {
 	}
 	return out, nil
 }
+
+// CompactionExtraForTest exposes the request parameters mode S adds.
+func CompactionExtraForTest(g Grant) (map[string]json.RawMessage, []string, error) {
+	return compactionExtra(g)
+}
+
+// GrantPinForTest exposes the grant's resume pin.
+func GrantPinForTest(g Grant, reviewGate bool) string { return g.pin(reviewGate) }

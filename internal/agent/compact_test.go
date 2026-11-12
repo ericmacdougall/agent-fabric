@@ -176,9 +176,10 @@ func TestCompactCrash(t *testing.T) {
 // NEG-11: cut rules.
 func TestCompactCutRules(t *testing.T) {
 	// an oversized prefix is cut from its oldest side for the summary input
-	steps := []fakeapi.Step{shellTurn("toolu_c1"), shellTurn("toolu_c2"), shellTurn("toolu_c3"), shellTurn("toolu_c4"), shellTurn("toolu_c5"), shellTurn("toolu_c6"), endStep("SUMMARY-1"), endStep("done")}
+	steps := []fakeapi.Step{shellTurn("toolu_c1"), shellTurn("toolu_c2"), shellTurn("toolu_c3"), shellTurn("toolu_c4"), shellTurn("toolu_c5"), shellTurn("toolu_c6"),
+		fakeStop("model_context_window_exceeded"), endStep("SUMMARY-1"), endStep("done")}
 	r := newRig(t, steps...)
-	clientCompaction(r, 8000)
+	clientCompaction(r, 0)
 	if out, err, _ := r.life(); err != nil || out.Kind != agent.OutcomeDone {
 		t.Fatalf("%v %s", err, r.kindOf(out))
 	}
@@ -215,8 +216,9 @@ func TestCompactCutRules(t *testing.T) {
 	if err != nil || out.Kind != agent.OutcomeParked || !strings.Contains(out.Note, "no valid cut") {
 		t.Fatalf("%v %s", err, r2.kindOf(out))
 	}
-	if len(r2.srv.Requests()) != 3 {
-		t.Fatalf("a summary was requested with no valid cut: %d", len(r2.srv.Requests()))
+	// the trigger fires before the third turn: two turns were sent, no summary
+	if n := len(r2.srv.Requests()); n != 2 {
+		t.Fatalf("a summary was requested with no valid cut: %d requests", n)
 	}
 }
 
@@ -340,4 +342,33 @@ func TestCompactionServerReplay(t *testing.T) {
 
 func toolWithCompaction(id, summary string) []fakeapi.Ev {
 	return fakeapi.CompactedToolUse(summary, id, "echo", `{"cmd":"b"}`, 100, 20, 1000, 100)
+}
+
+// NEG-20 (main's requirement): a summary that comes back empty fails safe. The
+// history is kept with no cut, no agent_compactions row is written, the event is
+// recorded as the park note, and nothing crashes.
+func TestCompactEmptySummary(t *testing.T) {
+	for name, summary := range map[string]string{"empty": "", "blank": "  \n "} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, shellTurn("toolu_c1"), shellTurn("toolu_c2"), shellTurn("toolu_c3"), endStep(summary), endStep("never"))
+			clientCompaction(r, 8000)
+			before := len(r.messages())
+			out, err, died := r.life()
+			if err != nil || died != nil {
+				t.Fatalf("crash or error: %v %v", err, died)
+			}
+			if out.Kind != agent.OutcomeParked || !strings.Contains(out.Note, "no usable summary") {
+				t.Fatalf("not recorded as a park: %s", r.kindOf(out))
+			}
+			if cs := r.compactions(); len(cs) != 0 {
+				t.Fatalf("a compaction row was written for an empty summary: %+v", cs)
+			}
+			if got := len(r.messages()); got != before+0 && got != 7 {
+				t.Fatalf("history changed: %d messages", got)
+			}
+			if n := len(r.srv.Requests()); n != 4 {
+				t.Fatalf("%d requests: the loop went on after an empty summary", n)
+			}
+		})
+	}
 }

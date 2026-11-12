@@ -343,7 +343,7 @@ func (l *Loop) compactClient(ctx context.Context, msgs []Message, comps []Compac
 	}
 	req := Request{Model: c.Model, MaxTokens: capTokens, System: summarySystem,
 		Messages: []Msg{{Role: "user", Content: []json.RawMessage{in}}}}
-	res, spent, violation, err := l.heldSend(ctx, req, 1_000_000+position, func(body int) int64 {
+	res, spent, violation, err := l.heldSend(ctx, req, 1<<30+len(comps)<<20+position, func(body int) int64 {
 		return c.Prices.WorstCase(body, capTokens, 0)
 	})
 	if err != nil {

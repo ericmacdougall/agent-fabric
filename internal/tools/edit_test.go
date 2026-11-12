@@ -511,3 +511,22 @@ func tagTail(id string) string {
 	s := b.String()
 	return s[len(s)-8:]
 }
+
+// The second pre-image check, right before renameat: a change between the
+// temp write and the rename is refused and nothing is left behind.
+func TestEditChangedBeforeRename(t *testing.T) {
+	e := newEditEnv(t)
+	p := e.put(t, "f.txt", "alpha beta")
+	restore := tools.SetHooks(nil, func() { os.WriteFile(p, []byte("alpha BETA!"), 0o644) }, nil)
+	defer restore()
+	out, isErr := e.ed.Run(context.Background(), edits("f.txt", "alpha", "ALPHA"))
+	if !isErr || !strings.Contains(out, "file changed") {
+		t.Fatalf("a change before the rename was not refused: %v %s", isErr, out)
+	}
+	if got := mustFile(t, p); got != "alpha BETA!" {
+		t.Fatalf("the other writer's bytes were overwritten: %q", got)
+	}
+	if ents, _ := filepath.Glob(filepath.Join(e.wt, ".fabric-*")); len(ents) != 0 {
+		t.Fatalf("temp left behind: %v", ents)
+	}
+}

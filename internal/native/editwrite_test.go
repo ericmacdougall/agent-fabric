@@ -134,7 +134,8 @@ func TestEditShadowAbsent(t *testing.T) {
 }
 
 func TestEditEvaluateNeverExecutes(t *testing.T) {
-	e, file := editEnv(t, native.ReviewGateConfig{Mode: "evaluate"})
+	// safe_tools so no human is needed: the gate then records the evaluate outcome
+	e, file := editEnv(t, native.ReviewGateConfig{Mode: "evaluate", SafeTools: []string{"edit"}})
 	st := openNativeStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
