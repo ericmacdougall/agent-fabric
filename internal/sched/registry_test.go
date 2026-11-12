@@ -114,6 +114,15 @@ func pinnedProvider(t *testing.T) (string, *dispatch.Registry) {
 	return p, reg
 }
 
+func unpinnedRegistry(t *testing.T) *dispatch.Registry {
+	t.Helper()
+	reg := dispatch.NewRegistry()
+	if err := reg.Register(dispatch.ClaudeCode{}); err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
 func registrySetup(t *testing.T, id domain.MissionID) (*store.Store, *ioLauncher, Config) {
 	t.Helper()
 	st, _, cfg := ownerSetup(t, id)
@@ -160,6 +169,7 @@ func TestCheckConfig(t *testing.T) {
 		"launcher without StartIO":  {func(c *Config) {}, &plainLauncher{}, "needs a launcher with StartIO"},
 		"no claude-code dispatcher": {func(c *Config) { c.Registry = dispatch.NewRegistry() }, ln, `needs a "claude-code" dispatcher`},
 		"nil registry":              {func(c *Config) { c.Registry = nil }, ln, `needs a "claude-code" dispatcher`},
+		"unpinned claude-code":      {func(c *Config) { c.Registry = unpinnedRegistry(t) }, ln, "pinned to a provider sha256"},
 		"untrusted provider":        {func(c *Config) { c.TrustProvider = false }, ln, "needs --trust-provider"},
 		"negative launch limit":     {func(c *Config) { c.LaunchLimit = -1 }, ln, "negative"},
 		"no runner DSN":             {func(c *Config) { c.RunnerDSN = "" }, ln, "runner database role"},

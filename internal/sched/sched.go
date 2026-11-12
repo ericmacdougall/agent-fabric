@@ -232,8 +232,14 @@ func CheckConfig(cfg Config, ln Launcher) error {
 	if _, ok := ln.(host.StdinStarter); !ok {
 		return fmt.Errorf("sched: registry dispatch needs a launcher with StartIO; %T has none", ln)
 	}
-	if _, ok := cfg.Registry.Get(string(domain.ProviderClaudeCode)); !ok {
+	d, ok := cfg.Registry.Get(string(domain.ProviderClaudeCode))
+	if !ok {
 		return fmt.Errorf("sched: registry dispatch needs a %q dispatcher", domain.ProviderClaudeCode)
+	}
+	// NEG-11 in the scheduler itself, not only in fab daemon: registry mode
+	// runs only a claude-code dispatcher pinned to a provider sha256.
+	if cc, isCC := d.(dispatch.ClaudeCode); !isCC || cc.PinSHA256 == "" {
+		return fmt.Errorf("sched: registry dispatch needs a claude-code dispatcher pinned to a provider sha256 (NEG-11); got %T without a pin", d)
 	}
 	if !cfg.TrustProvider {
 		return fmt.Errorf("sched: registry dispatch runs only the pinned stdin fake until the real provider is probed; it needs --trust-provider (NEG-11)")
