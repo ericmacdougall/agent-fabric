@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,6 +31,9 @@ type Read struct {
 	// read first checks it, then checks that the root it opened is that same
 	// directory, and refuses with ErrWorktreeMoved otherwise.
 	Pin *WorktreePin
+	// Spill, when set, is the attempt's runner-only spill directory: a path
+	// "spill:<16 hex>" resolves only there (goodqa#15361 N2).
+	Spill *RunnerDir
 }
 
 var _ agent.Tool = (*Read)(nil)
@@ -60,19 +64,45 @@ func (r *Read) Root() string { return r.root }
 func (r *Read) Name() string        { return "read" }
 func (r *Read) SideEffecting() bool { return false }
 func (r *Read) Def() json.RawMessage {
-	return json.RawMessage(`{"name":"read","description":"Read a regular text file inside the worktree. Path is relative to the worktree root.","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}`)
+	return json.RawMessage(`{"name":"read","description":"Read a regular text file inside the worktree. Path is relative to the worktree root, or spill:<id> for saved tool output. offset (1-based line) and limit (at most 2000 lines) read a window.","input_schema":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":2000}},"required":["path"]}}`)
 }
 
 func (r *Read) Run(ctx context.Context, input json.RawMessage) (string, bool) {
 	var in struct {
-		Path string `json:"path"`
+		Path   string `json:"path"`
+		Offset *int   `json:"offset"`
+		Limit  *int   `json:"limit"`
 	}
 	if err := json.Unmarshal(input, &in); err != nil || in.Path == "" {
 		return "read needs {\"path\": \"relative/file\"}", true
 	}
+	win := window{}
+	if in.Offset != nil || in.Limit != nil {
+		win.set = true
+		win.offset, win.limit = 1, 2000
+		if in.Offset != nil {
+			if *in.Offset < 1 {
+				return "read refused: offset is 1-based", true
+			}
+			win.offset = *in.Offset
+		}
+		if in.Limit != nil {
+			if *in.Limit < 1 || *in.Limit > 2000 {
+				return "read refused: limit must be 1 to 2000", true
+			}
+			win.limit = *in.Limit
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
 	defer cancel()
-	out, err := r.read(ctx, in.Path)
+	if id, ok := strings.CutPrefix(in.Path, "spill:"); ok {
+		out, err := r.readSpill(ctx, id, win)
+		if err != nil {
+			return "read refused: " + err.Error(), true
+		}
+		return out, false
+	}
+	out, err := r.read(ctx, in.Path, win)
 	if err != nil {
 		return "read refused: " + err.Error(), true
 	}
@@ -118,7 +148,7 @@ func (r *Read) rel(p string) ([]string, error) {
 	return parts, nil
 }
 
-func (r *Read) read(ctx context.Context, p string) (string, error) {
+func (r *Read) read(ctx context.Context, p string, win window) (string, error) {
 	parts, err := r.rel(p)
 	if err != nil {
 		return "", err
@@ -171,6 +201,41 @@ func (r *Read) read(ctx context.Context, p string) (string, error) {
 	if st.Nlink > 1 {
 		return "", errors.New("file has more than one hard link")
 	}
+	return r.stream(ctx, f, win)
+}
+
+// window is an optional 1-based line window.
+type window struct {
+	set           bool
+	offset, limit int
+}
+
+var spillID = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
+func (r *Read) readSpill(ctx context.Context, id string, win window) (string, error) {
+	if !spillID.MatchString(id) {
+		return "", errors.New("a spill reference is spill: followed by exactly 16 lowercase hex characters")
+	}
+	if r.Spill == nil {
+		return "", errors.New("no spill directory for this attempt")
+	}
+	f, err := r.Spill.Open(id)
+	if errors.Is(err, ErrExpired) {
+		return "", errors.New("spill expired")
+	}
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	return r.stream(ctx, f, win)
+}
+
+// stream returns the whole file up to MaxBytes, or, with a window, the
+// requested lines up to MaxBytes, saying where to continue.
+func (r *Read) stream(ctx context.Context, f *os.File, win window) (string, error) {
+	if win.set {
+		return r.lines(ctx, f, win)
+	}
 	buf := make([]byte, 0, min(r.MaxBytes, 1<<16))
 	chunk := make([]byte, 32<<10)
 	for int64(len(buf)) < r.MaxBytes {
@@ -192,6 +257,39 @@ func (r *Read) read(ctx context.Context, p string) (string, error) {
 		return string(buf) + "\n[truncated at " + fmt.Sprint(r.MaxBytes) + " bytes]", nil
 	}
 	return string(buf), nil
+}
+
+func (r *Read) lines(ctx context.Context, f *os.File, win window) (string, error) {
+	end := win.offset + win.limit // exclusive line number
+	line := 1
+	var out []byte
+	chunk := make([]byte, 32<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", errors.New("read timed out")
+		}
+		n, err := f.Read(chunk)
+		for _, c := range chunk[:n] {
+			if line >= end {
+				return string(out) + fmt.Sprintf("\n[more lines: continue with offset %d]", end), nil
+			}
+			if line >= win.offset {
+				if int64(len(out)) >= r.MaxBytes {
+					return string(out) + fmt.Sprintf("\n[truncated at %d bytes: continue with offset %d]", r.MaxBytes, line), nil
+				}
+				out = append(out, c)
+			}
+			if c == '\n' {
+				line++
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return string(out), nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
 }
 
 // NoSymlinkPath checks that every component of rel under root is a real

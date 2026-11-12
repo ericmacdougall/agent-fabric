@@ -178,3 +178,23 @@ func (d *RunnerDir) Remove() {
 	unix.Close(d.fd)
 	_ = unix.Rmdir(d.path)
 }
+
+// ReapOrphanDirs removes the per-attempt directories under root that keep
+// does not claim (attempts no longer running), so an abnormal exit leaves no
+// orphan (goodqa#15361 R2-c). It returns the names it removed.
+func ReapOrphanDirs(root string, keep func(name string) bool) []string {
+	ents, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var removed []string
+	for _, e := range ents {
+		if keep(e.Name()) {
+			continue
+		}
+		if os.RemoveAll(filepath.Join(root, e.Name())) == nil {
+			removed = append(removed, e.Name())
+		}
+	}
+	return removed
+}
