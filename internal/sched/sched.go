@@ -238,6 +238,13 @@ func CheckConfig(cfg Config, ln Launcher) error {
 	if !cfg.TrustProvider {
 		return fmt.Errorf("sched: registry dispatch runs only the pinned stdin fake until the real provider is probed; it needs --trust-provider (NEG-11)")
 	}
+	// START refuses a host id without the h_ prefix and parks the mission
+	// (store.go ParseHostID); refuse at start instead (D1 rehearsal finding:
+	// a unit with --host t2-dev parked the disposable mission). The argv path
+	// is left as it is (AC-1).
+	if _, err := domain.ParseHostID(string(cfg.Host)); err != nil {
+		return fmt.Errorf("sched: registry dispatch needs a valid --host id: %v", err)
+	}
 	if cfg.WorkerUser != "" && !RegistryWorkerUserProven {
 		return fmt.Errorf("sched: registry dispatch with worker account %q is refused until the worker-uid stdin test is recorded (AC-4)", cfg.WorkerUser)
 	}

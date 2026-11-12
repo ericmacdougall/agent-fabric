@@ -130,7 +130,7 @@ func registrySetup(t *testing.T, id domain.MissionID) (*store.Store, *ioLauncher
 // AC-2, NEG-12: every refusal is named; the valid configurations pass.
 func TestCheckConfig(t *testing.T) {
 	_, reg := pinnedProvider(t)
-	base := Config{RunnerDSN: "postgres://runner@127.0.0.1:1/x", DispatchVia: DispatchRegistry, Registry: reg, TrustProvider: true}
+	base := Config{RunnerDSN: "postgres://runner@127.0.0.1:1/x", DispatchVia: DispatchRegistry, Registry: reg, TrustProvider: true, Host: "h_test"}
 	ln := newIOLauncher()
 	if err := CheckConfig(base, ln); err != nil {
 		t.Fatalf("a valid registry config was refused: %v", err)
@@ -164,6 +164,7 @@ func TestCheckConfig(t *testing.T) {
 		"negative launch limit":     {func(c *Config) { c.LaunchLimit = -1 }, ln, "negative"},
 		"no runner DSN":             {func(c *Config) { c.RunnerDSN = "" }, ln, "runner database role"},
 		"exit cleanup without Stop": {func(c *Config) { c.ExitCleanup = true }, ln, "ExitCleanup needs"},
+		"host without h_ prefix":    {func(c *Config) { c.Host = "t2-dev" }, ln, "valid --host id"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

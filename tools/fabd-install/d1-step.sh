@@ -95,10 +95,17 @@ while (( i < ${#A[@]} )); do  # A = flock -n LOCK FAB daemon ...; keep the daemo
     --no-dispatch|--trust-provider) ;;
     --provider) i=$((i+1));;
     --dispatch-via|--launch-limit|--only-mission) fail "the saved cmdline already has $a";;
+    --host)  # START refuses a host id without h_ and parks the mission (rehearsal run 3);
+      # the --no-dispatch unit never starts anything, so its label was never checked
+      # (goodqa#15849). The transient uses the h_ form, which is fab reconcile's default.
+      i=$((i+1)); HOST=${A[$i]}; [[ "$HOST" == h_* ]] || HOST=h_$HOST
+      [[ "$HOST" =~ ^h_[a-z0-9-]+$ ]] || fail "unusable --host ${A[$i]}"
+      args+=(--host "$HOST");;
     *) args+=("$a");;
   esac
   i=$((i+1))
 done
+[[ -n "${HOST:-}" ]] || fail "the saved cmdline has no --host"
 # drop everything up to and including "daemon"
 k=0; for j in "${!args[@]}"; do [[ "${args[$j]}" == daemon ]] && { k=$((j+1)); break; }; done
 (( k > 0 )) || fail "no daemon subcommand in the saved cmdline"
@@ -112,7 +119,7 @@ fi
 systemctl --user stop "$UNIT"
 systemd-run --user --quiet --unit "$STEP_UNIT" -p Restart=no -p EnvironmentFile="$SVC/env" -- /bin/bash -c \
   "$SVC/guard.sh && exec /usr/bin/flock -n $SVC/fabd.lock $FAB daemon --dispatch-via=registry --launch-limit 1 --only-mission $MISSION --provider $BIN/fakeclaude-stdin --trust-provider$FLAGS"
-rec "step=5 transient=$STEP_UNIT flags=registry,launch-limit=1,only-mission=$MISSION"
+rec "step=5 transient=$STEP_UNIT flags=registry,launch-limit=1,only-mission=$MISSION host=$HOST"
 
 # --- step 6: poll read-only for the FINISH, then stop the transient unit
 finished=0
