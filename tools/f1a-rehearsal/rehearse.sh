@@ -50,7 +50,7 @@ cleanup() {
   echo "cleanup: dropped copy $CP (the dump is streamed, never written); scratch sets stay under $S"
 }
 trap cleanup EXIT
-GO=$HOME/sdk/go1.26.10/bin/go
+GO=$HOME/sdk/go1.26.11/bin/go
 
 echo "== disk"; df -h /var/tmp | tail -1
 echo "== builds (the pinned build script)"
@@ -82,7 +82,7 @@ rc_build() { # commit outdir : replaycheck source from NEW tree built inside the
   mkdir -p "$t/tools/replaycheck"
   git -C "$HOME/repos/fabric" show "$SHA:tools/replaycheck/main.go" > "$t/tools/replaycheck/main.go"
   # built inside the clone, so the build info carries the commit (vcs.revision)
-  (cd "$t" && GOFLAGS=-mod=readonly CGO_ENABLED=0 GOTOOLCHAIN=local GOWORK=off GOENV=off PATH="$HOME/sdk/go1.26.10/bin:$PATH" go build -buildvcs=true -o "$o" ./tools/replaycheck)
+  (cd "$t" && GOFLAGS=-mod=readonly CGO_ENABLED=0 GOTOOLCHAIN=local GOWORK=off GOENV=off PATH="$HOME/sdk/go1.26.11/bin:$PATH" go build -buildvcs=true -o "$o" ./tools/replaycheck)
 }
 rc_build "$OLD" "$S/rc-old"; rc_build "$SHA" "$S/rc-new"
 FABRIC_DSN="$CPD" "$S/rc-old" > "$S/rc-old.tsv" 2>"$S/rc-old.err" || true
