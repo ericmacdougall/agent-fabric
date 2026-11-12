@@ -2,7 +2,7 @@
  "generator_sha256": "59ba6eea1a3e46c4b7b79c069dbf4373edd057f3291f650a2397e4a0b2b493db",
  "policy": {
   "caps": {
-   "_doc": "owner cap (memory feedback-token-budget: at most 4 active owners): owner_types count toward session_owner_agents; helpers (red-team, click-tester, fixer, Explore, Plan) count only toward session_live_agents. The owner count comes from ah owners liveness when the session has a main WAL, else from the SubagentStart live map.",
+   "_doc": "owner cap (memory feedback-token-budget: at most 8 active owners, raised from 4 by the user on 2026-11-09): owner_types count toward session_owner_agents; helpers (red-team, click-tester, fixer, Explore, Plan) count only toward session_live_agents. The owner count comes from ah owners liveness when the session has a main WAL, else from the SubagentStart live map.",
    "helper_types": [
     "red-team",
     "click-tester",
@@ -21,8 +21,8 @@
     "fork",
     ""
    ],
-   "session_live_agents": 12,
-   "session_owner_agents": 4,
+   "session_live_agents": 16,
+   "session_owner_agents": 8,
    "top_assent_max_age_seconds": 43200
   },
   "default_effort": "medium",
@@ -222,7 +222,7 @@
  },
  "reference": {
   "escalation_py_sha256": "f501898821c34271675b41b409a6e2958752e0af2ba4ce3952533f27e288b7e9",
-  "model_tiers_json_sha256": "dcb221bac11825023db120300dd437f1a5c3305327dfc322f1003a499dc5e9b9"
+  "model_tiers_json_sha256": "f25fc5ebb0280ac1ae19f5960b458c39323410c5735821f5b4f7c0ce5b55cb08"
  },
  "refusals": [
   {
