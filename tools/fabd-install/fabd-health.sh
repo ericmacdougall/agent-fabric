@@ -77,7 +77,13 @@ if [[ -r "$STATE" ]]; then
 fi
 # "since" is when the standing raise was last emitted. The ops-watch ring is
 # bounded, so a raise is re-emitted every 6 h while the outage lasts (review N3).
-save() { printf '%s %s %s\n' "$fails" "$raised" "$since" > "$STATE.tmp" && sync "$STATE.tmp" 2>/dev/null; mv -f "$STATE.tmp" "$STATE"; }
+# A failed write (ENOSPC) must never replace the state: an empty state would
+# forget a standing raise and reset the count every run (review N16).
+save() {
+  { printf '%s %s %s\n' "$fails" "$raised" "$since" > "$STATE.tmp" && { sync "$STATE.tmp" 2>/dev/null || true; }; } \
+    && mv -f "$STATE.tmp" "$STATE" \
+    || { rm -f "$STATE.tmp"; crit "state write for $UNIT failed; previous state kept"; return 1; }
+}
 REASSERT_S=${FABD_HEALTH_REASSERT_S:-21600}
 
 case "$ACTION" in
@@ -105,6 +111,11 @@ if [[ -r "$MAINT" ]]; then
   rm -f "$MAINT"
 fi
 enabled=$(systemctl --user is-enabled "$UNIT" 2>/dev/null) || true
+# an empty answer (a transient bus error) is unknown, not "disabled": skip the
+# run without touching the state, so a standing raise is never cleared by it (review N19)
+if [[ -z "$enabled" ]]; then
+  echo "fabd-health: could not read whether $UNIT is enabled; check skipped" >&2; exit 0
+fi
 if [[ "$enabled" != enabled ]]; then
   echo "fabd-health: $UNIT is ${enabled:-not installed}, not enabled; check skipped"
   rc=0

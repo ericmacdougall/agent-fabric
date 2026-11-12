@@ -46,8 +46,10 @@ HOSTLABEL=t2-dev
 # Test hook (install_test.go only): a stand-in provider, accepted only when HOME
 # is under the temp directory, so it can never apply to a real install.
 if [[ -n "${FABD_INSTALL_TEST_FAKE:-}" ]]; then
-  tmp=${TMPDIR:-/tmp}; tmp=${tmp%/}
-  [[ "$HOME" == "$tmp"/* || "$HOME" == /tmp/* ]] || { echo "install: FABD_INSTALL_TEST_FAKE is for tests with a temporary HOME only" >&2; exit 2; }
+  # a fixed /tmp, never TMPDIR (TMPDIR=/ would admit any HOME), and never the
+  # account's own home (review N17)
+  pwhome=$(getent passwd "$(id -un)" | cut -d: -f6)
+  [[ "$HOME" == /tmp/?* && "$HOME" != "$pwhome" ]] || { echo "install: FABD_INSTALL_TEST_FAKE is for tests with a temporary HOME only" >&2; exit 2; }
   FAKE=$FABD_INSTALL_TEST_FAKE
   FAKE_SHA=$(sha256sum "$FAKE" | cut -d' ' -f1)
 fi

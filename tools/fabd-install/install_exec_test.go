@@ -349,3 +349,44 @@ func TestHealthMaintenanceResetsCount(t *testing.T) {
 		t.Errorf("state after a skipped check in a window = %q, want 0", got)
 	}
 }
+
+// Review N16: a failed state write keeps the previous state (a standing raise
+// is not forgotten) and is logged at crit.
+func TestHealthFailedStateWriteKeepsState(t *testing.T) {
+	needBash(t)
+	h := newHealth(t)
+	h.set(t, false, false)
+	h.writeState(t, "4 1 "+strconv.FormatInt(time.Now().Unix(), 10)+"\n")
+	before := read(t, filepath.Join(h.state, "fabd.state"))
+	// ENOSPC on the write: the temp file is /dev/full (Linux)
+	if err := os.Symlink("/dev/full", filepath.Join(h.state, "fabd.state.tmp")); err != nil {
+		t.Skip("no /dev/full symlink:", err)
+	}
+	// bounded: with the defect the state becomes the /dev/full link and the
+	// next read never ends
+	runBash(t, h.env, `exec timeout 10 "$1" fabd "$2"`, abs(t, "fabd-health.sh"), filepath.Join(h.dir, "fab"))
+	if fi, err := os.Lstat(filepath.Join(h.state, "fabd.state")); err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf("the state file was replaced by the failed temp file")
+	}
+	if got := read(t, filepath.Join(h.state, "fabd.state")); got != before {
+		t.Errorf("state after a failed write = %q, want the previous %q", got, before)
+	}
+	if !strings.Contains(read(t, filepath.Join(h.dir, "logger.log")), "state write") {
+		t.Errorf("a failed state write was not logged at crit")
+	}
+}
+
+// Review N19: an empty is-enabled answer is unknown; a standing raise stays.
+func TestHealthUnknownEnabledKeepsRaise(t *testing.T) {
+	needBash(t)
+	h := newHealth(t)
+	os.WriteFile(filepath.Join(h.dir, "enabled"), []byte(""), 0o644)
+	h.writeState(t, "3 1 0\n")
+	h.run(t)
+	if ev := h.events(t); len(ev) != 0 {
+		t.Errorf("an unknown enabled state emitted %v", ev)
+	}
+	if got := read(t, filepath.Join(h.state, "fabd.state")); got != "3 1 0\n" {
+		t.Errorf("state changed to %q", got)
+	}
+}
