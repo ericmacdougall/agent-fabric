@@ -169,8 +169,9 @@ func TestMigrate0038FromLevel37(t *testing.T) {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("migrate 37 -> 38: %v", err)
 	}
-	if n, latest := level(t, st, ctx); n != n37+1 || latest != migration0038 {
-		t.Fatalf("level %d at %s, want %d at %s", n, latest, n37+1, migration0038)
+	// 0038 and every later embedded migration (0039 on) apply from level 37.
+	if n, latest := level(t, st, ctx); n != n37+1+afterCount(t, migration0038) || latest != lastEmbedded(t) || !applied(t, st, ctx, migration0038) {
+		t.Fatalf("level %d at %s, want %d at %s with 0038 applied", n, latest, n37+1+afterCount(t, migration0038), lastEmbedded(t))
 	}
 	if n := count(t, st, ctx, `SELECT count(*) FROM attempts`); n != 2 {
 		t.Fatalf("%d attempts after migrate, want 2", n)
@@ -189,8 +190,8 @@ func TestMigrate0038FromLevel37(t *testing.T) {
 	if _, err := st.pool.Exec(ctx, string(sql)); err != nil {
 		t.Fatalf("re-applying 0038: %v", err)
 	}
-	if n, _ := level(t, st, ctx); n != n37+1 {
-		t.Fatalf("level %d after re-apply, want %d", n, n37+1)
+	if n, _ := level(t, st, ctx); n != n37+1+afterCount(t, migration0038) {
+		t.Fatalf("level %d after re-apply, want %d", n, n37+1+afterCount(t, migration0038))
 	}
 	if n := count(t, st, ctx, `SELECT count(*) FROM pg_trigger WHERE tgname = 'attempts_worktree_immutable'`); n != 1 {
 		t.Fatalf("%d immutability triggers after re-apply, want 1", n)

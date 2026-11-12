@@ -38,8 +38,10 @@ func TestMigrate0038LockTimeout(t *testing.T) {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("migrate once the lock is released: %v", err)
 	}
-	if _, latest := level(t, st, ctx); latest != migration0038 {
-		t.Fatalf("level %s after retry, want %s", latest, migration0038)
+	// Later migrations (0039 and on) apply too: 0038 must be applied, and the
+	// level is the latest embedded migration.
+	if _, latest := level(t, st, ctx); latest != lastEmbedded(t) || !applied(t, st, ctx, migration0038) {
+		t.Fatalf("level %s after retry, want %s with 0038 applied", latest, lastEmbedded(t))
 	}
 	if !strings.Contains(mustRead(t, migration0038), "SET LOCAL lock_timeout = '5s';") {
 		t.Fatal("0038 does not set its lock_timeout")
@@ -53,4 +55,35 @@ func mustRead(t *testing.T, name string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// lastEmbedded is the binary's newest migration name.
+func lastEmbedded(t *testing.T) string {
+	t.Helper()
+	names, err := embeddedMigrations()
+	if err != nil || len(names) == 0 {
+		t.Fatal(err)
+	}
+	return names[len(names)-1]
+}
+
+// afterCount is how many embedded migrations sort after name.
+func afterCount(t *testing.T, name string) int {
+	t.Helper()
+	names, err := embeddedMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, x := range names {
+		if x > name {
+			n++
+		}
+	}
+	return n
+}
+
+func applied(t *testing.T, st *Store, ctx context.Context, name string) bool {
+	t.Helper()
+	return count(t, st, ctx, "SELECT count(*) FROM fabric_schema WHERE name = '"+name+"'") == 1
 }
