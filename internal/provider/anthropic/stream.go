@@ -13,12 +13,23 @@ import (
 // not send stay zero; Raw is the last usage object verbatim for the audit
 // record (it can carry server-tool counters this code does not act on).
 type Usage struct {
-	Input       int64           `json:"input_tokens"`
-	Output      int64           `json:"output_tokens"`
-	CacheCreate int64           `json:"cache_creation_input_tokens"`
-	CacheRead   int64           `json:"cache_read_input_tokens"`
-	ServerTools int64           `json:"server_tool_uses"`
-	Raw         json.RawMessage `json:"raw,omitempty"`
+	Input       int64 `json:"input_tokens"`
+	Output      int64 `json:"output_tokens"`
+	CacheCreate int64 `json:"cache_creation_input_tokens"`
+	CacheRead   int64 `json:"cache_read_input_tokens"`
+	ServerTools int64 `json:"server_tool_uses"`
+	// Iterations is usage.iterations when the response compacted.
+	Iterations []UsageIteration `json:"iterations,omitempty"`
+	Raw        json.RawMessage  `json:"raw,omitempty"`
+}
+
+// UsageIteration is one entry of usage.iterations.
+type UsageIteration struct {
+	Type        string `json:"type"`
+	Input       int64  `json:"input_tokens"`
+	Output      int64  `json:"output_tokens"`
+	CacheCreate int64  `json:"cache_creation_input_tokens"`
+	CacheRead   int64  `json:"cache_read_input_tokens"`
 }
 
 // Message is a fully assembled assistant message. Content blocks are kept as
@@ -81,6 +92,7 @@ type usageWire struct {
 	CacheCreate *int64           `json:"cache_creation_input_tokens"`
 	CacheRead   *int64           `json:"cache_read_input_tokens"`
 	ServerTool  map[string]int64 `json:"server_tool_use"`
+	Iterations  []UsageIteration `json:"iterations"`
 }
 
 func (a *assembler) mergeUsage(raw json.RawMessage) error {
@@ -123,6 +135,14 @@ func (a *assembler) mergeUsage(raw json.RawMessage) error {
 			total += n
 		}
 		a.msg.Usage.ServerTools = total
+	}
+	if w.Iterations != nil {
+		for _, it := range w.Iterations {
+			if it.Input < 0 || it.Output < 0 || it.CacheCreate < 0 || it.CacheRead < 0 {
+				return perr("usage iterations has a negative counter")
+			}
+		}
+		a.msg.Usage.Iterations = w.Iterations
 	}
 	a.msg.Usage.Raw = bytes.Clone(raw)
 	return nil
@@ -317,6 +337,15 @@ func (b *blockState) delta(raw json.RawMessage) error {
 		}
 		b.partial.WriteString(s)
 		return err
+	case "compaction_delta":
+		// Server compaction delivers the whole summary in one delta
+		// (content may be null when no summary was written).
+		c, ok := d["content"]
+		if !ok {
+			return perr("compaction delta without content")
+		}
+		b.fields["content"] = c
+		return nil
 	case "citations_delta":
 		b.cites = append(b.cites, d["citation"])
 		return nil

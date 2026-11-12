@@ -62,3 +62,12 @@ func (t freshTool) Run(ctx context.Context, input json.RawMessage) (string, bool
 	}
 	return t.Tool.Run(ctx, input)
 }
+
+// InterruptedNote forwards to the wrapped tool, so an edit or write found
+// EXECUTING on resume can still report its file's digests.
+func (t freshTool) InterruptedNote(id string, input json.RawMessage) string {
+	if n, ok := t.Tool.(agent.InterruptNoter); ok {
+		return n.InterruptedNote(id, input)
+	}
+	return ""
+}

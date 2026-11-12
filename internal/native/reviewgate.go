@@ -44,6 +44,10 @@ func (c ReviewGateConfig) policy() (reviewgate.Policy, error) {
 		"read":  {Allow: true, Risk: reviewgate.TierReadOnly, Reversibility: reviewgate.NoSideEffect},
 		"grep":  {Allow: true, Risk: reviewgate.TierReadOnly, Reversibility: reviewgate.NoSideEffect},
 		"shell": {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.Reversible, HumanRequired: true},
+		// Option A (goodqa#15361, decision: main (agent), on #15361): every edit
+		// and write is reviewed per call. safe_tools is the per-mission opt-out.
+		"edit":  {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.Reversible, HumanRequired: true},
+		"write": {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.Reversible, HumanRequired: true},
 	}}
 	for _, name := range c.SafeTools {
 		tool, ok := p.Tools[name]

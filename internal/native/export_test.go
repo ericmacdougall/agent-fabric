@@ -94,3 +94,43 @@ func SetHeartbeatFault(f func() error) func() {
 	heartbeatFault = f
 	return func() { heartbeatFault = prev }
 }
+
+// FileToolsEnabled exposes the edit/write gate rule (goodqa#15361 F1).
+func FileToolsEnabled(reviewGate bool, c ReviewGateConfig) bool {
+	return fileToolsEnabled(reviewGate, c)
+}
+
+// ToolNamesForTest builds the toolset as Run does, with or without edit and
+// write and a state directory, and returns the tool names.
+func ToolNamesForTest(g Grant, starter tools.Starter, fileTools bool, stateDir string) ([]string, error) {
+	wt, err := canonicalWorktree(g.Worktree)
+	if err != nil {
+		return nil, err
+	}
+	hg := host.Grant{Run: domain.AttemptID(g.Attempt), Mission: domain.MissionID(g.Mission), Fence: 1, Model: g.Model, Effort: "n/a",
+		Rung: "native", TierTableSHA: "native", Profile: "P1", MaxTurns: 1, MaxBudgetUSD: 1, Wall: time.Minute,
+		Worktree: g.Worktree, RunDir: g.RunDir, Token: "test-token-0123456789abcdef"}
+	ts, res, err := nativeToolsetOpts(wt, starter, hg, false, nil, toolsetOpts{FileTools: fileTools, StateDir: stateDir, Attempt: g.Attempt})
+	if err != nil {
+		return nil, err
+	}
+	defer res.close()
+	var names []string
+	for _, t := range ts {
+		names = append(names, t.Name())
+	}
+	return names, nil
+}
+
+// PolicyFor exposes the per-call review policy of a grant's gate config.
+func PolicyFor(c ReviewGateConfig) (map[string]bool, error) {
+	p, err := c.policy()
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for name, tp := range p.Tools {
+		out[name] = tp.HumanRequired
+	}
+	return out, nil
+}

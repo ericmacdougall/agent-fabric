@@ -8,6 +8,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
 
 // Usage is provider-neutral token usage.
@@ -17,7 +18,26 @@ type Usage struct {
 	CacheCreate    int64 `json:"cache_creation_input_tokens"`
 	CacheRead      int64 `json:"cache_read_input_tokens"`
 	ServerToolUses int64 `json:"server_tool_uses"`
+	// Iterations is the API's per-pass usage when server compaction ran
+	// (usage.iterations): one entry per compaction or message pass. The
+	// top-level counters exclude compaction passes, so cost is taken from
+	// these (goodqa#15361 N3, docs read 2026-11-12).
+	Iterations []UsageIteration `json:"iterations,omitempty"`
 }
+
+// UsageIteration is one pass of a request that compacted.
+type UsageIteration struct {
+	Type        string `json:"type"` // "compaction" or "message"
+	Input       int64  `json:"input_tokens"`
+	Output      int64  `json:"output_tokens"`
+	CacheCreate int64  `json:"cache_creation_input_tokens,omitempty"`
+	CacheRead   int64  `json:"cache_read_input_tokens,omitempty"`
+}
+
+// ErrContextOverflow marks a provider refusal because the prompt does not fit
+// the model's context window (for example Anthropic's 400 "prompt is too
+// long"). The loop may compact and retry once.
+var ErrContextOverflow = errors.New("context window exceeded")
 
 // Stop classifies why a response ended.
 type Stop int
