@@ -12,8 +12,12 @@
 #   FAB      the fab binary the unit runs (deployed or branch binary)
 #   MISSION  a new mission id, m_d1live_* / m_d1rh_* (m_d1sleep_* sleeps 120 s
 #            in the fake, for NEG-10)
-#   BIN_DIR  where the recorded fake (fakeclaude-live) is and the stdin fake
-#            is installed (/srv/fabric/bin on live)
+#   BIN_DIR  where the stdin fake and a copy of the recorded fake are put for
+#            the worker: it must be under ~/.local/share/fabric, one of the
+#            worker sandbox's read roots (cmd/fab/os_linux.go). /srv/fabric/bin
+#            is not one: a worker exec of a provider there fails with
+#            "fab: permission denied" (rehearsal run 4). Use
+#            ~/.local/share/fabric/d1 on live and in the rehearsal.
 #
 # Database access uses the administrative credential in ~/fabric-dev/test.env
 # (as install.sh does), passed to each process by environment, never argv;
@@ -70,12 +74,17 @@ rec "step=2 unit=$UNIT unit_sha=$SAVED_SHA nrestarts=$SAVED_NRESTARTS runs_launc
 PIN=$(sed -n 's/^const StdinFakeSHA256 = "\([0-9a-f]\{64\}\)"$/\1/p' "$REPO/internal/dispatch/claudecode.go")
 FAKE_SHA=$(sed -n 's/^FAKE_SHA=\([0-9a-f]\{64\}\)$/\1/p' "$HERE/install.sh")
 [[ -n "$PIN" && -n "$FAKE_SHA" ]] || fail "could not read the pins from the repo"
+FAKE_SRC=$(sed -n 's/^FAKE=\(\/[A-Za-z0-9\/._-]*\)$/\1/p' "$HERE/install.sh")
+[[ "$BIN" == "$HOME/.local/share/fabric/"?* ]] || fail "BIN_DIR must be under $HOME/.local/share/fabric (a worker sandbox read root)"
+[[ -n "$FAKE_SRC" && "$(sha "$FAKE_SRC")" == "$FAKE_SHA" ]] || fail "the recorded fake ${FAKE_SRC:-?} does not have install.sh's FAKE_SHA"
+mkdir -p -m 0755 "$BIN"
+install -m 0755 "$FAKE_SRC" "$BIN/fakeclaude-live"
 [[ "$(sha "$BIN/fakeclaude-live")" == "$FAKE_SHA" ]] || fail "$BIN/fakeclaude-live is not the recorded fake"
 [[ ! -e "$BIN/fakeclaude.sh" ]] || fail "$BIN/fakeclaude.sh exists; the stdin fake would not be unambiguous"
 install -m 0755 "$REPO/tools/fakeclaude/fakeclaude-stdin.sh" "$BIN/fakeclaude-stdin"
 [[ "$(sha "$BIN/fakeclaude-stdin")" == "$PIN" ]] || fail "the installed stdin fake does not hash to the pin"
 for t in jq sha256sum; do PATH=/usr/bin:/bin command -v "$t" >/dev/null || fail "$t missing for the worker"; done
-rec "step=3 stdin_fake=$BIN/fakeclaude-stdin pin=$PIN delegate_sha=$FAKE_SHA tools=jq,sha256sum"
+rec "step=3 stdin_fake=$BIN/fakeclaude-stdin pin=$PIN delegate=$BIN/fakeclaude-live from=$FAKE_SRC delegate_sha=$FAKE_SHA tools=jq,sha256sum"
 
 # --- step 4: the disposable mission, and the hard gate
 case "$MISSION" in m_d1live_*) NAME=d1-live-fake;; m_d1sleep_*) NAME=d1-sleep-rh;; *) NAME=d1-rh-fake;; esac
