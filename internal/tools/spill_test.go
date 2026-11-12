@@ -145,10 +145,19 @@ func TestSpillRefusals(t *testing.T) {
 	fo.WriteString("other attempt")
 	fo.Close()
 	other.Done(name, 13)
-	for _, p := range []string{"spill:../../etc/passwd", "spill:ABC", "spill:" + id + "a", "spill:" + strings.ToUpper(id), "spill:" + name, "spill:", "spill:" + id + "/../" + id} {
-		if o, isErr := rd.Run(context.Background(), readIn(p, 0, 0)); !isErr {
-			t.Fatalf("%q accepted: %.60s", p, o)
+	// malformed references are refused on syntax, not by luck of a missing file
+	upper := "spill:" + strings.ToUpper(id)
+	if strings.ToUpper(id) == id { // an all-digit id has no uppercase form; force one
+		upper = "spill:A" + id[1:]
+	}
+	for _, p := range []string{"spill:../../etc/passwd", "spill:ABC", "spill:" + id + "a", upper, "spill:", "spill:" + id + "/../" + id} {
+		if o, isErr := rd.Run(context.Background(), readIn(p, 0, 0)); !isErr || !strings.Contains(o, "exactly 16 lowercase hex") {
+			t.Fatalf("%q was not refused on syntax: %v %.80s", p, isErr, o)
 		}
+	}
+	// another attempt's valid id resolves only in this attempt's directory
+	if o, isErr := rd.Run(context.Background(), readIn("spill:"+name, 0, 0)); !isErr || !strings.Contains(o, "spill expired") {
+		t.Fatalf("another attempt's spill id: %v %.80s", isErr, o)
 	}
 	for _, bad := range []json.RawMessage{readIn("spill:"+id, 0, 2001), json.RawMessage(`{"path":"spill:` + id + `","offset":0}`)} {
 		if o, isErr := rd.Run(context.Background(), bad); !isErr {
@@ -254,7 +263,7 @@ func TestReadWindowOnWorktreeFile(t *testing.T) {
 	}
 	write(t, filepath.Join(f.wt, "n.txt"), sb.String())
 	out, isErr := rd.Run(context.Background(), readIn("n.txt", 10, 3))
-	if isErr || !strings.HasPrefix(out, "l10\nl11\nl12\n") || !strings.Contains(out, "offset 13") {
+	if isErr || out != "l10\nl11\nl12\n\n[more lines: continue with offset 13]" {
 		t.Fatalf("%v %q", isErr, out)
 	}
 	out, _ = rd.Run(context.Background(), readIn("n.txt", 99, 50))

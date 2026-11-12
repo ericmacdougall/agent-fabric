@@ -369,13 +369,14 @@ func TestEditLostUpdateRefused(t *testing.T) {
 	e := newEditEnv(t)
 	p := e.put(t, "f.txt", "alpha beta")
 	var ran atomic.Bool
+	var renames atomic.Int32 // temp files written up to the rename window
 	restore := tools.SetHooks(func() {
 		if ran.CompareAndSwap(false, true) { // the second writer runs completely between A's read and A's commit
 			if out, isErr := e.ed.Run(context.Background(), edits("f.txt", "beta", "BETA")); isErr {
 				t.Errorf("second writer: %s", out)
 			}
 		}
-	}, nil, nil)
+	}, func() { renames.Add(1) }, nil)
 	defer restore()
 	out, isErr := e.ed.Run(context.Background(), edits("f.txt", "alpha", "ALPHA"))
 	if !isErr || !strings.Contains(out, "file changed") {
@@ -383,6 +384,11 @@ func TestEditLostUpdateRefused(t *testing.T) {
 	}
 	if got := mustFile(t, p); got != "alpha BETA" {
 		t.Fatalf("first edit must survive, got %q", got)
+	}
+	// the stale writer is refused under the lock, before any temp file is written:
+	// only the second writer (which committed) reached the rename window
+	if n := renames.Load(); n != 1 {
+		t.Fatalf("%d writers reached the rename window, want 1 (the stale one must be refused earlier)", n)
 	}
 }
 

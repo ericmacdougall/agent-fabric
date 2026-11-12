@@ -372,3 +372,19 @@ func TestCompactEmptySummary(t *testing.T) {
 		})
 	}
 }
+
+// A suffix that starts at a tool_result (user) message is never a cut point: when
+// only such a suffix fits the kept budget, there is no valid cut and nothing is
+// summarised.
+func TestCompactNoCutAtUserMessage(t *testing.T) {
+	bigInput := `{"cmd":"` + strings.Repeat("z", 5000) + `"}`
+	r := newRig(t, toolStep("", "", "toolu_u1", "shell", bigInput), toolStep("", "", "toolu_u2", "shell", bigInput), endStep("SUMMARY-1"), endStep("never"))
+	clientCompaction(r, 8000)
+	out, err, _ := r.life()
+	if err != nil || out.Kind != agent.OutcomeParked || !strings.Contains(out.Note, "no valid cut") {
+		t.Fatalf("%v %s", err, r.kindOf(out))
+	}
+	if len(r.compactions()) != 0 || len(r.srv.Requests()) != 2 {
+		t.Fatalf("a cut was taken at a user message: rows %+v, %d requests", r.compactions(), len(r.srv.Requests()))
+	}
+}
