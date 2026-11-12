@@ -20,6 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"fabric/internal/dispatch"
 	"fabric/internal/domain"
 	"fabric/internal/envelope"
 	"fabric/internal/host"
@@ -97,7 +98,33 @@ type Config struct {
 	// attempt to lease expiry, never a terminal success. Off, a finished
 	// worker settles exactly as before the flag existed.
 	ExitCleanup bool
+	// DispatchVia picks the launch path (goodqa#15373): "" or "argv" is
+	// claude.Argv with the prompt in argv; "registry" plans through
+	// Registry's claude-code dispatcher, with the prompt in a stdin file.
+	DispatchVia string
+	Registry    *dispatch.Registry
+	// TrustProvider mirrors fab daemon --trust-provider; registry mode
+	// requires it (NEG-11) and fab daemon also pins the provider's sha.
+	TrustProvider bool
+	// WorkerUser is the resolved --worker-user ("" is same-uid shadow mode).
+	WorkerUser string
+	// LaunchLimit > 0 stops physical starts after that many in this process
+	// (successful or ambiguous); it is checked before START is written.
+	LaunchLimit int
+	// OnlyMission, when set, restricts dispatch to that one mission.
+	OnlyMission domain.MissionID
 }
+
+// Dispatch paths.
+const (
+	DispatchArgv     = "argv"
+	DispatchRegistry = "registry"
+)
+
+// RegistryWorkerUserProven is flipped in the change that records the AC-4
+// worker-uid stdin test (TestStartIOWorkerFile) on t2-dev. Until then,
+// registry mode with a worker account is refused (goodqa#15373 AC-4).
+const RegistryWorkerUserProven = false
 
 // Scheduler owns one host's dispatch loop.
 type Scheduler struct {
@@ -152,6 +179,10 @@ type Scheduler struct {
 	// ticks counts Tick calls (atomic: tests read it while Run is live).
 	ticks atomic.Int64
 
+	// startAttempts counts physical start calls after ACK, successful or
+	// ambiguous (goodqa#15373 AC-10); LaunchLimit is checked against it.
+	startAttempts int
+
 	// Counters for /metrics and the AC-2 assertion.
 	Launched, WaitsResumed, JobsWoken, Expired, CapacityWaits int
 }
@@ -163,14 +194,70 @@ func New(st *store.Store, cfg Config, ln Launcher) *Scheduler {
 	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = 30 * time.Second
 	}
-	if len(cfg.Holds) > 0 && cfg.HoldTTL <= 0 {
-		cfg.HoldTTL = 2 * cfg.Wall
+	cfg = cfg.withDefaults()
+	return &Scheduler{st: st, cfg: cfg, ln: ln, cfgErr: CheckConfig(cfg, ln)}
+}
+
+func (c Config) withDefaults() Config {
+	if len(c.Holds) > 0 && c.HoldTTL <= 0 {
+		c.HoldTTL = 2 * c.Wall
 	}
-	cfgErr := cfg.gateErr()
-	if _, ok := ln.(Stopper); cfgErr == nil && cfg.ExitCleanup && !ok {
-		cfgErr = fmt.Errorf("sched: ExitCleanup needs a launcher that can Stop and verify a worker")
+	return c
+}
+
+// CheckConfig holds every configuration refusal. fab daemon calls it before
+// it opens the store, so a bad configuration exits once with a named error
+// and never crash-loops a restarting unit (goodqa#15373 AC-2); New keeps it
+// as a second layer (Tick refuses to run with it).
+func CheckConfig(cfg Config, ln Launcher) error {
+	cfg = cfg.withDefaults()
+	if err := cfg.gateErr(); err != nil {
+		return err
 	}
-	return &Scheduler{st: st, cfg: cfg, ln: ln, cfgErr: cfgErr}
+	if _, ok := ln.(Stopper); cfg.ExitCleanup && !ok {
+		return fmt.Errorf("sched: ExitCleanup needs a launcher that can Stop and verify a worker")
+	}
+	if cfg.LaunchLimit < 0 {
+		return fmt.Errorf("sched: launch limit %d is negative", cfg.LaunchLimit)
+	}
+	switch cfg.DispatchVia {
+	case "", DispatchArgv:
+		return nil
+	case DispatchRegistry:
+	default:
+		return fmt.Errorf("sched: unknown dispatch path %q (want %q or %q)", cfg.DispatchVia, DispatchArgv, DispatchRegistry)
+	}
+	if _, ok := ln.(host.StdinStarter); !ok {
+		return fmt.Errorf("sched: registry dispatch needs a launcher with StartIO; %T has none", ln)
+	}
+	if _, ok := cfg.Registry.Get(string(domain.ProviderClaudeCode)); !ok {
+		return fmt.Errorf("sched: registry dispatch needs a %q dispatcher", domain.ProviderClaudeCode)
+	}
+	if !cfg.TrustProvider {
+		return fmt.Errorf("sched: registry dispatch runs only the pinned stdin fake until the real provider is probed; it needs --trust-provider (NEG-11)")
+	}
+	if cfg.WorkerUser != "" && !RegistryWorkerUserProven {
+		return fmt.Errorf("sched: registry dispatch with worker account %q is refused until the worker-uid stdin test is recorded (AC-4)", cfg.WorkerUser)
+	}
+	return nil
+}
+
+func (s *Scheduler) registry() bool { return s.cfg.DispatchVia == DispatchRegistry }
+
+// settler is the dispatcher that settles a finished stream: the registry's
+// claude-code entry in registry mode, otherwise the built-in one. For
+// claude-code both run the same settle body.
+func (s *Scheduler) settler() dispatch.Dispatcher {
+	if s.registry() {
+		if d, ok := s.cfg.Registry.Get(string(domain.ProviderClaudeCode)); ok {
+			return d
+		}
+	}
+	return dispatch.ClaudeCode{}
+}
+
+func (s *Scheduler) launchLimitReached() bool {
+	return s.cfg.LaunchLimit > 0 && s.startAttempts >= s.cfg.LaunchLimit
 }
 
 // gateErr refuses a gate that cannot keep its holds for a run (red-team F5):
@@ -525,7 +612,8 @@ func (s *Scheduler) dispatch(ctx context.Context) (int, error) {
 		  AND NOT EXISTS (SELECT 1 FROM outbox_cursors hc WHERE hc.consumer = 'sched.hold.' || m.id)
 		  AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = m.id
 		                  AND a.state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING'))
-		ORDER BY m.priority, m.id LIMIT 10`, s.parkedIDs())
+		  AND ($2 = '' OR m.id = $2)
+		ORDER BY m.priority, m.id LIMIT 10`, s.parkedIDs(), string(s.cfg.OnlyMission))
 	if err != nil {
 		return 0, err
 	}
@@ -541,6 +629,11 @@ func (s *Scheduler) dispatch(ctx context.Context) (int, error) {
 	rows.Close()
 	n := 0
 	for _, id := range ids {
+		// goodqa#15373 AC-10: the limit is checked before START, so no
+		// candidate past it is started, abandoned, backed off or parked.
+		if s.launchLimitReached() {
+			break
+		}
 		if err := s.runOnce(ctx, id); err != nil {
 			if errors.Is(err, errCapacityFull) {
 				s.noteCapacityWait(ctx, id)
@@ -709,11 +802,35 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	g := host.Grant{Run: attempt, Mission: mission, Fence: fence, Model: s.cfg.Model, Effort: s.cfg.Effort, Rung: s.cfg.Rung,
 		TierTableSHA: s.cfg.TierTableSHA, ConfigSHA: "n/a", Profile: s.cfg.Profile, MaxTurns: s.cfg.MaxTurns, MaxBudgetUSD: s.cfg.MaxBudgetUSD,
 		Wall: s.cfg.Wall, Worktree: worktree, RunDir: runDir, Token: fmt.Sprintf("%s-%d-%s", attempt, fence, randomToken())}
-	l := s.cfg.Launch
-	l.Prompt = string(prompt)
-	argv, env, err := claude.Argv(g, l)
-	if err != nil {
-		return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
+	var argv, env []string
+	promptPath := ""
+	if s.registry() {
+		// goodqa#15373: plan through the registry; the prompt and the path
+		// marker are written before ACK, so a failure here is a definite
+		// prelaunch abandon (NEG-6).
+		d, ok := s.cfg.Registry.Get(string(domain.ProviderClaudeCode))
+		if !ok {
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: no claude-code dispatcher")
+		}
+		pl, err := d.Plan(g, dispatch.Input{Launch: s.cfg.Launch, Prompt: string(prompt)})
+		if err != nil {
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
+		}
+		argv, env = pl.Argv, pl.Env
+		promptPath = filepath.Join(runDir, PromptFile)
+		if err := writeExclusive(promptPath, pl.StdinBytes, 0o600); err != nil {
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "prompt file not written: "+err.Error())
+		}
+		if err := writeExclusive(filepath.Join(runDir, DispatchViaMarker), []byte(DispatchRegistry+"\n"), 0o644); err != nil {
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "dispatch marker not written: "+err.Error())
+		}
+	} else {
+		l := s.cfg.Launch
+		l.Prompt = string(prompt)
+		argv, env, err = claude.Argv(g, l)
+		if err != nil {
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
+		}
 	}
 	env = append(env, "FAB_RUN_DIR="+runDir, "FAB_WORKTREE="+worktree, "FABRIC_HOME="+filepath.Join(runDir, "fabric-home"))
 	if dsn := s.runnerDSN(); dsn != "" {
@@ -759,8 +876,23 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	if err != nil {
 		return s.abandonPrelaunch(ctx, mission, attempt, fence, "stream file not created: "+err.Error())
 	}
+	var stdin *os.File
+	if promptPath != "" {
+		// Read-only, and never read through by fabd: the descriptor shares
+		// its offset with the worker's stdin (review N10).
+		if stdin, err = os.Open(promptPath); err != nil {
+			out.Close()
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "prompt file not opened: "+err.Error())
+		}
+	}
 	errf, _ := os.Create(filepath.Join(runDir, "stderr.log"))
-	h, err := s.ln.Start(g, argv, env, out, errf)
+	var h host.Handle
+	s.startAttempts++ // AC-10: every physical start call counts, ambiguous ones too
+	if stdin != nil {
+		h, err = s.ln.(host.StdinStarter).StartIO(g, argv, env, stdin, out, errf)
+	} else {
+		h, err = s.ln.Start(g, argv, env, out, errf)
+	}
 	if err != nil {
 		// S4: a start error is ambiguous (the unit may exist). Never a
 		// definite abandonment: the acked attempt keeps its lease, which
@@ -769,6 +901,9 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		out.Close()
 		if errf != nil {
 			errf.Close()
+		}
+		if stdin != nil {
+			stdin.Close() // kept on disk for forensics (NEG-3)
 		}
 		fmt.Fprintf(os.Stderr, "fabd: start of %s is ambiguous, left to lease expiry: %v\n", attempt, err)
 		return nil
@@ -785,6 +920,9 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		out.Close()
 		if errf != nil {
 			errf.Close()
+		}
+		if stdin != nil {
+			stdin.Close()
 		}
 		if s.cfg.ExitCleanup {
 			// Leader exit does not reap descendants. A Wait error does not end
@@ -867,7 +1005,7 @@ func (s *Scheduler) afterWait(ctx context.Context, mission domain.MissionID, att
 	// expires into UNKNOWN), and its store calls are idempotent (finish: and
 	// verify: command ids), so settle.Finish retries them while the caller
 	// keeps the heartbeat going.
-	cmd, err := settleCommand(mission, attempt, fence, runDir, code)
+	cmd, err := settleCommand(s.settler(), mission, attempt, fence, runDir, code)
 	if err != nil || cmd == nil {
 		return err
 	}
@@ -1026,7 +1164,7 @@ func (s *Scheduler) noteCapacityWait(ctx context.Context, mission domain.Mission
 
 // settle reads the finished worker's stream and ends the attempt.
 func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, runDir string, code int) error {
-	cmd, err := settleCommand(mission, attempt, fence, runDir, code)
+	cmd, err := settleCommand(s.settler(), mission, attempt, fence, runDir, code)
 	if err != nil || cmd == nil {
 		return err
 	}
@@ -1036,59 +1174,26 @@ func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attemp
 // settleCommand reads the stream once and decides the finish command; nil
 // means no result event (lease expiry to UNKNOWN). Retries reuse the command
 // it returns, so a stream that changes between tries can never produce a
-// second, conflicting finish under the same command id (T6 review N1).
-func settleCommand(mission domain.MissionID, attempt domain.AttemptID, fence int64, runDir string, code int) (*domain.Command, error) {
-	fin := func(outcome, waitKey, reason string) (*domain.Command, error) {
-		return &domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence, Outcome: outcome, WaitKey: waitKey, Reason: reason}, nil
-	}
+// second, conflicting finish under the same command id (T6 review N1). The
+// decision is the dispatcher's Settle (goodqa#15373): for claude-code that
+// is bd56178's settle body, pinned by testdata/streams goldens on both paths.
+func settleCommand(d dispatch.Dispatcher, mission domain.MissionID, attempt domain.AttemptID, fence int64, runDir string, code int) (*domain.Command, error) {
 	f, err := os.Open(filepath.Join(runDir, "stream.jsonl"))
 	if err != nil {
 		return nil, err
 	}
-	run, perr := claude.Parse(f, true)
+	st, err := d.Settle(f, code)
 	f.Close()
-	if perr != nil {
-		return fin("abandoned", "", "stream unreadable: "+perr.Error())
+	if err != nil {
+		return nil, err
 	}
-	usage, _ := json.Marshal(map[string]any{"session": run.SessionID, "turns": run.Turns, "context_last_turn": run.LastTurn.Context(), "cost_usd": run.TotalCostUSD, "exit": code})
-	os.WriteFile(filepath.Join(runDir, "usage.json"), usage, 0o644) //nolint:errcheck
-	switch run.End {
-	case claude.EndCheckpoint:
-		// goodqa#15082 T1: success needs the process to agree (exit 0) and
-		// the stream to be coherent; otherwise the run is abandoned, never
-		// verified on the strength of its last event.
-		if code != 0 {
-			return fin("abandoned", "", fmt.Sprintf("exit %d with a success result", code))
-		}
-		if len(run.Contradictions) > 0 {
-			return fin("abandoned", "", "contradictory stream: "+run.Contradictions[0])
-		}
-		var cp struct {
-			End struct {
-				Kind  string `json:"kind"`
-				Event string `json:"event"`
-			} `json:"end"`
-		}
-		if err := json.Unmarshal(run.StructuredOutput, &cp); err != nil || cp.End.Kind == "" {
-			return fin("abandoned", "", "checkpoint without an end kind")
-		}
-		switch cp.End.Kind {
-		case "wait":
-			return fin("wait", cp.End.Event, "")
-		case "checkpoint", "ready_for_review", "blocked":
-			return fin(cp.End.Kind, "", "")
-		default:
-			return fin("abandoned", "", "unknown end kind "+cp.End.Kind)
-		}
-	case claude.EndAbandoned:
-		return fin("abandoned", "", "no structured output")
-	case claude.EndFailed:
-		return fin("abandoned", "", "result "+run.ResultSubtype)
-	default:
-		// No result event: the host and provider do not agree; the attempt
-		// goes UNKNOWN through lease expiry, never to a relaunch (3.4).
+	if st.Usage != nil {
+		os.WriteFile(filepath.Join(runDir, "usage.json"), st.Usage, 0o644) //nolint:errcheck
+	}
+	if st.None {
 		return nil, nil
 	}
+	return &domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence, Outcome: st.Outcome, WaitKey: st.WaitKey, Reason: st.Reason}, nil
 }
 
 // finish ends the attempt and, when the stream and exit agree, verifies it.
@@ -1241,4 +1346,27 @@ func LoadJob(ctx context.Context, st *store.Store, id string) (JobRow, error) {
 	err := st.Pool().QueryRow(ctx, "SELECT id, mission_id, attempt_id, fence, state, exit_code, log_tail, woken FROM jobs WHERE id = $1", id).Scan(
 		&j.ID, &j.Mission, &j.Attempt, &j.Fence, &j.State, &j.ExitCode, &j.LogTail, &j.Woken)
 	return j, err
+}
+
+// Run-dir files of the registry path (goodqa#15373).
+const (
+	PromptFile = "prompt.jsonl"
+	// DispatchViaMarker is forensics only: no code reads it (NEG-7).
+	DispatchViaMarker = "dispatch_via"
+)
+
+// writeExclusive creates path (it must not exist) with mode and data.
+func writeExclusive(path string, data []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode) // umask cannot widen or narrow it
 }

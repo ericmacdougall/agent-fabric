@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"fabric/internal/dispatch"
 	"fabric/internal/domain"
 	"fabric/internal/host"
 	"fabric/internal/hostid"
@@ -88,11 +89,17 @@ func daemonMain(args []string) error {
 	var holds holdFlags
 	fs.Var(&holds, "hold", "turn on the dispatch gate: hold resource:unit:amount per attempt (repeatable)")
 	runnerDSNEnv := fs.String("runner-dsn-env", "FABRIC_RUNNER_DSN", "environment variable holding the runner role DSN (required for every launch)")
+	dispatchVia := fs.String("dispatch-via", "", "launch path: argv (default) or registry (prompt on stdin; the pinned stdin fake only, goodqa#15373)")
+	launchLimit := fs.Int("launch-limit", 0, "stop physical starts after this many in this process (0: no limit)")
+	onlyMission := fs.String("only-mission", "", "dispatch only this mission id")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *workRoot == "" || *provider == "" || *tierTable == "" || *rung == "" {
 		return errors.New("--work-root, --provider, --tier-table and --rung are required")
+	}
+	if *dispatchVia == sched.DispatchRegistry && !*trustProvider {
+		return errors.New("refusing --dispatch-via=registry without --trust-provider: it runs only the pinned stdin fake (goodqa#15373 NEG-11)")
 	}
 	model, effort, sha, err := resolveRung(*tierTable, *rung)
 	if err != nil {
@@ -159,6 +166,28 @@ func daemonMain(args []string) error {
 	}
 	defer runnerCredential.Close()
 	cfg.RunnerDSN = runnerDSN
+	cfg.DispatchVia = *dispatchVia
+	cfg.TrustProvider = *trustProvider
+	cfg.WorkerUser = *workerUser
+	cfg.LaunchLimit = *launchLimit
+	cfg.OnlyMission = domain.MissionID(*onlyMission)
+	if cfg.DispatchVia == sched.DispatchRegistry {
+		// NEG-11: registry mode runs only the pinned stdin fake. --trust-provider
+		// alone is never enough: the resolved file must hash to the pin here,
+		// and the dispatcher re-checks it at every launch.
+		got, err := dispatch.FileSHA256(dp.Path)
+		if err != nil {
+			return fmt.Errorf("refusing --dispatch-via=registry: provider pin: %w", err)
+		}
+		if got != dispatch.StdinFakeSHA256 {
+			return fmt.Errorf("refusing --dispatch-via=registry: provider %s has sha256 %s, not the pinned stdin fake (goodqa#15373 NEG-11)", dp.Path, got)
+		}
+		reg := dispatch.NewRegistry()
+		if err := reg.Register(dispatch.ClaudeCode{PinSHA256: dispatch.StdinFakeSHA256}); err != nil {
+			return err
+		}
+		cfg.Registry = reg
+	}
 	// FABRIC_WORKER_EXIT_CLEANUP=1 (exact; default off) verifies descendant
 	// cleanup after every worker exit before settling. Off by default: on
 	// Darwin the Stop signals the exited leader's process group, which
@@ -168,6 +197,11 @@ func daemonMain(args []string) error {
 	// must stay dp.Launch: the operator's name, re-resolved per launch (N1;
 	// TestDaemonLaunchComesFromDaemonProvider guards this line).
 	cfg.Launch = dp.Launch
+	// goodqa#15373 AC-2: every configuration refusal before the store opens,
+	// so a bad flag exits once and never crash-loops the unit.
+	if err := sched.CheckConfig(cfg, ln); err != nil {
+		return err
+	}
 	return withStoreService(func(ctx context.Context, st *store.Store) error {
 		s := sched.New(st, cfg, ln)
 		if p, ok := runnerProber(*workerUser); ok {
