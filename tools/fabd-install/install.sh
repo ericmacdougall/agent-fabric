@@ -35,7 +35,7 @@ export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=tools/fabd-install/unit.sh
 . "$HERE/unit.sh"
-MODE=${MODE:?MODE=rehearse|live|remove}
+MODE=${MODE:?MODE=rehearse|live|remove|unit}
 FAB=${FAB_BIN:?FAB_BIN}
 D=$HOME/fabric-dev
 [[ -x "$FAB" ]] || { echo "install: FAB_BIN is not executable" >&2; exit 2; }
@@ -43,6 +43,14 @@ D=$HOME/fabric-dev
 FAKE=/srv/fabric/bin/fakeclaude-live
 FAKE_SHA=50d4f1d864de7b2b2ab38808d4414a3adf8a2c4b0fc0047571bdb515689d5285
 HOSTLABEL=t2-dev
+# Test hook (install_test.go only): a stand-in provider, accepted only when HOME
+# is under the temp directory, so it can never apply to a real install.
+if [[ -n "${FABD_INSTALL_TEST_FAKE:-}" ]]; then
+  tmp=${TMPDIR:-/tmp}; tmp=${tmp%/}
+  [[ "$HOME" == "$tmp"/* || "$HOME" == /tmp/* ]] || { echo "install: FABD_INSTALL_TEST_FAKE is for tests with a temporary HOME only" >&2; exit 2; }
+  FAKE=$FABD_INSTALL_TEST_FAKE
+  FAKE_SHA=$(sha256sum "$FAKE" | cut -d' ' -f1)
+fi
 for v in FAB FAKE; do
   [[ "${!v}" =~ ^[A-Za-z0-9/._-]+$ ]] || { echo "install: $v has characters outside [A-Za-z0-9/._-]" >&2; exit 2; }
 done
@@ -74,6 +82,7 @@ say "fabd install MODE=$MODE prefix=$PREFIX db=$DB unit=$UNIT fab=$("$FAB" versi
 # database container must come back after a reboot, or fabd has nothing to
 # reconnect to; and the health check needs its alert emitter.
 OPS_WATCH=${FABD_HEALTH_EMIT:-$HOME/.claude/hooks/ops_watch.py}
+HEALTH_STATE_DIR=${FABD_HEALTH_STATE_DIR:-$HOME/.local/state/fabd-health}
 if [[ $MODE != remove ]]; then
   "$HERE/fabric-pg.sh" check || die "fabric-pg does not restart on boot; run tools/fabd-install/fabric-pg.sh ensure first (goodqa#15805)"
   [[ -r "$OPS_WATCH" ]] || die "no ops-watch emitter at $OPS_WATCH: the health check could not raise an alert"
@@ -86,9 +95,20 @@ MODE_LABEL=$MODE
 # write_unit_files: the daemon unit, the health check and its timer (goodqa#15805)
 write_unit_files() {
   mkdir -p "$UNITDIR"
+  # the restart policy itself: check accepts unless-stopped or always; always
+  # also survives a docker stop before a reboot (review F9, N9)
+  "$HERE/fabric-pg.sh" ensure || die "fabric-pg.sh ensure failed"
+  # rollback artifacts (review B2): the unit files this run replaces, kept and
+  # compared before anything is written; restore them, then daemon-reload
+  local u
+  for u in "$UNIT.service" "$UNIT-health.service" "$UNIT-health.timer"; do
+    [[ -e "$UNITDIR/$u" ]] || continue
+    cp -p "$UNITDIR/$u" "$W/prev-$u" && cmp -s "$UNITDIR/$u" "$W/prev-$u" || die "could not keep a copy of $UNITDIR/$u"
+    say "previous $u kept as $W/prev-$u"
+  done
   render_unit "$MODE_LABEL" "$SVC" "$FAB" "$FAKE" "$HOSTLABEL" > "$UNITDIR/$UNIT.service"
   install -m 0700 "$HERE/fabd-health.sh" "$SVC/fabd-health.sh"
-  render_health_service "$UNIT" "$SVC" "$FAB" "$SVC/fabd-health.sh" > "$UNITDIR/$UNIT-health.service"
+  render_health_service "$UNIT" "$SVC" "$FAB" "$SVC/fabd-health.sh" "$OPS_WATCH" "$HEALTH_STATE_DIR" > "$UNITDIR/$UNIT-health.service"
   render_health_timer "$UNIT" > "$UNITDIR/$UNIT-health.timer"
   # a hand-made drop-in (the 2026-11-12 hot fix 10-retry.conf) would override the
   # rendered settings; it is copied into the evidence directory, then removed
@@ -111,7 +131,14 @@ write_unit_files() {
 # run_health: one check by hand (it must pass against the running daemon); then,
 # for the live unit, the timer (fabd-health.timer) runs it every 2 minutes
 run_health() {
+  local hstate="$HEALTH_STATE_DIR/$UNIT.state" fails
+  rm -f "$HEALTH_STATE_DIR/$UNIT.maintenance"  # a stale window would skip the check and read as a pass
   systemctl --user start "$UNIT-health.service" || die "the first health check of $UNIT failed (journalctl --user -u $UNIT-health)"
+  # the oneshot exits 0 after a first failed check (it raises only after 2), so
+  # the pass is read from the state it wrote, not from its exit (review B1)
+  [[ -r "$hstate" ]] || die "the health check of $UNIT wrote no state at $hstate"
+  read -r fails _ < "$hstate" || fails=x
+  [[ "$fails" == 0 ]] || die "the first health check of $UNIT failed (state: $(cat "$hstate"); journalctl --user -u $UNIT-health)"
   say "health check of $UNIT: pass"
   if [[ $MODE_LABEL == live ]]; then
     systemctl --user enable --now "$UNIT-health.timer"
@@ -122,6 +149,10 @@ run_health() {
 if [[ $MODE == unit ]]; then
   [[ -f "$SVC/env" && -x "$SVC/guard.sh" ]] || die "MODE=unit upgrades an existing live install; $SVC has no env or guard.sh"
   [[ "$(systemctl --user is-enabled "$UNIT.service" 2>/dev/null)" == enabled ]] || die "MODE=unit needs an enabled $UNIT.service"
+  # no binary change (review N5): the rendered ExecStart must equal the installed one
+  want=$(render_unit "$MODE_LABEL" "$SVC" "$FAB" "$FAKE" "$HOSTLABEL" | grep '^ExecStart=')
+  have=$(grep '^ExecStart=' "$UNITDIR/$UNIT.service" 2>/dev/null || true)
+  [[ "$want" == "$have" ]] || die "MODE=unit would change ExecStart (FAB_BIN or the provider differs from the installed unit); a binary change goes through the release scripts"
   write_unit_files
   run_health
   say "unit upgrade complete; fabd itself was not restarted (systemd applies Restart= settings on reload)"
@@ -152,9 +183,14 @@ ROLE_RE="^${PREFIX}_(app|runner|scheduler)$"
 # --- the shared removal path (rehearse and MODE=remove)
 do_remove() {
   systemctl --user disable --now "$UNIT-health.timer" 2>/dev/null || true
+  # a removed unit must not leave a critical alert standing (goodqa#15805). A
+  # failed clear stops here with the health script kept so it can be retried by
+  # hand (review N7).
+  if [[ -x "$SVC/fabd-health.sh" ]]; then
+    FABD_HEALTH_EMIT="$OPS_WATCH" FABD_HEALTH_STATE_DIR="$HEALTH_STATE_DIR" "$SVC/fabd-health.sh" --clear "$UNIT" \
+      || die "could not clear the live-down alert of $UNIT; retry: $SVC/fabd-health.sh --clear $UNIT"
+  fi
   rm -f "$HOME/.config/systemd/user/$UNIT-health.timer" "$HOME/.config/systemd/user/$UNIT-health.service"
-  # a removed unit must not leave a critical alert standing (goodqa#15805)
-  if [[ -x "$SVC/fabd-health.sh" ]]; then "$SVC/fabd-health.sh" --clear "$UNIT" || true; fi
   systemctl --user stop "$UNIT.service" || true
   systemctl --user disable "$UNIT.service" || true
   rm -f "$HOME/.config/systemd/user/$UNIT.service"

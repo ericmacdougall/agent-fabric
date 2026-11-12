@@ -29,11 +29,11 @@ WantedBy=default.target
 UNITF
 }
 
-# render_health_service UNIT SVC FAB HEALTH_SCRIPT
+# render_health_service UNIT SVC FAB HEALTH_SCRIPT [EMIT STATE_DIR]
 #   One health check of UNIT (fabd-health.sh). It reads fabd's own environment
 #   file so `fab metrics` reaches the same database; the script never prints it.
 render_health_service() {
-  local unit=$1 svc=$2 fab=$3 health=$4
+  local unit=$1 svc=$2 fab=$3 health=$4 emit=${5:-} statedir=${6:-}
   cat <<UNITF
 [Unit]
 Description=Fabric $unit health check: critical ops-watch alert when $unit stays down (goodqa#15805)
@@ -44,6 +44,9 @@ EnvironmentFile=$svc/env
 ExecStart=$health $unit $fab
 TimeoutStartSec=60
 UNITF
+  # the service uses the emitter and state directory the installer checked (review N13)
+  [[ -z "$emit" ]] || echo "Environment=FABD_HEALTH_EMIT=$emit"
+  [[ -z "$statedir" ]] || echo "Environment=FABD_HEALTH_STATE_DIR=$statedir"
 }
 
 # render_health_timer UNIT

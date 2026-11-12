@@ -45,7 +45,7 @@ case "${1:-}" in
     fi
     pw=${FABRIC_PG_PASSWORD_FILE:-}
     [[ -n "$pw" && -r "$pw" && -s "$pw" ]] || { echo "fabric-pg: FABRIC_PG_PASSWORD_FILE must name a readable, non-empty file" >&2; exit 2; }
-    [[ "$pw" =~ ^[A-Za-z0-9/._-]+$ ]] || { echo "fabric-pg: FABRIC_PG_PASSWORD_FILE has unsafe characters" >&2; exit 2; }
+    [[ "$pw" =~ ^/[A-Za-z0-9/._-]+$ ]] || { echo "fabric-pg: FABRIC_PG_PASSWORD_FILE must be an absolute path of [A-Za-z0-9/._-] (a relative one would become a docker volume name); the postgres uid in the container must be able to read it" >&2; exit 2; }
     docker run -d --name "$NAME" --restart always \
       -p "127.0.0.1:$PORT:5432" \
       -v "$VOLUME:/var/lib/postgresql/data" \

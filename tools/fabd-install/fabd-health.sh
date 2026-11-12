@@ -52,10 +52,13 @@ crit() { # loud even when nobody reads failed units
   logger -p user.crit -t fabd-health -- "$*" 2>/dev/null || true
 }
 
-emit() { # event severity message
+emit() { # event severity message [reasserted]
   local json
-  json=$(python3 -I -c 'import json,sys; print(json.dumps({"host":sys.argv[1],"source":"fabd-health","event":sys.argv[2],"severity":sys.argv[3],"key":sys.argv[4],"message":sys.argv[5],"detail":{"unit":sys.argv[6]}}))' \
-    "$HOST" "$1" "$2" "$KEY" "$3" "$UNIT") || return 1
+  json=$(python3 -I -c 'import json,sys
+d = {"unit": sys.argv[6]}
+if sys.argv[7]: d["reasserted"] = True
+print(json.dumps({"host":sys.argv[1],"source":"fabd-health","event":sys.argv[2],"severity":sys.argv[3],"key":sys.argv[4],"message":sys.argv[5],"detail":d}))' \
+    "$HOST" "$1" "$2" "$KEY" "$3" "$UNIT" "${4:-}") || return 1
   if [[ -x "$EMIT" ]]; then
     "$EMIT" emit --json "$json" >/dev/null || { crit "emit $1 for $KEY failed"; return 1; }
   elif [[ -r "$EMIT" ]]; then
@@ -65,13 +68,17 @@ emit() { # event severity message
   fi
 }
 
-fails=0 raised=0
+fails=0 raised=0 since=0
 if [[ -r "$STATE" ]]; then
-  read -r fails raised < "$STATE" || true
+  read -r fails raised since < "$STATE" || true
   [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
   [[ "$raised" == 1 ]] || raised=0
+  [[ "$since" =~ ^[0-9]+$ ]] || since=0
 fi
-save() { printf '%s %s\n' "$fails" "$raised" > "$STATE.tmp" && mv -f "$STATE.tmp" "$STATE"; }
+# "since" is when the standing raise was last emitted. The ops-watch ring is
+# bounded, so a raise is re-emitted every 6 h while the outage lasts (review N3).
+save() { printf '%s %s %s\n' "$fails" "$raised" "$since" > "$STATE.tmp" && sync "$STATE.tmp" 2>/dev/null; mv -f "$STATE.tmp" "$STATE"; }
+REASSERT_S=${FABD_HEALTH_REASSERT_S:-21600}
 
 case "$ACTION" in
   clear)
@@ -91,6 +98,8 @@ FAB=${2:?usage: fabd-health.sh UNIT FAB_BIN}
 if [[ -r "$MAINT" ]]; then
   until_s=$(cat "$MAINT" 2>/dev/null)
   if [[ "$until_s" =~ ^[0-9]+$ ]] && (( until_s > $(date +%s) )); then
+    # a window starts a fresh count, so its end does not raise on one check (review N14)
+    fails=0; save
     echo "fabd-health: $UNIT in a maintenance window; check skipped"; exit 0
   fi
   rm -f "$MAINT"
@@ -98,7 +107,12 @@ fi
 enabled=$(systemctl --user is-enabled "$UNIT" 2>/dev/null) || true
 if [[ "$enabled" != enabled ]]; then
   echo "fabd-health: $UNIT is ${enabled:-not installed}, not enabled; check skipped"
-  fails=0; save; exit 0
+  rc=0
+  # a deliberately disabled unit must not leave a critical standing (review N8)
+  if [[ $raised == 1 ]]; then
+    if emit clear info "Fabric $UNIT on $HOST is ${enabled:-not installed} (not enabled); alert cleared"; then raised=0; else rc=1; fi
+  fi
+  fails=0; save; exit $rc
 fi
 
 reason=""
@@ -110,12 +124,16 @@ else
 import os, urllib.parse as u
 d = os.environ["FABRIC_DSN"]
 if d:
-    p = u.urlsplit(d); q = dict(u.parse_qsl(p.query)); q["application_name"] = "fabd-health"
+    p = u.urlsplit(d); q = dict(u.parse_qsl(p.query)); q["application_name"] = "fabd-health"; q.setdefault("connect_timeout", "10")
     d = u.urlunsplit((p.scheme, p.netloc, p.path, u.urlencode(q), ""))
 print(d)') || dsn=""
   # read-only session (fab metrics also reads in a read-only transaction); the
   # output is matched, never printed, and stderr is discarded
-  metrics=$(FABRIC_DSN="$dsn" PGOPTIONS='-c default_transaction_read_only=on' "$FAB" metrics 2>/dev/null) || true
+  # a hung database must count as a failure, not hang until systemd kills the
+  # check before it saves (review N4): the failure is recorded first, and the
+  # probe is bounded well inside TimeoutStartSec=60
+  fails=$((fails + 1)); save; fails=$((fails - 1))
+  metrics=$(FABRIC_DSN="$dsn" PGOPTIONS='-c default_transaction_read_only=on' timeout 20 "$FAB" metrics 2>/dev/null) || true
   grep -q '^fabric_build_info{' <<<"$metrics" || reason="unit $UNIT is active but fab metrics has no fabric_build_info"
 fi
 
@@ -128,8 +146,11 @@ if [[ -z "$reason" ]]; then
 else
   fails=$((fails + 1))
   echo "fabd-health: check failed ($fails in a row): $reason" >&2
+  now=$(date +%s)
   if (( fails >= 2 )) && [[ $raised == 0 ]]; then
-    if emit raise critical "Fabric $UNIT on $HOST is DOWN ($fails checks in a row, about $((fails * 2)) min): $reason"; then raised=1; else rc=1; fi
+    if emit raise critical "Fabric $UNIT on $HOST is DOWN ($fails checks in a row, about $((fails * 2)) min): $reason"; then raised=1; since=$now; else rc=1; fi
+  elif [[ $raised == 1 ]] && (( now - since >= REASSERT_S )); then
+    if emit raise critical "Fabric $UNIT on $HOST is STILL DOWN ($fails checks in a row, about $((fails * 2)) min): $reason" reasserted; then since=$now; else rc=1; fi
   fi
 fi
 save

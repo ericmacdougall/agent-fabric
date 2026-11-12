@@ -81,7 +81,7 @@ systemd-analyze --user verify fabd.service fabd-health.service fabd-health.timer
 systemctl --user enable --now fabd.service fabd-health.timer'
 sleep 8
 gu 'systemctl --user show fabd -p ActiveState -p Restart -p RestartUSec -p StartLimitIntervalUSec | tr "\n" " "; echo'
-gu 'systemctl --user start fabd-health.service && echo health-pass'
+gu 'systemctl --user start fabd-health.service; read -r f _ < ~/.local/state/fabd-health/fabd.state; [[ $f == 0 ]] && echo health-pass || echo "health-FAIL state=$f"'
 cap
 say "pre-reboot: docker stop fabric-pg (a manual stop must not keep it down after a reboot: policy always)"
 gu 'docker stop fabric-pg >/dev/null; docker inspect -f "state={{.State.Status}}" fabric-pg'
