@@ -146,6 +146,10 @@ func exposes(r string, hs, deny []string) string {
 	return ""
 }
 
+// ExtraWritableRoots lists the extra trees this profile opens for writing, so
+// the runner can tell which of its own directories the child can reach.
+func (d *Darwin) ExtraWritableRoots() []string { return append([]string(nil), d.ExtraRW...) }
+
 func (d *Darwin) profile(g Grant) (string, error) {
 	hs, err := homes()
 	if err != nil {

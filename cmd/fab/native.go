@@ -71,6 +71,9 @@ func nativeOptions(g native.Grant, fake bool) (result native.Options, rerr error
 		fmt.Fprintln(os.Stderr, "WARNING: running tools with NO containment (fake host); this is not a native-boundary run")
 		opts.Starter = fakehost.New()
 		opts.Boundary = tools.Boundary{Host: "fake-unconfined", Contained: true}
+		// An unconfined child can write everywhere, so no backup directory is
+		// out of its reach: edit and write refuse to start on this host.
+		opts.ExtraWritable = []string{"/"}
 	} else {
 		p, err := profileForThisHost()
 		if err != nil {
@@ -83,6 +86,9 @@ func nativeOptions(g native.Grant, fake bool) (result native.Options, rerr error
 			return native.Options{}, errors.New("host profile cannot wait on children")
 		}
 		opts.Starter = waitStarter{p, w}
+		if x, ok := p.(interface{ ExtraWritableRoots() []string }); ok {
+			opts.ExtraWritable = x.ExtraWritableRoots()
+		}
 		if err := os.MkdirAll(g.RunDir, 0o700); err != nil {
 			return native.Options{}, err
 		}

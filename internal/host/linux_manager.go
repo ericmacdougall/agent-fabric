@@ -75,6 +75,9 @@ type LinuxManager struct {
 
 func (l *LinuxManager) Name() string { return "linux-cgroup-landlock" }
 
+// ExtraWritableRoots lists the extra trees this profile opens for writing.
+func (l *LinuxManager) ExtraWritableRoots() []string { return append([]string(nil), l.ExtraRW...) }
+
 // authenticateHandleLocked requires every durable launch identity field, not
 // just the process-local serial. A forged same-serial handle therefore cannot
 // close the active mediator or release a different unit's serialization.

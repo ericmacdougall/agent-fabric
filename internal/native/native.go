@@ -171,6 +171,11 @@ type Options struct {
 	// (FABRIC_TOOL_EXIT_CLEANUP=1 in cmd/fab; default off). See
 	// tools.HostConfiner.ExitCleanup.
 	ToolExitCleanup bool
+	// ExtraWritable lists the trees, beyond the worktree, the run directory and
+	// the temp roots, that the host profile lets the confined child write
+	// (host ExtraRW). Edit and write refuse a state directory under any of
+	// them, and never rely on a gitdir under any of them (goodqa#15865).
+	ExtraWritable []string
 	// ReviewDSN authenticates the separate trusted app-role review pool. It
 	// must never be the runner DSN or be inherited by a tool worker.
 	ReviewDSN string
@@ -374,7 +379,7 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 	}
 	reapOrphanSpill(lctx, st, stateDir, g.Attempt)
 	toolset, tres, err := nativeToolsetOpts(wt, starter, hg, o.ToolExitCleanup, allow,
-		toolsetOpts{FileTools: fileToolsEnabled(o.ReviewGate, g.ReviewGate), StateDir: stateDir, Attempt: g.Attempt})
+		toolsetOpts{FileTools: fileToolsEnabled(o.ReviewGate, g.ReviewGate), StateDir: stateDir, Attempt: g.Attempt, ExtraWritable: o.ExtraWritable})
 	if err != nil {
 		return nil, err
 	}
@@ -487,6 +492,27 @@ type toolsetOpts struct {
 	// directories. An empty StateDir disables both.
 	StateDir string
 	Attempt  string
+	// ExtraWritable is Options.ExtraWritable.
+	ExtraWritable []string
+}
+
+// stateDirTestExempt is a test-only override. It is unexported and assigned
+// only by export_test.go, which is compiled into test binaries and nowhere
+// else, so no production path can set it. While non-empty, a state directory
+// under that path is exempt from the system-temp-root clause of the C5 check
+// (go test puts t.TempDir under the temp roots); the worktree, run directory
+// and extra-writable clauses still apply.
+var stateDirTestExempt string
+
+// checkStateDir applies the C5 rule to the runner's state directory.
+func checkStateDir(stateDir, worktree, runDir string, extra []string) error {
+	roots := tools.ChildWritableRoots(worktree, runDir, extra)
+	if x := stateDirTestExempt; x != "" {
+		if _, under := tools.UnderAnyRoot(stateDir, []string{x}); under {
+			roots = append([]string{worktree, runDir}, extra...)
+		}
+	}
+	return tools.CheckBackupDirOutsideChild(stateDir, roots)
 }
 
 // toolResources are the runner-only directories a toolset holds open.
@@ -538,6 +564,15 @@ func nativeToolsetOpts(wt *tools.WorktreePin, starter tools.Starter, hg host.Gra
 			res.close()
 		}
 	}()
+	// The pre-image copies are the undo for a write. A state directory the
+	// confined child can reach (worktree, run dir, temp roots, extra writable
+	// roots) lets it delete them, so edit and write are not built over one
+	// (goodqa#15865 C5). Checked before anything is created there.
+	if o.FileTools && o.StateDir != "" {
+		if err := checkStateDir(o.StateDir, wt.Path(), hg.RunDir, o.ExtraWritable); err != nil {
+			return nil, nil, err
+		}
+	}
 	if o.StateDir != "" {
 		if res.spill, err = tools.OpenRunnerDir(filepath.Join(o.StateDir, "spill", o.Attempt), 16, 64<<20); err != nil {
 			return nil, nil, fmt.Errorf("native: spill directory: %w", err)
@@ -562,7 +597,7 @@ func nativeToolsetOpts(wt *tools.WorktreePin, starter tools.Starter, hg host.Gra
 			return nil, nil, fmt.Errorf("native: pre-image directory: %w", err)
 		}
 		res.preimage = dir
-		keeper = &tools.PreimageKeeper{Dir: dir}
+		keeper = &tools.PreimageKeeper{Dir: dir, WritableRoots: tools.ChildWritableRoots(wt.Path(), hg.RunDir, o.ExtraWritable)}
 		// The gitdir is recorded once per attempt in the runner-only store and
 		// a resume uses that record, never .git (F4). On any error (a replaced
 		// gitdir included) Git stays nil and every existing target is copied.

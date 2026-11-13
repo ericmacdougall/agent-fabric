@@ -143,3 +143,22 @@ func CompactionExtraForTest(g Grant) (map[string]json.RawMessage, []string, erro
 
 // GrantPinForTest exposes the grant's resume pin.
 func GrantPinForTest(g Grant, reviewGate bool) string { return g.pin(reviewGate) }
+
+// AllowStateDirUnderForTest exempts state directories under prefix from the
+// temp-root clause of the C5 check for the duration of the test. It exists
+// only in test binaries; the production check has no override. The worktree,
+// run directory and extra-writable clauses still apply.
+func AllowStateDirUnderForTest(t interface {
+	Helper()
+	Cleanup(func())
+}, prefix string) {
+	t.Helper()
+	prev := stateDirTestExempt
+	stateDirTestExempt = prefix
+	t.Cleanup(func() { stateDirTestExempt = prev })
+}
+
+// CheckStateDirForTest exposes the C5 rule exactly as nativeToolsetOpts applies it.
+func CheckStateDirForTest(stateDir, worktree, runDir string, extra []string) error {
+	return checkStateDir(stateDir, worktree, runDir, extra)
+}

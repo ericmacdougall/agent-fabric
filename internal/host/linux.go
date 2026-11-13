@@ -53,6 +53,9 @@ type Linux struct {
 
 func (l *Linux) Name() string { return "linux-cgroup-landlock" }
 
+// ExtraWritableRoots lists the extra trees this profile opens for writing.
+func (l *Linux) ExtraWritableRoots() []string { return append([]string(nil), l.ExtraRW...) }
+
 // workerUID resolves the worker account's uid (the daemon's own when User is empty).
 func (l *Linux) workerUID() (int, error) {
 	if l.User == "" {

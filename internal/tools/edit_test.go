@@ -55,7 +55,8 @@ func newEditEnv(t *testing.T) *editEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(rdir.Close)
-	e.pre = &tools.PreimageKeeper{Dir: rdir}
+	// The worktree is writable to the confined child, as in production.
+	e.pre = &tools.PreimageKeeper{Dir: rdir, WritableRoots: []string{e.wt}}
 	e.ed, e.wr = tools.NewEdit(e.rd, e.pin, e.pre), tools.NewWrite(e.rd, e.pin, e.pre)
 	return e
 }
@@ -429,8 +430,8 @@ func TestWritePreimageUntrackedKeepsCopy(t *testing.T) {
 		t.Fatalf("copy holds %q", got)
 	}
 	out, isErr = e.wr.Run(context.Background(), wr("tracked.txt", "T1"))
-	if isErr || strings.Contains(out, "preimage_copy") || !strings.Contains(out, "preimage_git_blob: ") {
-		t.Fatalf("a clean tracked file is restored from git, not copied: %s", out)
+	if isErr || !strings.Contains(out, "preimage_copy: pre-") || strings.Contains(out, "preimage_git_blob") {
+		t.Fatalf("the gitdir is inside the child-writable worktree, so even a clean tracked file keeps a copy: %s", out)
 	}
 }
 
@@ -504,10 +505,87 @@ func TestWritePreimageStagedAndCleanTracked(t *testing.T) {
 	}
 	e.git(t, "add", "s.txt")
 	e.git(t, "commit", "-q", "-m", "c1")
+	// the gitdir is inside the worktree: no shortcut even for a clean file
 	out, isErr = e.wr.Run(context.Background(), wr("s.txt", "S3"))
-	blob := strings.TrimSpace(e.git(t, "rev-parse", "HEAD:s.txt"))
+	if isErr || mustFile(t, filepath.Join(e.keep, copyName(t, out))) != "S2" || strings.Contains(out, "preimage_git_blob") {
+		t.Fatalf("clean tracked file with an in-worktree gitdir: %s", out)
+	}
+}
+
+// gitInitSeparate puts the gitdir outside the worktree and every writable
+// root, as a linked or --separate-git-dir checkout would.
+func (e *editEnv) gitInitSeparate(t *testing.T) {
+	t.Helper()
+	gd := filepath.Join(filepath.Dir(e.wt), "gitdir-sep")
+	for _, a := range [][]string{{"init", "-q", "--separate-git-dir", gd}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}} {
+		c := exec.Command("git", a...)
+		c.Dir = e.wt
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", a, err, out)
+		}
+	}
+	g, err := tools.NewGitRef(e.wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.pre.Git = g
+}
+
+// C4 (goodqa#15865), the red-team's R2 probe: the child commits dirty bytes,
+// a safe write overwrites them, the child erases the blob. The write must have
+// kept a copy that restores the bytes.
+func TestGitHeldBlobErasableKeepsCopy(t *testing.T) {
+	e := newEditEnv(t)
+	e.gitInit(t)
+	e.put(t, "base.txt", "B")
+	e.git(t, "add", "base.txt")
+	e.git(t, "commit", "-q", "-m", "c0")
+	const precious = "precious uncommitted work 1234567"
+	e.put(t, "d.txt", precious)
+	e.git(t, "add", "d.txt")
+	e.git(t, "commit", "-q", "-m", "c1") // the child makes the dirty bytes HEAD-clean
+	blob := strings.TrimSpace(e.git(t, "rev-parse", "HEAD:d.txt"))
+	out, isErr := e.wr.Run(context.Background(), wr("d.txt", "overwritten"))
+	if isErr || !strings.Contains(out, "preimage_copy: pre-") || strings.Contains(out, "preimage_git_blob") {
+		t.Fatalf("a gitdir the child can write must not stand in for a copy: %s", out)
+	}
+	// the child erases history and prunes
+	e.git(t, "reset", "-q", "--soft", "HEAD~1")
+	e.git(t, "rm", "-q", "-f", "--cached", "d.txt")
+	e.git(t, "reflog", "expire", "--expire=now", "--all")
+	e.git(t, "gc", "-q", "--prune=now")
+	if c := exec.Command("git", "cat-file", "-e", blob); func() bool { c.Dir = e.wt; return c.Run() == nil }() {
+		t.Fatalf("blob %s still present: the scenario did not erase it", blob)
+	}
+	if got := mustFile(t, filepath.Join(e.keep, copyName(t, out))); got != precious {
+		t.Fatalf("the copy holds %q, not the bytes the blob held", got)
+	}
+}
+
+// C4: a gitdir outside every child-writable root still gets the shortcut, and
+// an empty root list (unknown) never does.
+func TestGitShortcutOnlyOutsideWritableRoots(t *testing.T) {
+	e := newEditEnv(t)
+	e.gitInitSeparate(t)
+	e.put(t, "c.txt", "C0")
+	e.git(t, "add", "c.txt")
+	e.git(t, "commit", "-q", "-m", "c0")
+	blob := strings.TrimSpace(e.git(t, "rev-parse", "HEAD:c.txt"))
+	out, isErr := e.wr.Run(context.Background(), wr("c.txt", "C1"))
 	if isErr || strings.Contains(out, "preimage_copy") || !strings.Contains(out, "preimage_git_blob: "+blob) {
-		t.Fatalf("clean tracked file: %s", out)
+		t.Fatalf("a gitdir outside the writable roots keeps the shortcut: %s", out)
+	}
+	// unknown roots: fail closed
+	e.pre.WritableRoots = nil
+	out, isErr = e.wr.Run(context.Background(), wr("c.txt", "C2"))
+	if isErr || !strings.Contains(out, "preimage_copy: pre-") {
+		t.Fatalf("unknown writable roots must copy: %s", out)
+	}
+	// the gitdir listed as writable (an ExtraRW covering it): copy
+	e.pre.WritableRoots = []string{e.wt, filepath.Join(filepath.Dir(e.wt), "gitdir-sep")}
+	out, isErr = e.wr.Run(context.Background(), wr("c.txt", "C3"))
+	if isErr || !strings.Contains(out, "preimage_copy: pre-") {
+		t.Fatalf("an extra writable root over the gitdir must copy: %s", out)
 	}
 }
 
@@ -520,7 +598,7 @@ func newKeepEnv(t *testing.T, maxFiles int, maxBytes int64) *editEnv {
 	}
 	t.Cleanup(dir.Close)
 	e.keep = dir.Path()
-	e.pre = &tools.PreimageKeeper{Dir: dir}
+	e.pre = &tools.PreimageKeeper{Dir: dir, WritableRoots: []string{e.wt}}
 	e.ed, e.wr = tools.NewEdit(e.rd, e.pin, e.pre), tools.NewWrite(e.rd, e.pin, e.pre)
 	return e
 }

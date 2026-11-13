@@ -39,6 +39,7 @@ func TestFileToolsGateRule(t *testing.T) {
 func TestNativeToolsetEditWrite(t *testing.T) {
 	e := newEnv(t)
 	state := t.TempDir()
+	native.AllowStateDirUnderForTest(t, state)
 	names, err := native.ToolNamesForTest(e.g, fakehost.New(), false, state)
 	if err != nil || strings.Join(names, ",") != "read,grep,shell" {
 		t.Fatalf("without the gate: %v %v", names, err)
@@ -75,7 +76,9 @@ const editCall = `{"path":"notes.txt","edits":[{"oldText":"alpha","newText":"ALP
 
 func editEnv(t *testing.T, cfg native.ReviewGateConfig) (*env, string) {
 	t.Helper()
-	t.Setenv("FABRIC_STATE_DIR", t.TempDir())
+	state := t.TempDir()
+	t.Setenv("FABRIC_STATE_DIR", state)
+	native.AllowStateDirUnderForTest(t, state) // go test temp dirs are under the temp roots
 	e := newEnv(t,
 		fakeapi.Step{Events: fakeapi.ToolUse("", "", "toolu_edit01", "edit", editCall, 100, 20)},
 		fakeapi.Step{Events: fakeapi.Text("finished", 120, 10)},
@@ -244,5 +247,72 @@ func TestEditAfterRestartDoesNotLeakSpill(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(state, "spill", e.g.Attempt)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("spill directory outlived the attempt: %v", err)
+	}
+}
+
+// C5 (goodqa#15865): edit and write are not built over a state directory the
+// confined child can reach. The test override is exercised in the other
+// tests; here it is off, so the production rule applies to t.TempDir().
+func TestNativeToolsetRefusesChildReachableStateDir(t *testing.T) {
+	e := newEnv(t)
+	for _, c := range []struct{ name, dir string }{
+		{"under the system temp roots", t.TempDir()},
+		{"under the worktree", filepath.Join(e.g.Worktree, "state")},
+		{"under the run dir", filepath.Join(e.g.RunDir, "state")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := native.ToolNamesForTest(e.g, fakehost.New(), true, c.dir)
+			if err == nil || !strings.Contains(err.Error(), "child can write") {
+				t.Fatalf("edit and write built over %s: %v", c.dir, err)
+			}
+			if _, serr := os.Stat(filepath.Join(c.dir, "preimage")); serr == nil {
+				t.Fatalf("a pre-image directory was created under %s", c.dir)
+			}
+		})
+	}
+	// without edit and write nothing is at stake: the read-only toolset builds
+	if _, err := native.ToolNamesForTest(e.g, fakehost.New(), false, t.TempDir()); err != nil {
+		t.Fatalf("read-only toolset refused a temp state dir: %v", err)
+	}
+}
+
+// The test override reaches only the temp-root clause, and only for the path
+// the test names.
+func TestStateDirTestOverrideIsNarrow(t *testing.T) {
+	e := newEnv(t)
+	state := t.TempDir()
+	native.AllowStateDirUnderForTest(t, state)
+	if err := native.CheckStateDirForTest(state, e.g.Worktree, e.g.RunDir, nil); err != nil {
+		t.Fatalf("the exempted state dir is refused: %v", err)
+	}
+	if err := native.CheckStateDirForTest(t.TempDir(), e.g.Worktree, e.g.RunDir, nil); err == nil {
+		t.Fatal("another temp dir was exempted")
+	}
+	if err := native.CheckStateDirForTest(filepath.Join(state, "x"), state, e.g.RunDir, nil); err == nil {
+		t.Fatal("the worktree clause was exempted")
+	}
+	if err := native.CheckStateDirForTest(filepath.Join(state, "x"), e.g.Worktree, state, nil); err == nil {
+		t.Fatal("the run-dir clause was exempted")
+	}
+	if err := native.CheckStateDirForTest(filepath.Join(state, "x"), e.g.Worktree, e.g.RunDir, []string{state}); err == nil {
+		t.Fatal("an extra writable root was exempted")
+	}
+}
+
+func TestDefaultStateDirIsAccepted(t *testing.T) {
+	t.Setenv("FABRIC_STATE_DIR", "")
+	def, err := native.StateDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(def, filepath.Join(".local", "state", "fabric")) {
+		t.Fatalf("default is %s", def)
+	}
+	e := newEnv(t)
+	if err := native.CheckStateDirForTest(def, e.g.Worktree, e.g.RunDir, nil); err != nil {
+		if strings.HasPrefix(def, os.TempDir()) {
+			t.Skipf("home is under the temp root on this host: %v", err)
+		}
+		t.Fatalf("the default state dir is refused: %v", err)
 	}
 }

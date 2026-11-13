@@ -242,17 +242,36 @@ func (g *GitRef) CleanBlob(ctx context.Context, rel string, data []byte) (blob s
 type PreimageKeeper struct {
 	Dir *RunnerDir
 	Git *GitRef // nil: every existing target is copied
+	// WritableRoots are the trees the confined child can write (see
+	// ChildWritableRoots). The "git already holds these bytes" shortcut is
+	// taken only when the recorded gitdir lies outside every one of them: a
+	// child that can write the gitdir can commit the bytes, then erase the
+	// blob (goodqa#15865, red-team R2). Empty means unknown, so the shortcut is
+	// never taken.
+	WritableRoots []string
+}
+
+// gitShortcutAllowed reports whether git's own copy of a file can stand in for
+// a pre-image copy: the gitdir is known and lies outside every child-writable
+// root. Anything unresolvable is not allowed.
+func (k *PreimageKeeper) gitShortcutAllowed() bool {
+	if k.Git == nil || len(k.WritableRoots) == 0 {
+		return false
+	}
+	_, under := UnderAnyRoot(k.Git.GitDir, k.WritableRoots)
+	return !under
 }
 
 // NeedsCopy reports whether a copy of data (the bytes at rel about to be
-// replaced) must be kept. It is false only when git already holds exactly
-// those bytes in both the index and HEAD; blob then names that git blob, so
-// the result can say where the restore comes from.
+// replaced) must be kept. It is false only when the child cannot write the
+// gitdir and git already holds exactly those bytes in both the index and
+// HEAD; blob then names that git blob, so the result can say where the
+// restore comes from.
 func (k *PreimageKeeper) NeedsCopy(ctx context.Context, rel string, data []byte) (need bool, blob string) {
 	if k == nil || k.Dir == nil {
 		return false, ""
 	}
-	if k.Git == nil {
+	if !k.gitShortcutAllowed() {
 		return true, ""
 	}
 	b, clean, err := k.Git.CleanBlob(ctx, rel, data)
