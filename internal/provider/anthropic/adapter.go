@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"regexp"
+	"strings"
 
 	"fabric/internal/agent"
 )
@@ -55,12 +58,22 @@ func (p *Provider) Send(ctx context.Context, req agent.Request, h agent.Hooks) (
 		if errors.As(err, &pk) {
 			return nil, &agent.ParkError{Reason: pk.Reason}
 		}
+		var ae *APIError
+		if errors.As(err, &ae) && ae.Status == 400 {
+			if promptTooLong.MatchString(ae.Message) {
+				return nil, fmt.Errorf("%w: %w", agent.ErrContextOverflow, err)
+			}
+			// A refused beta or model on a compaction request parks with the
+			// API's own words (goodqa#15361 NEG-15).
+			if len(p.C.cfg.Betas) > 0 {
+				return nil, &agent.ParkError{Reason: "400 on a request with beta " + strings.Join(p.C.cfg.Betas, ",") + ": " + ae.Message}
+			}
+		}
 		return nil, err
 	}
 	res := &agent.Result{
 		Content: msg.Content, StopReason: msg.StopReason, Model: msg.Model, RequestSHA: RequestSHA(body),
-		Usage: agent.Usage{Input: msg.Usage.Input, Output: msg.Usage.Output, CacheCreate: msg.Usage.CacheCreate,
-			CacheRead: msg.Usage.CacheRead, ServerToolUses: msg.Usage.ServerTools},
+		Usage: toAgentUsage(msg.Usage),
 	}
 	switch ClassifyStop(msg.StopReason) {
 	case StopEnd:
@@ -94,10 +107,21 @@ func (p *Provider) Send(ctx context.Context, req agent.Request, h agent.Hooks) (
 	return res, nil
 }
 
+var promptTooLong = regexp.MustCompile(`(?i)prompt is too long|exceeds? the (maximum )?(context|input)|input is too long|too many (input )?tokens`)
+
+func toAgentUsage(u Usage) agent.Usage {
+	out := agent.Usage{Input: u.Input, Output: u.Output, CacheCreate: u.CacheCreate, CacheRead: u.CacheRead, ServerToolUses: u.ServerTools}
+	for _, it := range u.Iterations {
+		out.Iterations = append(out.Iterations, agent.UsageIteration{Type: it.Type, Input: it.Input, Output: it.Output, CacheCreate: it.CacheCreate, CacheRead: it.CacheRead})
+	}
+	return out
+}
+
 func toAgentAttempt(r AttemptRecord) agent.AttemptRecord {
 	a := agent.AttemptRecord{N: r.N, Status: r.Status, RequestID: r.RequestID, Outcome: r.Outcome, MaybeBilled: r.MaybeBilled, Err: r.Err}
 	if r.Usage != nil {
-		a.Usage = &agent.Usage{Input: r.Usage.Input, Output: r.Usage.Output, CacheCreate: r.Usage.CacheCreate, CacheRead: r.Usage.CacheRead, ServerToolUses: r.Usage.ServerTools}
+		u := toAgentUsage(*r.Usage)
+		a.Usage = &u
 	}
 	return a
 }

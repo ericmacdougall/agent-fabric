@@ -33,6 +33,10 @@ type ExecResult struct {
 	ExitCode int
 	TimedOut bool
 	Cut      bool
+	// SpillID names the saved full output when it was cut and a spill
+	// directory is configured; Total is the size of what was saved.
+	SpillID string
+	Total   int64
 }
 
 // Confiner runs a child inside the host sandbox profile. Implementations own
@@ -112,7 +116,10 @@ type HostConfiner struct {
 	// child start first checks it and refuses with ErrWorktreeMoved, so the
 	// host never starts a child whose cwd is outside the recorded directory.
 	Pin *WorktreePin
-	n   int
+	// Spill, when set, receives the full output of a cut result (goodqa#15361
+	// N2). It is a runner-only directory outside RunDir.
+	Spill *RunnerDir
+	n     int
 }
 
 // cleanupTries bounds how long a failed cleanup keeps the run's handle.
@@ -172,10 +179,7 @@ func (h *HostConfiner) Run(ctx context.Context, spec ExecSpec) (ExecResult, erro
 	defer timer.Stop()
 	// A child that floods its output file is stopped long before the disk
 	// fills: the file is capped well above what is ever read back.
-	limit := int64(spec.MaxOutput)*4 + (1 << 20)
-	if spec.MaxOutput <= 0 {
-		limit = 4<<20 + 1<<20
-	}
+	limit := floodLimit(spec)
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	var waitErr error
@@ -211,6 +215,7 @@ wait:
 		<-done
 	}
 	res.Output, res.Cut = readCapped(out, spec.MaxOutput)
+	h.spill(out, spec, &res)
 	return res, nil
 }
 
@@ -232,6 +237,7 @@ func (h *HostConfiner) finishWithCleanup(hd host.Handle, done <-chan struct {
 		<-done
 	}
 	res.Output, res.Cut = readCapped(out, spec.MaxOutput)
+	h.spill(out, spec, &res)
 	if cleanupErr != nil {
 		return res, errors.Join(waitErr, cleanupErr)
 	}
@@ -261,6 +267,42 @@ func (h *HostConfiner) cleanup(hd host.Handle, reason string) error {
 		}
 	}
 	return lastErr
+}
+
+func floodLimit(spec ExecSpec) int64 {
+	if spec.MaxOutput <= 0 {
+		return 4<<20 + 1<<20
+	}
+	return int64(spec.MaxOutput)*4 + (1 << 20)
+}
+
+// spill copies the output from the descriptor Run already holds, never from a
+// path the child could have replaced, into the runner-only directory, up to the
+// flood cap. A failure leaves the ordinary truncation notice.
+func (h *HostConfiner) spill(out *os.File, spec ExecSpec, res *ExecResult) {
+	if !res.Cut || h.Spill == nil {
+		return
+	}
+	f, name, err := h.Spill.Create("")
+	if err != nil {
+		return
+	}
+	if _, err := out.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		h.Spill.Abort(name)
+		return
+	}
+	n, err := io.Copy(f, io.LimitReader(out, floodLimit(spec)))
+	f.Close()
+	if err != nil {
+		h.Spill.Abort(name)
+		return
+	}
+	h.Spill.Done(name, n)
+	res.SpillID, res.Total = name, n
+	if fi, err := out.Stat(); err == nil && fi.Size() > n {
+		res.Total = fi.Size()
+	}
 }
 
 func readCapped(f *os.File, max int) (string, bool) {
@@ -333,7 +375,11 @@ func render(res ExecResult, err error) (string, bool) {
 		return "tool failed to run: " + err.Error(), true
 	}
 	out := res.Output
-	if res.Cut {
+	switch {
+	case res.Cut && res.SpillID != "":
+		out += fmt.Sprintf("\n[output truncated at %d bytes of %d; full output saved as spill:%s; read it with read {\"path\":\"spill:%s\",\"offset\":%d}]",
+			len(res.Output), res.Total, res.SpillID, res.SpillID, strings.Count(res.Output, "\n")+1)
+	case res.Cut:
 		out += "\n[output truncated]"
 	}
 	if res.TimedOut {

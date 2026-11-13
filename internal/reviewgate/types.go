@@ -89,6 +89,48 @@ type ProvenanceHandle struct {
 	DerivedFrom []string         `json:"derived_from,omitempty"`
 }
 
+// Binding ties a file-changing proposal to the exact file state and change an
+// approver is shown (goodqa#15864). It is computed by the runner from the
+// worktree, never taken from the model, and is part of the request hash: an
+// approval for one file state is no approval for another. Shown is what the
+// operator sees, capped, with a truncation marker; DiffSHA256 covers the whole
+// diff, so a cut view still cannot be swapped for another change.
+type Binding struct {
+	Path         string `json:"path"`
+	TargetSHA256 string `json:"target_sha256"` // sha256 of the file the call replaces, or "new"
+	NewSHA256    string `json:"new_sha256"`    // sha256 of the bytes the call would leave
+	DiffSHA256   string `json:"diff_sha256"`   // sha256 of the full, uncapped diff
+	Shown        string `json:"shown"`
+	Truncated    bool   `json:"truncated,omitempty"`
+}
+
+// MaxBindingShownBytes bounds Binding.Shown.
+const MaxBindingShownBytes = 48 * 1024
+
+func validHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validBinding(b *Binding) error {
+	if b == nil {
+		return nil
+	}
+	if !validText(b.Path, 4096) || !(b.TargetSHA256 == "new" || validHex64(b.TargetSHA256)) ||
+		!validHex64(b.NewSHA256) || !validHex64(b.DiffSHA256) ||
+		len(b.Shown) > MaxBindingShownBytes || !utf8.ValidString(b.Shown) {
+		return invalid("invalid file binding")
+	}
+	return nil
+}
+
 // Proposal is the complete request-hash subject. Original task text, model
 // transcripts, operator identity and idempotency keys are intentionally not
 // hash inputs. Args must be a JSON object.
@@ -99,6 +141,11 @@ type Proposal struct {
 	Args             json.RawMessage    `json:"args"`
 	StateFingerprint string             `json:"state_fingerprint"`
 	Provenance       []ProvenanceHandle `json:"provenance"`
+	// Binding is set only for tools whose policy has RequireBinding. Absent
+	// it is omitted from the canonical form, so every other tool keeps the
+	// hash it always had, and a proposal from before the field existed keeps
+	// its old hash and cannot pass for a bound one.
+	Binding *Binding `json:"binding,omitempty"`
 }
 
 // RequestHash returns the lowercase SHA-256 of CanonicalProposal bytes.

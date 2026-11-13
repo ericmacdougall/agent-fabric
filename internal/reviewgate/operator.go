@@ -2,6 +2,7 @@ package reviewgate
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -32,6 +33,11 @@ func (o *Operator) Reject(ctx context.Context, rejection Rejection) (Decision, e
 
 // RequestSummary excludes canonical arguments, original prompts, model output,
 // dispatch keys, reasons, and evidence. It is safe for operator CLI display.
+// The one exception is Target: for a file-changing call it carries the call's
+// own target path, the file's sha256 and the change, because the approver has
+// to see what they approve (goodqa#15864). That text is the tool's data, not
+// the model's reasoning or the prompt, and nothing else from the arguments is
+// shown.
 type RequestSummary struct {
 	RequestHash  string         `json:"request_hash"`
 	MissionID    string         `json:"mission_id"`
@@ -44,12 +50,32 @@ type RequestSummary struct {
 	ApprovalEnds *time.Time     `json:"approval_expires_at,omitempty"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
+	// Target is the file binding of an edit or write: path, current sha256,
+	// new sha256, diff digest and the shown change. Inspect fills Shown; List
+	// leaves it empty.
+	Target *Binding `json:"target,omitempty"`
+	// Unbound marks an edit or write request created before bindings existed.
+	// It can be listed and rejected but never executes.
+	Unbound bool `json:"unbound,omitempty"`
 }
+
+// bindingTools are the tools that must carry a Binding.
+var bindingTools = map[string]bool{"edit": true, "write": true}
 
 func summaryFor(r storedRequest) RequestSummary {
 	d := decisionFor(r)
-	return RequestSummary{RequestHash: r.Hash, MissionID: r.MissionID, SessionID: r.SessionID,
+	s := RequestSummary{RequestHash: r.Hash, MissionID: r.MissionID, SessionID: r.SessionID,
 		Tool: r.Tool, ProposerID: r.ProposerID, State: r.State, Mode: r.Mode, Risk: d.Risk}
+	var p struct {
+		Binding *Binding `json:"binding"`
+	}
+	if json.Unmarshal([]byte(r.Canonical), &p) == nil && p.Binding != nil && validBinding(p.Binding) == nil {
+		b := *p.Binding
+		s.Target = &b
+	} else if bindingTools[r.Tool] {
+		s.Unbound = true
+	}
+	return s
 }
 
 func (o *Operator) Inspect(ctx context.Context, requestHash string) (RequestSummary, error) {
@@ -109,6 +135,9 @@ func (o *Operator) List(ctx context.Context, state RequestState, limit int) ([]R
 			return nil, err
 		}
 		summary := summaryFor(r)
+		if summary.Target != nil {
+			summary.Target.Shown = "" // the list is metadata; show has the change
+		}
 		summary.CreatedAt, summary.UpdatedAt = s.CreatedAt, s.UpdatedAt
 		out = append(out, summary)
 	}

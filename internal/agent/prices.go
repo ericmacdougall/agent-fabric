@@ -88,6 +88,28 @@ func addCost(a, b int64) int64 {
 
 // Cost is the billed estimate for the usage actually reported.
 func (p Prices) Cost(u Usage) int64 {
+	if len(u.Iterations) == 0 {
+		return p.costOne(u)
+	}
+	// With iterations the top-level counters exclude compaction passes. Take
+	// the dearer of (a) every pass summed and (b) the top level plus the
+	// compaction passes, so a fixture that omits cache counters in one place
+	// can never under-charge.
+	top := u
+	top.Iterations = nil
+	var all int64
+	b := p.costOne(top)
+	for _, it := range u.Iterations {
+		c := p.costOne(Usage{Input: it.Input, Output: it.Output, CacheCreate: it.CacheCreate, CacheRead: it.CacheRead})
+		all = addCost(all, c)
+		if it.Type == "compaction" {
+			b = addCost(b, c)
+		}
+	}
+	return max(all, b)
+}
+
+func (p Prices) costOne(u Usage) int64 {
 	c := ceilMul(u.Input, *p.Input)
 	c = addCost(c, ceilMul(u.Output, *p.Output))
 	c = addCost(c, ceilMul(u.CacheCreate, *p.CacheWrite))

@@ -382,3 +382,43 @@ func (d *DB) TokensUsed(ctx context.Context, attempt domain.AttemptID) (int64, e
 		FROM agent_messages WHERE attempt_id = $1 AND role = 'assistant'`, string(attempt)).Scan(&n)
 	return n, err
 }
+
+// Compaction is one client-side compaction of an attempt's history
+// (goodqa#15361 N3 mode C). It is append-only and never regenerated on replay.
+type Compaction struct {
+	Idx          int // message index at which it took effect
+	FirstKeptIdx int // oldest message kept verbatim after the summary
+	Summary      string
+	RequestSHA   string
+	CostMicros   int64
+}
+
+// Compactions loads the attempt's compactions, oldest first.
+func (d *DB) Compactions(ctx context.Context, attempt domain.AttemptID) ([]Compaction, error) {
+	rows, err := d.Pool.Query(ctx, `SELECT idx, first_kept_idx, summary, request_sha, cost_micros
+		FROM agent_compactions WHERE attempt_id = $1 ORDER BY idx`, string(attempt))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Compaction
+	for rows.Next() {
+		var c Compaction
+		if err := rows.Scan(&c.Idx, &c.FirstKeptIdx, &c.Summary, &c.RequestSHA, &c.CostMicros); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// CommitCompaction appends a compaction under the fence. A row already at
+// that index (a replay of the same compaction) is left as it is.
+func (d *DB) CommitCompaction(ctx context.Context, attempt domain.AttemptID, fence int64, c Compaction) error {
+	return d.fenced(ctx, attempt, fence, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO agent_compactions (attempt_id, idx, first_kept_idx, summary, request_sha, cost_micros, fence)
+			VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (attempt_id, idx) DO NOTHING`,
+			string(attempt), c.Idx, c.FirstKeptIdx, c.Summary, c.RequestSHA, c.CostMicros, fence)
+		return err
+	})
+}

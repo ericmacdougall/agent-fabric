@@ -29,19 +29,29 @@ func reviewMarkerEnv(t *testing.T, config native.ReviewGateConfig) (*env, string
 }
 
 func TestNativeReviewGateDefaultShadowDoesNotExecute(t *testing.T) {
-	e, marker := reviewMarkerEnv(t, native.ReviewGateConfig{SafeTools: []string{"shell"}})
+	// A read-only call needs no human, so shadow mode reaches its no-execution
+	// outcome. (A shell call now always needs a human, goodqa#15867, and would
+	// pause for one instead.)
+	e := newEnv(t,
+		fakeapi.Step{Events: fakeapi.ToolUse("", "", "toolu_gate", "read", `{"path":"shadow.txt"}`, 100, 20)},
+		fakeapi.Step{Events: fakeapi.Text("finished", 120, 10)},
+	)
+	if err := os.WriteFile(filepath.Join(e.g.Worktree, "shadow.txt"), []byte("CONTENTS-OF-THE-SHADOW-READ"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.g.ReviewGate = native.ReviewGateConfig{}
 	st := openNativeStore(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	if _, err := native.Run(ctx, st, e.g, gateOpts(true)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("shadow tool executed: %v", err)
-	}
 	requests := e.srv.Requests()
 	if len(requests) != 2 || !strings.Contains(string(requests[1].Body), "shadow_no_execution") {
 		t.Fatal("missing shadow_no_execution tool result")
+	}
+	if strings.Contains(string(requests[1].Body), "CONTENTS-OF-THE-SHADOW-READ") {
+		t.Fatal("the shadow read ran")
 	}
 }
 
@@ -161,6 +171,10 @@ func TestNativeReviewGateConfigValidation(t *testing.T) {
 	e.g.ReviewGate = native.ReviewGateConfig{Mode: "enforce", SafeTools: []string{"not-a-tool"}}
 	if err := e.g.Validate(); err == nil {
 		t.Fatal("unknown safe tool accepted")
+	}
+	e.g.ReviewGate = native.ReviewGateConfig{Mode: "enforce", SafeTools: []string{"shell"}}
+	if err := e.g.Validate(); err == nil || !strings.Contains(err.Error(), "edit") {
+		t.Fatalf("shell accepted as a safe tool: %v", err)
 	}
 }
 

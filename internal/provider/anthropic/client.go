@@ -56,7 +56,13 @@ type Config struct {
 	// Vouched, when set, lists key values the authority check accepted
 	// (KeyOptions.Vouched); the shape guard on every send accepts those too.
 	Vouched *Vouched
+	// Betas are sent as the anthropic-beta header. Each must be on AllowedBetas.
+	Betas []string
 }
+
+// AllowedBetas is the closed set of beta headers a grant may enable
+// (goodqa#15361): server compaction only.
+var AllowedBetas = map[string]bool{"compact-2026-01-12": true}
 
 // Capture is one attempt as it crossed the wire, minus credentials.
 type Capture struct {
@@ -82,6 +88,11 @@ func New(cfg Config) (*Client, error) {
 	}
 	if cfg.Version == "" || cfg.Key == nil {
 		return nil, errors.New("anthropic: Version and Key are required")
+	}
+	for _, b := range cfg.Betas {
+		if !AllowedBetas[b] {
+			return nil, fmt.Errorf("anthropic: beta %q is not on the allowlist", b)
+		}
 	}
 	cfg.HTTP = safeHTTP(cfg.HTTP)
 	if cfg.Retry.MaxAttempts == 0 {
@@ -278,6 +289,9 @@ func (c *Client) once(ctx context.Context, body []byte, n int, onEvent func(int)
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept", "text/event-stream")
 	req.Header.Set("anthropic-version", c.cfg.Version)
+	if len(c.cfg.Betas) > 0 {
+		req.Header.Set("anthropic-beta", strings.Join(c.cfg.Betas, ","))
+	}
 	req.Header.Set("x-api-key", key)
 	// MaybeBilled only once the request body has really been written: a dial
 	// or TLS failure ran no model, a reset after the write may have.

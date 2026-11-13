@@ -91,6 +91,10 @@ type Grant struct {
 	// when FABRIC_REVIEW_GATE=1 (Options.ReviewGate); with the flag off a grant
 	// that sets it is refused rather than silently running ungated.
 	ReviewGate ReviewGateConfig `json:"review_gate,omitempty"`
+	// Compaction opts into context compaction (goodqa#15361 N3); Betas lists
+	// extra anthropic-beta values from a closed allowlist.
+	Compaction *CompactionGrant `json:"compaction,omitempty"`
+	Betas      []string         `json:"betas,omitempty"`
 }
 
 func LoadGrant(path string) (Grant, error) {
@@ -147,6 +151,7 @@ func (g Grant) Validate() error {
 	if err := validateReviewGateConfig(g.ReviewGate); err != nil {
 		p = append(p, err.Error())
 	}
+	p = append(p, validateCompaction(g)...)
 	if len(p) > 0 {
 		return errors.New("grant refused: " + strings.Join(p, "; "))
 	}
@@ -166,6 +171,11 @@ type Options struct {
 	// (FABRIC_TOOL_EXIT_CLEANUP=1 in cmd/fab; default off). See
 	// tools.HostConfiner.ExitCleanup.
 	ToolExitCleanup bool
+	// ExtraWritable lists the trees, beyond the worktree, the run directory and
+	// the temp roots, that the host profile lets the confined child write
+	// (host ExtraRW). Edit and write refuse a state directory under any of
+	// them, and never rely on a gitdir under any of them (goodqa#15865).
+	ExtraWritable []string
 	// ReviewDSN authenticates the separate trusted app-role review pool. It
 	// must never be the runner DSN or be inherited by a tool worker.
 	ReviewDSN string
@@ -263,6 +273,11 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 			return nil, fmt.Errorf("native: open app-role review store: %w", err)
 		}
 		defer reviewStore.Close()
+		// Before the key, a lock or any write: turning per-call review off
+		// needs a recorded human approver (goodqa#15866).
+		if err := requireSafeToolsApproval(ctx, reviewStore, g); err != nil {
+			return nil, err
+		}
 	} else if g.ReviewGate.set() {
 		return nil, errors.New("native: grant sets review_gate but FABRIC_REVIEW_GATE is not 1; refusing to run its tools ungated")
 	}
@@ -331,7 +346,11 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 	if _, err := keySrc(lctx); err != nil {
 		return nil, err
 	}
-	cl, err := anthropic.New(anthropic.Config{BaseURL: g.BaseURL, Version: g.AnthropicVersion, Key: keySrc, HTTP: o.HTTP, Vouched: &keys.vouched})
+	loopExtra, betas, err := compactionExtra(g)
+	if err != nil {
+		return nil, err
+	}
+	cl, err := anthropic.New(anthropic.Config{BaseURL: g.BaseURL, Version: g.AnthropicVersion, Key: keySrc, HTTP: o.HTTP, Vouched: &keys.vouched, Betas: betas})
 	if err != nil {
 		return nil, err
 	}
@@ -359,10 +378,17 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 	hg := host.Grant{Run: domain.AttemptID(g.Attempt), Mission: domain.MissionID(g.Mission), Fence: fence, Model: g.Model, Effort: "n/a",
 		Rung: "native", TierTableSHA: "native", Profile: "P1", MaxTurns: g.MaxTurns, MaxBudgetUSD: float64(g.Caps.Run) / 1e6,
 		Wall: time.Duration(g.WallSeconds) * time.Second, RunDir: g.RunDir, Token: hex.EncodeToString(tok)}
-	toolset, err := nativeToolset(wt, starter, hg, o.ToolExitCleanup, allow)
+	stateDir, err := StateDir()
 	if err != nil {
 		return nil, err
 	}
+	reapOrphanSpill(lctx, st, stateDir, g.Attempt)
+	toolset, tres, err := nativeToolsetOpts(wt, starter, hg, o.ToolExitCleanup, allow,
+		toolsetOpts{FileTools: fileToolsEnabled(o.ReviewGate, g.ReviewGate), StateDir: stateDir, Attempt: g.Attempt, ExtraWritable: o.ExtraWritable})
+	if err != nil {
+		return nil, err
+	}
+	defer tres.close()
 	// Every tool refuses to start once the attempt lease is stale or expired.
 	for i, tool := range toolset {
 		toolset[i] = freshTool{Tool: tool, st: st, attempt: domain.AttemptID(g.Attempt), fence: fence}
@@ -397,8 +423,9 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 		DB: db, Ledger: led, Provider: loopProvider, Tools: toolset, Guard: oracle,
 		Redact:  keys,
 		Attempt: domain.AttemptID(g.Attempt), Fence: fence,
-		Model: g.Model, MaxTokens: g.MaxTokens, System: g.System, Extra: g.Extra, Prompt: g.Prompt,
-		MaxTurns: g.MaxTurns, MaxTotalTokens: g.MaxTotalTokens, Wall: time.Duration(g.WallSeconds) * time.Second, RestartCap: restartCap(g.RestartCap),
+		Model: g.Model, MaxTokens: g.MaxTokens, System: g.System, Extra: loopExtra, Prompt: g.Prompt,
+		Compaction: g.Compaction.agentConfig(),
+		MaxTurns:   g.MaxTurns, MaxTotalTokens: g.MaxTotalTokens, Wall: time.Duration(g.WallSeconds) * time.Second, RestartCap: restartCap(g.RestartCap),
 		Prices: prices, BillingMode: agent.BillingAPIKey, Pin: g.pin(o.ReviewGate),
 	})
 	if err != nil {
@@ -436,6 +463,9 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 	}
 	loopOut = out
 	rcpt, ferr := finishNative(ctx, st, db, led, g, fence, out)
+	if ferr == nil {
+		tres.removeSpill()
+	}
 	if rcpt != nil {
 		rcpt.KeyCheck = keys.lastCheck()
 	}
@@ -451,19 +481,158 @@ func nativeOracle(g Grant, wt *tools.WorktreePin) *policy.Oracle {
 // nativeToolset builds read, grep and shell on the canonical worktree, each
 // refusing with ErrWorktreeMoved once the pin no longer holds
 // (goodqa#15283 AC-5). The host grant's working directory is the canonical
-// path too, whatever the caller set.
+// path too, whatever the caller set. It has no state directory: no spill, no
+// edit or write.
 func nativeToolset(wt *tools.WorktreePin, starter tools.Starter, hg host.Grant, exitCleanup bool, allow []*regexp.Regexp) ([]agent.Tool, error) {
+	ts, _, err := nativeToolsetOpts(wt, starter, hg, exitCleanup, allow, toolsetOpts{})
+	return ts, err
+}
+
+// toolsetOpts are the parts of the toolset that need the runner's state
+// directory or the review gate (goodqa#15361).
+type toolsetOpts struct {
+	// FileTools adds edit and write. Set only by fileToolsEnabled.
+	FileTools bool
+	// StateDir and Attempt locate the runner-only spill and pre-image
+	// directories. An empty StateDir disables both.
+	StateDir string
+	Attempt  string
+	// ExtraWritable is Options.ExtraWritable.
+	ExtraWritable []string
+}
+
+// stateDirTestExempt is a test-only override. It is unexported and assigned
+// only by export_test.go, which is compiled into test binaries and nowhere
+// else, so no production path can set it. While non-empty, a state directory
+// under that path is exempt from the system-temp-root clause of the C5 check
+// (go test puts t.TempDir under the temp roots); the worktree, run directory
+// and extra-writable clauses still apply.
+var stateDirTestExempt string
+
+// checkStateDir applies the C5 rule to the runner's state directory.
+func checkStateDir(stateDir, worktree, runDir string, extra []string) error {
+	roots := tools.ChildWritableRoots(worktree, runDir, extra)
+	if x := stateDirTestExempt; x != "" {
+		if _, under := tools.UnderAnyRoot(stateDir, []string{x}); under {
+			roots = append([]string{worktree, runDir}, extra...)
+		}
+	}
+	return tools.CheckBackupDirOutsideChild(stateDir, roots)
+}
+
+// toolResources are the runner-only directories a toolset holds open.
+type toolResources struct {
+	spill, preimage *tools.RunnerDir
+}
+
+func (r *toolResources) close() {
+	if r == nil {
+		return
+	}
+	if r.spill != nil {
+		r.spill.Close()
+	}
+	if r.preimage != nil {
+		r.preimage.Close()
+	}
+}
+
+// removeSpill deletes the attempt's spill directory once the attempt has
+// finished. Pre-image copies stay: they are what makes an untracked
+// overwrite reversible.
+func (r *toolResources) removeSpill() {
+	if r != nil && r.spill != nil {
+		r.spill.Remove()
+		r.spill = nil
+	}
+}
+
+// fileToolsEnabled is the gate rule (goodqa#15361 F1): edit and write exist
+// only when the operator flag is on AND the grant sets review_gate.mode
+// explicitly to evaluate or enforce. Shadow, an unset mode and a missing flag
+// leave them absent, so a model cannot even name them.
+func fileToolsEnabled(reviewGate bool, c ReviewGateConfig) bool {
+	return reviewGate && (c.Mode == string(reviewgate.Evaluate) || c.Mode == string(reviewgate.Enforce))
+}
+
+func nativeToolsetOpts(wt *tools.WorktreePin, starter tools.Starter, hg host.Grant, exitCleanup bool, allow []*regexp.Regexp, o toolsetOpts) (_ []agent.Tool, res *toolResources, err error) {
 	hg.Worktree = wt.Path()
 	conf := &tools.HostConfiner{Host: starter, Base: hg, ExitCleanup: exitCleanup, Pin: wt}
 	rd, err := tools.NewRead(wt.Path(), 64<<10, 10*time.Second)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rd.Pin = wt
-	return []agent.Tool{rd,
+	res = &toolResources{}
+	defer func() {
+		if err != nil {
+			res.close()
+		}
+	}()
+	// The pre-image copies are the undo for a write. A state directory the
+	// confined child can reach (worktree, run dir, temp roots, extra writable
+	// roots) lets it delete them, so edit and write are not built over one
+	// (goodqa#15865 C5). Checked before anything is created there.
+	if o.FileTools && o.StateDir != "" {
+		if err := checkStateDir(o.StateDir, wt.Path(), hg.RunDir, o.ExtraWritable); err != nil {
+			return nil, nil, err
+		}
+	}
+	if o.StateDir != "" {
+		if res.spill, err = tools.OpenRunnerDir(filepath.Join(o.StateDir, "spill", o.Attempt), 16, 64<<20); err != nil {
+			return nil, nil, fmt.Errorf("native: spill directory: %w", err)
+		}
+		conf.Spill, rd.Spill = res.spill, res.spill
+	}
+	out := []agent.Tool{rd,
 		&tools.Grep{C: conf, Root: wt.Path(), Timeout: 20 * time.Second, MaxOutput: 32 << 10, Pin: wt},
 		&tools.Shell{C: conf, Allow: allow, Timeout: 30 * time.Second, MaxOutput: 32 << 10},
-	}, nil
+	}
+	if o.FileTools {
+		var keeper *tools.PreimageKeeper
+		// edit and write are labelled Reversible: they never run without the
+		// pre-image store that makes that true (goodqa#15361 F1).
+		if o.StateDir == "" {
+			return nil, nil, errors.New("native: edit and write need the runner state directory for pre-image copies")
+		}
+		// A keep dir: copies are never evicted; at 256 copies or 256 MiB the
+		// call is refused with ErrPreimageStoreFull (F2). Only pre-* counts.
+		dir, err := tools.OpenKeepDir(filepath.Join(o.StateDir, "preimage", o.Attempt), "pre-", 256, 256<<20)
+		if err != nil {
+			return nil, nil, fmt.Errorf("native: pre-image directory: %w", err)
+		}
+		res.preimage = dir
+		keeper = &tools.PreimageKeeper{Dir: dir, WritableRoots: tools.ChildWritableRoots(wt.Path(), hg.RunDir, o.ExtraWritable)}
+		// The gitdir is recorded once per attempt in the runner-only store and
+		// a resume uses that record, never .git (F4). On any error (a replaced
+		// gitdir included) Git stays nil and every existing target is copied.
+		if g, gerr := tools.AttemptGitRef(dir, wt.Path()); gerr == nil {
+			keeper.Git = g
+		}
+		out = append(out, tools.NewEdit(rd, wt, keeper), tools.NewWrite(rd, wt, keeper))
+	}
+	return out, res, nil
+}
+
+// reapOrphanSpill removes spill directories of attempts that are not running
+// (R2-c). The current attempt is always kept.
+func reapOrphanSpill(ctx context.Context, st *store.Store, stateDir, current string) {
+	rows, err := st.Pool().Query(ctx, `SELECT id FROM attempts WHERE state IN ('LEASED','PREPARING','RUNNING')`)
+	if err != nil {
+		return // never reap on a failed read
+	}
+	defer rows.Close()
+	live := map[string]bool{current: true}
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			live[id] = true
+		}
+	}
+	if rows.Err() != nil {
+		return
+	}
+	tools.ReapOrphanDirs(filepath.Join(stateDir, "spill"), func(n string) bool { return live[n] })
 }
 
 // startNative registers the mission and starts the attempt through the
@@ -634,14 +803,16 @@ func (g Grant) pin(reviewGate bool) string {
 		review = reviewGatePin(g.ReviewGate)
 	}
 	b, _ := json.Marshal(struct {
-		Allow  []string
-		Hooks  [][]string
-		Caps   any
-		Wall   int
-		Turns  int
-		Tokens int64
-		Review string `json:",omitempty"`
-	}{g.ShellAllow, g.OracleHooks, g.Caps, g.WallSeconds, g.MaxTurns, g.MaxTotalTokens, review})
+		Allow      []string
+		Hooks      [][]string
+		Caps       any
+		Wall       int
+		Turns      int
+		Tokens     int64
+		Review     string           `json:",omitempty"`
+		Compaction *CompactionGrant `json:",omitempty"`
+		Betas      []string         `json:",omitempty"`
+	}{g.ShellAllow, g.OracleHooks, g.Caps, g.WallSeconds, g.MaxTurns, g.MaxTotalTokens, review, g.Compaction, g.Betas})
 	return string(b)
 }
 
