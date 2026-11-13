@@ -273,6 +273,11 @@ func Run(ctx context.Context, st *store.Store, g Grant, o Options) (rc *Receipt,
 			return nil, fmt.Errorf("native: open app-role review store: %w", err)
 		}
 		defer reviewStore.Close()
+		// Before the key, a lock or any write: turning per-call review off
+		// needs a recorded human approver (goodqa#15866).
+		if err := requireSafeToolsApproval(ctx, reviewStore, g); err != nil {
+			return nil, err
+		}
 	} else if g.ReviewGate.set() {
 		return nil, errors.New("native: grant sets review_gate but FABRIC_REVIEW_GATE is not 1; refusing to run its tools ungated")
 	}

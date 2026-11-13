@@ -2,8 +2,10 @@ package native_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"fabric/internal/native"
 	"fabric/internal/provider/anthropic/fakeapi"
 	"fabric/internal/reviewgate"
+	"fabric/internal/store"
 	"fabric/internal/storetest"
 	"fabric/internal/tools/fakehost"
 )
@@ -105,6 +108,7 @@ func TestEditWriteAbsentWithoutGate(t *testing.T) {
 			var st = openNativeStore(t)
 			if c.gate {
 				o = gateOpts(true)
+				approveSafeTools(t, st, e.g, "op:test")
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
@@ -144,6 +148,7 @@ func TestEditEvaluateNeverExecutes(t *testing.T) {
 	// safe_tools so no human is needed: the gate then records the evaluate outcome
 	e, file := editEnv(t, native.ReviewGateConfig{Mode: "evaluate", SafeTools: []string{"edit"}})
 	st := openNativeStore(t)
+	approveSafeTools(t, st, e.g, "op:test")
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	if _, err := native.Run(ctx, st, e.g, gateOpts(true)); err != nil {
@@ -217,6 +222,7 @@ func TestReviewGateEditWrite(t *testing.T) {
 func TestReviewGateEditSafeToolsRunsWithoutPause(t *testing.T) {
 	e, file := editEnv(t, native.ReviewGateConfig{Mode: "enforce", SafeTools: []string{"edit", "write"}})
 	st := openNativeStore(t)
+	approveSafeTools(t, st, e.g, "op:test")
 	appDSN, _ := storetest.AppRunnerDSNs(t, st)
 	o := gateOpts(true)
 	o.ReviewDSN = appDSN
@@ -314,5 +320,176 @@ func TestDefaultStateDirIsAccepted(t *testing.T) {
 			t.Skipf("home is under the temp root on this host: %v", err)
 		}
 		t.Fatalf("the default state dir is refused: %v", err)
+	}
+}
+
+// approveSafeTools records, as an operator, the approval a grant's safe_tools
+// needs (goodqa#15866).
+func approveSafeTools(t *testing.T, st *store.Store, g native.Grant, actor string) reviewgate.AuditEntry {
+	t.Helper()
+	digest, err := native.SafeToolsPolicyDigest(g.ReviewGate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := reviewgate.NewOperator(reviewgate.NewPostgresStore(st.Pool()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := op.ApproveSafeTools(context.Background(), reviewgate.SafeToolsApproval{MissionID: g.Mission, PolicyDigest: digest, OperatorID: actor, Reason: "test approval"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestSafeToolsRefusedWithoutAnApproval(t *testing.T) {
+	e, file := editEnv(t, native.ReviewGateConfig{Mode: "enforce", SafeTools: []string{"edit", "write"}})
+	st := openNativeStore(t)
+	appDSN, _ := storetest.AppRunnerDSNs(t, st)
+	o := gateOpts(true)
+	o.ReviewDSN = appDSN
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := native.Run(ctx, st, e.g, o)
+	if err == nil || !strings.Contains(err.Error(), "operator approval") || !strings.Contains(err.Error(), e.g.Mission) {
+		t.Fatalf("a grant with safe_tools and no recorded approval started: %v", err)
+	}
+	if got, _ := os.ReadFile(file); string(got) != "alpha beta\n" {
+		t.Fatalf("file changed: %q", got)
+	}
+	if n := len(e.srv.Requests()); n != 0 {
+		t.Fatalf("%d provider requests were sent", n)
+	}
+}
+
+func TestSafeToolsApprovalMustMatchMissionAndPolicy(t *testing.T) {
+	e, _ := editEnv(t, native.ReviewGateConfig{Mode: "enforce", SafeTools: []string{"edit", "write"}})
+	st := openNativeStore(t)
+	appDSN, _ := storetest.AppRunnerDSNs(t, st)
+	o := gateOpts(true)
+	o.ReviewDSN = appDSN
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// an approval for a narrower policy (edit only): another digest
+	narrower := e.g
+	narrower.ReviewGate.SafeTools = []string{"edit"}
+	approveSafeTools(t, st, narrower, "op:alice")
+	// an approval for another mission, same policy
+	op, _ := reviewgate.NewOperator(reviewgate.NewPostgresStore(st.Pool()))
+	digest, _ := native.SafeToolsPolicyDigest(e.g.ReviewGate)
+	if _, err := op.ApproveSafeTools(ctx, reviewgate.SafeToolsApproval{MissionID: "some-other-mission", PolicyDigest: digest, OperatorID: "op:alice", Reason: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := native.Run(ctx, st, e.g, o); err == nil || !strings.Contains(err.Error(), "operator approval") {
+		t.Fatalf("an approval for another policy or mission was accepted: %v", err)
+	}
+}
+
+func TestSafeToolsStartsWithAMatchingApprovalAndRecordsTheApprover(t *testing.T) {
+	e, file := editEnv(t, native.ReviewGateConfig{Mode: "enforce", SafeTools: []string{"edit", "write"}})
+	st := openNativeStore(t)
+	entry := approveSafeTools(t, st, e.g, "op:bob")
+	if entry.Actor != "op:bob" || !strings.Contains(entry.Detail, "mission="+e.g.Mission) {
+		t.Fatalf("approval record: %+v", entry)
+	}
+	appDSN, _ := storetest.AppRunnerDSNs(t, st)
+	o := gateOpts(true)
+	o.ReviewDSN = appDSN
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := native.Run(ctx, st, e.g, o); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(file); string(got) != "ALPHA beta\n" {
+		t.Fatalf("approved safe_tools edit not applied: %q", got)
+	}
+	var actor, detail string
+	if err := st.Pool().QueryRow(ctx, `SELECT actor, detail FROM review_gate_audit WHERE event = 'SAFE_TOOLS_APPROVED'`).Scan(&actor, &detail); err != nil {
+		t.Fatal(err)
+	}
+	digest, _ := native.SafeToolsPolicyDigest(e.g.ReviewGate)
+	if actor != "op:bob" || !strings.Contains(detail, "policy_digest="+digest) {
+		t.Fatalf("audit row: %s %s", actor, detail)
+	}
+}
+
+// goodqa#15867 (C2): safe_tools is edit and write only, and shell is not Reversible.
+func TestSafeToolsNamesOnlyEditAndWrite(t *testing.T) {
+	e := newEnv(t)
+	for _, bad := range [][]string{{"shell"}, {"edit", "shell"}, {"read"}, {"grep"}, {"not-a-tool"}, {""}, {"Edit"}} {
+		e.g.ReviewGate = native.ReviewGateConfig{Mode: "enforce", SafeTools: bad}
+		err := e.g.Validate()
+		if err == nil || !strings.Contains(err.Error(), "safe_tools may name only") {
+			t.Errorf("safe_tools %q accepted or unclear: %v", bad, err)
+		}
+		if _, perr := native.PolicyFor(e.g.ReviewGate); perr == nil {
+			t.Errorf("policy built for safe_tools %q", bad)
+		}
+	}
+	e.g.ReviewGate = native.ReviewGateConfig{Mode: "enforce", SafeTools: []string{"write", "edit"}}
+	if err := e.g.Validate(); err != nil {
+		t.Fatalf("edit and write refused: %v", err)
+	}
+}
+
+func TestShellIsNotLabelledReversible(t *testing.T) {
+	r, err := native.ToolReversibility(native.ReviewGateConfig{Mode: "enforce"}, "shell")
+	if err != nil || r == "reversible" || r == "no_side_effect" {
+		t.Fatalf("shell is labelled %q (%v): a shell command has no recorded undo", r, err)
+	}
+	if r, _ := native.ToolReversibility(native.ReviewGateConfig{Mode: "enforce"}, "edit"); r != "reversible" {
+		t.Fatalf("edit is labelled %q", r)
+	}
+}
+
+// goodqa#15865 (C4), through the production wiring: the worktree's own .git is
+// inside the tree the child can write, so a write over a clean, committed file
+// still keeps a copy.
+func TestNativeWriteKeepsCopyWhenGitdirIsInTheWorktree(t *testing.T) {
+	e := newEnv(t)
+	state := t.TempDir()
+	native.AllowStateDirUnderForTest(t, state)
+	git := func(args ...string) {
+		t.Helper()
+		c := exec.Command("git", args...)
+		c.Dir = e.g.Worktree
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("config", "user.email", "t@t")
+	git("config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(e.g.Worktree, "c.txt"), []byte("committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "c.txt")
+	git("commit", "-q", "-m", "c0")
+	ts, closeFn, err := native.ToolsetForTest(e.g, fakehost.New(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeFn()
+	out, isErr := ts["write"].Run(context.Background(), json.RawMessage(`{"path":"c.txt","content":"changed\n"}`))
+	if isErr || !strings.Contains(out, "preimage_copy: pre-") || strings.Contains(out, "preimage_git_blob") {
+		t.Fatalf("the clean file's bytes were left to a gitdir the child can write: %s", out)
+	}
+}
+
+// The host profile's extra writable roots reach the check through Run.
+func TestRunHonoursExtraWritable(t *testing.T) {
+	e, file := editEnv(t, native.ReviewGateConfig{Mode: "enforce"})
+	st := openNativeStore(t)
+	appDSN, _ := storetest.AppRunnerDSNs(t, st)
+	o := gateOpts(true)
+	o.ReviewDSN = appDSN
+	o.ExtraWritable = []string{os.Getenv("FABRIC_STATE_DIR")}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := native.Run(ctx, st, e.g, o); err == nil || !strings.Contains(err.Error(), "child can write") {
+		t.Fatalf("a state dir inside an extra writable root was accepted: %v", err)
+	}
+	if got, _ := os.ReadFile(file); string(got) != "alpha beta\n" {
+		t.Fatalf("file changed: %q", got)
 	}
 }

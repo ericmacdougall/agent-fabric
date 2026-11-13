@@ -102,47 +102,75 @@ func (e *Edit) Run(ctx context.Context, input json.RawMessage) (string, bool) {
 }
 
 func (e *Edit) edit(ctx context.Context, in editIn) (string, error) {
+	pl, err := e.plan(in)
+	if err != nil {
+		return "", err
+	}
+	defer pl.release()
+	return e.core.finishWrite(ctx, pl.parts, pl.parent, pl.name, pl.pre, pl.result, "edited")
+}
+
+// editPlan is an edit computed against the file as it is now, before any
+// byte is written. release closes the descriptors it holds.
+type editPlan struct {
+	parts   []string
+	parent  int
+	name    string
+	pre     snapshot
+	result  []byte
+	release func()
+}
+
+// plan validates in and applies its edits in memory. Both Run and Preview use
+// it, so what an approver is shown is exactly what Run would write.
+func (e *Edit) plan(in editIn) (*editPlan, error) {
 	if n := len(in.Edits); n < 1 || n > maxEdits {
-		return "", fmt.Errorf("edits must hold 1 to %d entries", maxEdits)
+		return nil, fmt.Errorf("edits must hold 1 to %d entries", maxEdits)
 	}
 	for i, ed := range in.Edits {
 		if ed.Old == "" {
-			return "", fmt.Errorf("edit %d: oldText is empty", i+1)
+			return nil, fmt.Errorf("edit %d: oldText is empty", i+1)
 		}
 		if ed.Old == ed.New {
-			return "", fmt.Errorf("edit %d: oldText equals newText", i+1)
+			return nil, fmt.Errorf("edit %d: oldText equals newText", i+1)
 		}
 		if len(ed.Old) > MaxFileBytes || len(ed.New) > MaxFileBytes {
-			return "", fmt.Errorf("edit %d is larger than %d bytes", i+1, MaxFileBytes)
+			return nil, fmt.Errorf("edit %d is larger than %d bytes", i+1, MaxFileBytes)
 		}
 	}
 	if err := validExpect(in.Expect); err != nil {
-		return "", err
+		return nil, err
 	}
 	c := &e.core
 	parts, err := c.resolve(in.Path)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	parent, made, err := c.parentDir(parts, false)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	defer func() { unix.Close(parent); releaseDirs(made, false) }()
+	ok := false
+	defer func() {
+		if !ok {
+			unix.Close(parent)
+			releaseDirs(made, false)
+		}
+	}()
 	name := parts[len(parts)-1]
 	pre, err := loadTarget(parent, name)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if !pre.exists {
-		return "", errors.New("no such file (use write to create one)")
+		return nil, errors.New("no such file (use write to create one)")
 	}
 	if in.Expect != "" && in.Expect != pre.sha {
-		return "", fmt.Errorf("expect_sha256 does not match the file (current sha256 %s)", pre.sha)
+		return nil, fmt.Errorf("expect_sha256 does not match the file (current sha256 %s)", pre.sha)
 	}
 	matches, err := locate(pre.data, in.Edits)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var res bytes.Buffer
 	last := 0
@@ -155,12 +183,14 @@ func (e *Edit) edit(ctx context.Context, in editIn) (string, error) {
 	}
 	res.Write(pre.data[last:])
 	if res.Len() > MaxFileBytes {
-		return "", fmt.Errorf("result would be larger than %d bytes", MaxFileBytes)
+		return nil, fmt.Errorf("result would be larger than %d bytes", MaxFileBytes)
 	}
 	if bytes.Equal(res.Bytes(), pre.data) {
-		return "", errors.New("the edits change nothing")
+		return nil, errors.New("the edits change nothing")
 	}
-	return c.finishWrite(ctx, parts, parent, name, pre, res.Bytes(), "edited")
+	ok = true
+	return &editPlan{parts: parts, parent: parent, name: name, pre: pre, result: res.Bytes(),
+		release: func() { unix.Close(parent); releaseDirs(made, false) }}, nil
 }
 
 func validExpect(s string) error {

@@ -71,3 +71,25 @@ func TestBackupDirDefaultAccepted(t *testing.T) {
 		t.Fatalf("the default state dir must be accepted: %v", err)
 	}
 }
+
+// Each tree the confined child can write is in the list, by name: the check
+// above is only as good as this list.
+func TestChildWritableRootsListsEveryWritableTree(t *testing.T) {
+	t.Setenv("TMPDIR", "/opt/some-tmpdir")
+	roots := tools.ChildWritableRoots("/work/wt", "/work/run", []string{"/extra/rw"})
+	have := map[string]bool{}
+	for _, r := range roots {
+		have[r] = true
+	}
+	for _, want := range []string{"/work/wt", "/work/run", "/extra/rw", "/tmp", "/private/tmp", "/var/tmp", "/private/var/folders", "/var/folders", "/dev", "/opt/some-tmpdir", os.TempDir()} {
+		if !have[want] {
+			t.Errorf("%s is not a child-writable root: %v", want, roots)
+		}
+	}
+	// relative and empty entries are dropped, not guessed at
+	for _, r := range tools.ChildWritableRoots("relative", "", []string{"also/relative"}) {
+		if !filepath.IsAbs(r) {
+			t.Errorf("relative root %q kept", r)
+		}
+	}
+}

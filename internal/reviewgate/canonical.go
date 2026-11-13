@@ -142,11 +142,15 @@ func CanonicalProposal(p Proposal) ([]byte, error) {
 		Args             json.RawMessage    `json:"args"`
 		StateFingerprint string             `json:"state_fingerprint"`
 		Provenance       []ProvenanceHandle `json:"provenance"`
+		Binding          *Binding           `json:"binding,omitempty"`
+	}
+	if err := validBinding(p.Binding); err != nil {
+		return nil, err
 	}
 	var out bytes.Buffer
 	enc := json.NewEncoder(&out)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(wireProposal{p.MissionID, p.SessionID, p.Tool, args, p.StateFingerprint, handles}); err != nil {
+	if err := enc.Encode(wireProposal{p.MissionID, p.SessionID, p.Tool, args, p.StateFingerprint, handles, p.Binding}); err != nil {
 		return nil, fmt.Errorf("%w: canonical proposal: %v", ErrInvalid, err)
 	}
 	c := bytes.TrimSuffix(out.Bytes(), []byte{'\n'})

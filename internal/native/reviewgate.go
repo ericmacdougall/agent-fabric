@@ -12,12 +12,16 @@ import (
 	"fabric/internal/agent"
 	"fabric/internal/reviewgate"
 	"fabric/internal/store"
+	"fabric/internal/tools"
 )
 
 // ReviewGateConfig selects the rollout explicitly in the grant. The zero mode
 // is Shadow for migration compatibility: calls are reviewed and recorded but
 // never execute. Enforce is fully live. SafeTools is the only way to permit an
-// agent-tainted side-effecting tool without separate human approval.
+// agent-tainted side-effecting tool without a human approving each call. It
+// names edit and write only, and a mission that sets it does not start without
+// an operator approval recorded in the audit chain for that mission and that
+// exact policy (goodqa#15866, #15867).
 type ReviewGateConfig struct {
 	Mode      string   `json:"mode,omitempty"`
 	SafeTools []string `json:"safe_tools,omitempty"`
@@ -41,22 +45,32 @@ func (c ReviewGateConfig) mode() (reviewgate.RolloutMode, error) {
 
 func (c ReviewGateConfig) policy() (reviewgate.Policy, error) {
 	p := reviewgate.Policy{Version: reviewgate.PolicyV1, ModelMaxTier: reviewgate.TierLow, Tools: map[string]reviewgate.ToolPolicy{
-		"read":  {Allow: true, Risk: reviewgate.TierReadOnly, Reversibility: reviewgate.NoSideEffect},
-		"grep":  {Allow: true, Risk: reviewgate.TierReadOnly, Reversibility: reviewgate.NoSideEffect},
-		"shell": {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.Reversible, HumanRequired: true},
-		// Option A (goodqa#15361, decision: main (agent), on #15361): every edit
-		// and write is reviewed per call. safe_tools is the per-mission opt-out.
-		// Reversible holds because every replaced file git cannot restore
-		// (untracked, dirty, staged-only) keeps a never-evicted pre-image copy,
-		// and a full store refuses the call (goodqa#15361 r1b F1/F2).
-		"edit":  {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.Reversible, HumanRequired: true},
-		"write": {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.Reversible, HumanRequired: true},
+		"read": {Allow: true, Risk: reviewgate.TierReadOnly, Reversibility: reviewgate.NoSideEffect},
+		"grep": {Allow: true, Risk: reviewgate.TierReadOnly, Reversibility: reviewgate.NoSideEffect},
+		// A shell command can do anything the confined child can, and nothing
+		// records how to undo it: it is not reversible, so the policy treats it
+		// as unknown-undo and every call needs a human (goodqa#15867).
+		"shell": {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.UnknownUndo, HumanRequired: true},
+		// Option A (goodqa#15361, main (agent) on #15361, conditions C1-C5 from
+		// the red-team): every edit and write is reviewed per call, and the
+		// reviewer sees the change. Each request binds the target path, the
+		// target file's sha256 and the diff (RequireBinding), so an approval
+		// holds only for the file state it was given for. safe_tools is the
+		// per-mission opt-out; it needs a recorded operator approval (C3).
+		// Reversible holds because every replaced file keeps a never-evicted
+		// pre-image copy unless git holds the bytes in a gitdir the child
+		// cannot write, a full store refuses the call, and the store sits out
+		// of the child's reach (goodqa#15361 F1/F2, #15865).
+		"edit":  {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.Reversible, HumanRequired: true, RequireBinding: true},
+		"write": {Allow: true, Risk: reviewgate.TierLow, Reversibility: reviewgate.Reversible, HumanRequired: true, RequireBinding: true},
 	}}
 	for _, name := range c.SafeTools {
-		tool, ok := p.Tools[name]
-		if !ok {
-			return reviewgate.Policy{}, fmt.Errorf("review_gate.safe_tools names unknown tool %q", name)
+		// Only the two file tools may skip per-call review. shell and every
+		// other tool always need a human (goodqa#15867).
+		if name != "edit" && name != "write" {
+			return reviewgate.Policy{}, fmt.Errorf("review_gate.safe_tools may name only \"edit\" and \"write\", not %q; every other tool always needs a human", name)
 		}
+		tool := p.Tools[name]
 		tool.HumanRequired = false
 		tool.AllowTaintedSideEffects = true
 		p.Tools[name] = tool
@@ -121,7 +135,7 @@ func wrapReviewTools(toolset []agent.Tool, st *store.Store, reviewStore *reviewg
 			Policy: policy, Mode: mode, StateReader: AttemptStateReader{Pool: st.Pool()}, Redactor: redactor,
 		}, reviewgate.AgentToolConfig{
 			MissionID: g.Mission, SessionID: g.Attempt, ProposerID: "agent:" + g.Attempt,
-			OriginalTask: g.Prompt,
+			OriginalTask: g.Prompt, Preview: previewFor(tool),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("review gate %s: %w", tool.Name(), err)
@@ -149,4 +163,62 @@ func reviewGatePin(c ReviewGateConfig) string {
 		Safe []string
 	}{mode, c.SafeTools})
 	return string(b)
+}
+
+// filePreviewer is implemented by the edit and write tools.
+type filePreviewer interface {
+	Preview(ctx context.Context, input json.RawMessage) (tools.Preview, error)
+}
+
+// previewFor adapts a file tool's Preview to the gate; nil for every other tool.
+func previewFor(tool agent.Tool) reviewgate.PreviewFunc {
+	if f, ok := tool.(freshTool); ok {
+		tool = f.Tool
+	}
+	fp, ok := tool.(filePreviewer)
+	if !ok {
+		return nil
+	}
+	return func(ctx context.Context, args json.RawMessage) (*reviewgate.Binding, error) {
+		p, err := fp.Preview(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		return &reviewgate.Binding{Path: p.Path, TargetSHA256: p.TargetSHA256, NewSHA256: p.NewSHA256,
+			DiffSHA256: p.DiffSHA256, Shown: p.Shown, Truncated: p.Truncated}, nil
+	}
+}
+
+// SafeToolsPolicyDigest is the digest of the policy a grant's review_gate
+// produces. An operator approval of safe_tools is recorded against it.
+func SafeToolsPolicyDigest(c ReviewGateConfig) (string, error) {
+	p, err := c.policy()
+	if err != nil {
+		return "", err
+	}
+	return reviewgate.PolicyDigest(p)
+}
+
+// requireSafeToolsApproval refuses a grant that sets safe_tools unless an
+// operator approval for this mission and this exact policy is in the audit
+// chain (goodqa#15866). Nothing a model can call writes that record.
+func requireSafeToolsApproval(ctx context.Context, rs *reviewgate.PostgresStore, g Grant) error {
+	if len(g.ReviewGate.SafeTools) == 0 {
+		return nil
+	}
+	digest, err := SafeToolsPolicyDigest(g.ReviewGate)
+	if err != nil {
+		return err
+	}
+	entry, ok, err := rs.SafeToolsApproval(ctx, g.Mission, digest)
+	if err != nil {
+		return fmt.Errorf("native: safe_tools approval lookup: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("native: review_gate.safe_tools %v needs an operator approval recorded for mission %s and policy digest %s; "+
+			"an operator runs `FABRIC_ACTOR=op:<name> fab review approve-safe-tools --grant <file> --reason <why>`; refusing to start",
+			g.ReviewGate.SafeTools, g.Mission, digest)
+	}
+	_ = entry
+	return nil
 }

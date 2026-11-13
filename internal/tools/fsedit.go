@@ -35,6 +35,7 @@ const (
 )
 
 var (
+	errNoDir   = errors.New("no such directory")
 	errChanged = errors.New("file changed since read")
 	// ErrNeedsReview is not used here; see reviewgate wiring in internal/native.
 )
@@ -153,7 +154,7 @@ func (f *fsCore) parentDir(parts []string, create bool) (fd int, made []madeDir,
 			case errors.Is(oerr, unix.ELOOP), errors.Is(oerr, unix.EMLINK), errors.Is(oerr, unix.ENOTDIR):
 				return fail(errors.New("symbolic links are not followed and every parent must be a directory"))
 			case errors.Is(oerr, unix.ENOENT):
-				return fail(errors.New("no such directory"))
+				return fail(errNoDir)
 			}
 			return fail(fmt.Errorf("open: %w", oerr))
 		}

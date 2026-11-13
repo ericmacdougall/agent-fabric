@@ -17,9 +17,45 @@ absent from the tool list, so a model that asks for one gets the loop's
 unknown-tool result. In `evaluate` mode the gate records the call and never
 executes it. Only `enforce` executes.
 
-Review is per call (Option A). `review_gate.safe_tools: ["edit","write"]` is
-the per-mission opt-out: unreviewed writes inside the pinned worktree, `.git`
-still refused, audit rows still kept.
+Review is per call (Option A, with the red-team's conditions C1 to C5 built
+in; goodqa#15864 to #15867). Default: off. The tools exist only under the two
+conditions above, and nothing here changes that.
+
+- What the approver sees (C1). Each edit or write request carries a binding
+  that the runner computes from the worktree, not from the model: the target
+  path, the target file's current sha256 (`new` for a file that does not
+  exist), the sha256 of the bytes the call would leave, the sha256 of the whole
+  diff, and the capped text of the change (the diff, and for a write the new
+  content as well; at most 16 KiB of each, cut with a `[TRUNCATED ...]` marker
+  that names the digest of the whole). The binding is part of the request hash.
+  `fab review show HASH` prints it; control and bidirectional-format characters
+  in the path or the text are shown as `\u{XXXX}` escapes. `fab review list`
+  shows the path and digests, not the change. Approving a change that was cut
+  at the cap needs `fab review approve --accept-truncated`. Prompts, model
+  output and the call's other arguments are still never shown.
+- An approval holds for the file state it was given for. At execution the
+  runner recomputes the binding from the file as it is and refuses unless it is
+  identical (path, sha256, diff); it then hands the tool the reviewed sha256 as
+  `expect_sha256`, so the tool re-checks under its own lock. A file that changed
+  after the approval makes a new request that needs its own approval. The
+  refusal is definite (`FAILED_DEFINITE`, nothing written).
+- Requests from before bindings (the older hash form) are shown as `unbound`,
+  can be rejected, and never execute: the policy requires a binding
+  (`RequireBinding`, part of the policy digest), the executor refuses a request
+  without one, and the call hashes differently on the new path.
+- `review_gate.safe_tools` is the per-mission opt-out. It names `edit` and
+  `write` only (C2): `shell` or anything else is refused at validation, and the
+  policy labels `shell` as unknown-undo, so every shell call needs a human. A
+  grant with a non-empty `safe_tools` does not start until an operator has
+  recorded an approval (C3): `FABRIC_ACTOR=op:<name> fab review
+  approve-safe-tools --grant <file> --reason <why>` appends a
+  `SAFE_TOOLS_APPROVED` row to the audit chain with the operator, the time, the
+  mission id and the digest of the exact policy the grant produces (there is no
+  new table). A row for another mission or another policy digest, by a
+  non-`op:` actor, or of another event does not count. No tool the model holds
+  can write it, and the database refuses audit writes from the agent and runner
+  roles. Unreviewed writes still stay inside the pinned worktree with `.git`
+  refused, and audit rows are still kept.
 
 Safety properties:
 
@@ -38,14 +74,34 @@ Safety properties:
 - Reversibility (why the policy labels edit and write `Reversible`): before
   an existing file is replaced, the runner keeps a copy of the exact bytes in
   `<state_root>/preimage/<attempt>/` (0700, own uid, never under RunDir),
-  unless git already holds those bytes. "Holds" means the bytes' blob id
+  unless git already holds those bytes in a gitdir the child cannot write
+  (goodqa#15865). "Holds" means the bytes' blob id
   (`git hash-object --no-filters`) equals both the stage-0 index entry and
   `HEAD:<path>`. Then the result names `preimage_git_blob: <id>` and no copy is
-  made. Untracked, ignored, dirty, staged-only and conflicted files, a
-  repository with no HEAD commit, a clean filter that changes the bytes,
-  risky repository configuration, a replaced gitdir, and any git failure or
-  timeout all keep a copy (`preimage_copy: pre-<id>`). Edit and write are
-  never built without this store.
+  made. The shortcut is taken only when the recorded gitdir, after symlinks,
+  lies outside every tree the confined child can write: the worktree, the run
+  directory, the system temp roots (`/tmp`, `/private/tmp`, `/var/tmp`,
+  `/private/var/folders`, `$TMPDIR`, `os.TempDir()`), `/dev` and the host
+  profile's extra writable roots. An ordinary checkout keeps its gitdir at
+  `<worktree>/.git`, inside the worktree, so it always gets a copy: a child that
+  can write that gitdir can commit the bytes and then erase the blob. A
+  separate or linked gitdir outside those roots keeps the shortcut. An unknown
+  or unresolvable root list never takes it. Untracked, ignored, dirty,
+  staged-only and conflicted files, a repository with no HEAD commit, a clean
+  filter that changes the bytes, risky repository configuration, a replaced
+  gitdir, and any git failure or timeout all keep a copy
+  (`preimage_copy: pre-<id>`). Edit and write are never built without this
+  store.
+- The store must be out of the child's reach (goodqa#15865). Edit and write are
+  not built, and the run does not start with them, when the state directory
+  (`FABRIC_STATE_DIR`, default `~/.local/state/fabric`) resolves, after
+  symlinks, under the worktree, the run directory, a system temp root or any
+  child-writable root; the error says which. The default is accepted. On the
+  unconfined fake host the child can write everywhere, so edit and write do not
+  start there. Tests whose state directory is a `t.TempDir()` use
+  `AllowStateDirUnderForTest` (export_test.go, compiled into test binaries
+  only), which exempts that one path from the temp-root clause and nothing
+  else; no environment variable or flag turns the check off.
 - Copies are never evicted. Each attempt holds at most 256 copies or 256 MiB.
   Beyond that, edit and write are refused with "pre-image store is full ...;
   the call was refused so that no earlier copy is removed", and the target is
@@ -81,9 +137,11 @@ Then remove that one directory by its literal path (for example
 `preimage/`. Disk use: `du -sh <state_root>/preimage/*`. Each attempt is
 capped at 256 MiB.
 
-Known limit: the review request shows the model's exact `oldText` and
-`newText` (which is the change) and the optional `expect_sha256`; the computed
-unified diff is in the tool result, not the hash-bound review request.
+Limits of the approval view: a change longer than the display cap is shown in
+part (the whole is bound by its sha256, and approving it needs
+`--accept-truncated`); the view cannot tell an operator that a change is wise;
+and a gitdir that the child cannot write but that shares objects through
+`objects/info/alternates` with a tree it can is not examined.
 
 ## N2: output spill
 

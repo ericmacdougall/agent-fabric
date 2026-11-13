@@ -207,7 +207,8 @@ a run charges the UTC month it started in, even if it ends in the next one.
 ### Review gate (off by default)
 
 `FABRIC_REVIEW_GATE=1` makes `fab mission run` send every native tool call
-(`read`, `grep`, `shell`) through a durable review before it can run. With
+(`read`, `grep`, `shell`, and `edit` and `write` when the grant selects
+`evaluate` or `enforce`) through a durable review before it can run. With
 the variable unset, or anything other than exactly `1`, native runs behave
 as they did before the gate existed: no review DSN is needed and tools are
 not gated. A grant that sets `review_gate` while the flag is off is refused,
@@ -224,12 +225,17 @@ With the flag on:
   after `fab migrate`).
 - The grant's `review_gate.mode` is `shadow` (the default: calls are
   reviewed and recorded, never executed), `evaluate` (also never executed)
-  or `enforce` (approved calls run once). `review_gate.safe_tools` names
-  tools that need no human approval. `shell` needs a human by default.
+  or `enforce` (approved calls run once). `review_gate.safe_tools` may name
+  only `edit` and `write`, and a mission that sets it does not start until an
+  operator has recorded an approval for that mission and policy
+  (`fab review approve-safe-tools`). `shell` always needs a human.
 - `FABRIC_ACTOR=op:<name> fab review list|show|approve|reject` is the
-  operator side. It shows request metadata only, never arguments or prompts.
-  Approving or rejecting wakes the waiting native process, which keeps its
-  lock, fence and heartbeat while it waits.
+  operator side. It shows request metadata, never prompts or model output. For
+  an `edit` or `write`, `show` also prints the target path, the file's current
+  sha256 and the change, all bound into the request hash; an approval is
+  refused at execution if that file has changed since. Approving or rejecting
+  wakes the waiting native process, which keeps its lock, fence and heartbeat
+  while it waits.
 
 The schema migrations always apply and are
 harmless with the flag off; only the native wiring is gated.

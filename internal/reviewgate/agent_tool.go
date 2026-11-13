@@ -17,7 +17,15 @@ type AgentToolConfig struct {
 	SessionID    string
 	ProposerID   string
 	OriginalTask string
+	// Preview, when set, computes the file Binding of a call from the file as
+	// it is now (goodqa#15864). It is trusted harness code: it runs in the
+	// runner, never takes anything from the model but the call's own input, and
+	// is used at proposal time and again at execution time.
+	Preview PreviewFunc
 }
+
+// PreviewFunc computes the Binding for the tool input.
+type PreviewFunc func(ctx context.Context, args json.RawMessage) (*Binding, error)
 
 // GatedTool submits, evaluates and dispatches every real call through a Gate.
 // Its executor is private to this wrapper and cannot be supplied by the model.
@@ -44,7 +52,10 @@ func NewGatedTool(tool agent.Tool, store *PostgresStore, gateConfig Config, conf
 			return nil, invalid("invalid %s", name)
 		}
 	}
-	executor := &agentToolExecutor{tool: tool}
+	if config.Preview == nil && gateConfig.Policy.Tools[tool.Name()].RequireBinding {
+		return nil, invalid("tool %q needs a file binding but no preview is configured", tool.Name())
+	}
+	executor := &agentToolExecutor{tool: tool, preview: config.Preview}
 	gate, err := NewGate(store, LocalPolicyReviewer{Policy: gateConfig.Policy}, executor, gateConfig)
 	if err != nil {
 		return nil, err
@@ -61,7 +72,38 @@ func (t *GatedTool) toolCallID(ctx context.Context) (agent.ToolCallContext, bool
 }
 
 type agentToolExecutor struct {
-	tool agent.Tool
+	tool    agent.Tool
+	preview PreviewFunc
+}
+
+// refusedChanged is the definite, no-effect result of an approval whose file
+// state no longer holds.
+func refusedChanged(why string) ExecutionResult {
+	return ExecutionResult{Outcome: FailedDefinite, Result: &ToolResult{IsError: true,
+		Output: "refused: " + why + "; nothing was changed. Read the file again and propose the change again."}}
+}
+
+// withExpect returns args with expect_sha256 set to sha (an absent field is
+// added; a different value is refused). The tool then re-checks the file
+// under its own lock, so the check and the write are one step.
+func withExpect(args json.RawMessage, sha string) (json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(args, &m) != nil {
+		return nil, false
+	}
+	if raw, ok := m["expect_sha256"]; ok {
+		var have string
+		if json.Unmarshal(raw, &have) != nil || (have != "" && have != sha) {
+			return nil, false
+		}
+	}
+	b, err := json.Marshal(sha)
+	if err != nil {
+		return nil, false
+	}
+	m["expect_sha256"] = b
+	out, err := json.Marshal(m)
+	return out, err == nil
 }
 
 func (e *agentToolExecutor) Execute(ctx context.Context, request DispatchRequest) (result ExecutionResult, err error) {
@@ -84,7 +126,23 @@ func (e *agentToolExecutor) Execute(ctx context.Context, request DispatchRequest
 	if p.Tool != e.tool.Name() {
 		return ExecutionResult{Outcome: FailedDefinite}, nil
 	}
-	out, isError := e.tool.Run(ctx, p.Args)
+	args := p.Args
+	if e.preview != nil {
+		// A request in the older, unbound form is never run through this path,
+		// and a bound one runs only if the file is still exactly as reviewed.
+		if p.Binding == nil {
+			return refusedChanged("the request has no file binding (it predates binding)"), nil
+		}
+		cur, err := e.preview(ctx, p.Args)
+		if err != nil || cur == nil || *cur != *p.Binding {
+			return refusedChanged("the file or the change differs from what was approved"), nil
+		}
+		var ok bool
+		if args, ok = withExpect(p.Args, p.Binding.TargetSHA256); !ok {
+			return refusedChanged("the call's own expect_sha256 contradicts the approved file state"), nil
+		}
+	}
+	out, isError := e.tool.Run(ctx, args)
 	execution := ExecutionResult{Outcome: Confirmed, Result: &ToolResult{Output: out, IsError: isError}}
 	if isError {
 		execution.Outcome = FailedDefinite
@@ -182,6 +240,14 @@ func (t *GatedTool) RunReviewed(ctx context.Context, input json.RawMessage) (age
 			return t.recoverDispatched(ctx, terminal)
 		}
 		return t.terminal(ctx, terminal)
+	}
+	if t.config.Preview != nil {
+		// After terminal replay: a finished edit would no longer preview.
+		binding, perr := t.config.Preview(ctx, input)
+		if perr != nil {
+			return agent.ReviewRunResult{Output: t.tool.Name() + " refused: " + perr.Error(), IsError: true}, nil
+		}
+		p.Binding = binding
 	}
 	fresh, err := t.gate.freshProposal(ctx, p)
 	if err != nil {

@@ -123,6 +123,15 @@ func ToolNamesForTest(g Grant, starter tools.Starter, fileTools bool, stateDir s
 	return names, nil
 }
 
+// ToolReversibility is the reversibility label the policy gives a tool.
+func ToolReversibility(c ReviewGateConfig, tool string) (string, error) {
+	p, err := c.policy()
+	if err != nil {
+		return "", err
+	}
+	return string(p.Tools[tool].Reversibility), nil
+}
+
 // PolicyFor exposes the per-call review policy of a grant's gate config.
 func PolicyFor(c ReviewGateConfig) (map[string]bool, error) {
 	p, err := c.policy()
@@ -161,4 +170,25 @@ func AllowStateDirUnderForTest(t interface {
 // CheckStateDirForTest exposes the C5 rule exactly as nativeToolsetOpts applies it.
 func CheckStateDirForTest(stateDir, worktree, runDir string, extra []string) error {
 	return checkStateDir(stateDir, worktree, runDir, extra)
+}
+
+// ToolsetForTest builds the toolset as Run does, edit and write included, and
+// returns the tools by name.
+func ToolsetForTest(g Grant, starter tools.Starter, stateDir string) (map[string]agent.Tool, func(), error) {
+	wt, err := canonicalWorktree(g.Worktree)
+	if err != nil {
+		return nil, nil, err
+	}
+	hg := host.Grant{Run: domain.AttemptID(g.Attempt), Mission: domain.MissionID(g.Mission), Fence: 1, Model: g.Model, Effort: "n/a",
+		Rung: "native", TierTableSHA: "native", Profile: "P1", MaxTurns: 1, MaxBudgetUSD: 1, Wall: time.Minute,
+		Worktree: g.Worktree, RunDir: g.RunDir, Token: "test-token-0123456789abcdef"}
+	ts, res, err := nativeToolsetOpts(wt, starter, hg, false, nil, toolsetOpts{FileTools: true, StateDir: stateDir, Attempt: g.Attempt})
+	if err != nil {
+		return nil, nil, err
+	}
+	m := map[string]agent.Tool{}
+	for _, t := range ts {
+		m[t.Name()] = t
+	}
+	return m, res.close, nil
 }

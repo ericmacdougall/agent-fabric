@@ -16,6 +16,11 @@ type ToolPolicy struct {
 	// AllowTaintedSideEffects is an explicit safe-policy exception. Without it,
 	// every side effect derived from an agent or tool handle requires a human.
 	AllowTaintedSideEffects bool
+	// RequireBinding makes a proposal for this tool invalid without a file
+	// Binding (goodqa#15864): the request hash then covers the target path,
+	// the target's current sha256 and the diff, and a proposal in the older
+	// unbound form is denied rather than executed.
+	RequireBinding bool
 }
 
 type Policy struct {
@@ -71,6 +76,7 @@ func PolicyDigest(p Policy) (string, error) {
 		Reversibility           Reversibility `json:"reversibility"`
 		HumanRequired           bool          `json:"human_required"`
 		AllowTaintedSideEffects bool          `json:"allow_tainted_side_effects"`
+		RequireBinding          bool          `json:"require_binding,omitempty"`
 	}
 	type wirePolicy struct {
 		Version      string     `json:"version"`
@@ -85,7 +91,7 @@ func PolicyDigest(p Policy) (string, error) {
 	w := wirePolicy{Version: p.Version, ModelMaxTier: p.ModelMaxTier, Tools: make([]wireTool, 0, len(names))}
 	for _, name := range names {
 		t := p.Tools[name]
-		w.Tools = append(w.Tools, wireTool{name, t.Allow, t.Risk, t.Reversibility, t.HumanRequired, t.AllowTaintedSideEffects})
+		w.Tools = append(w.Tools, wireTool{name, t.Allow, t.Risk, t.Reversibility, t.HumanRequired, t.AllowTaintedSideEffects, t.RequireBinding})
 	}
 	b, err := json.Marshal(w)
 	if err != nil {
@@ -107,6 +113,9 @@ func Classify(p Proposal, policy Policy) (RiskAssessment, error) {
 	tool, ok := policy.Tools[p.Tool]
 	if !ok || !tool.Allow {
 		return RiskAssessment{}, fmt.Errorf("%w: tool %q is not allowed by %s", ErrDenied, p.Tool, policy.Version)
+	}
+	if tool.RequireBinding && p.Binding == nil {
+		return RiskAssessment{}, fmt.Errorf("%w: tool %q needs a file binding (path, target sha256, diff)", ErrDenied, p.Tool)
 	}
 	r := RiskAssessment{
 		Tier: tool.Risk, Reversibility: tool.Reversibility,

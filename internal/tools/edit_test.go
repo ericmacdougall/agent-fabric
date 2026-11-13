@@ -61,7 +61,14 @@ func newEditEnv(t *testing.T) *editEnv {
 	return e
 }
 
-func (e *editEnv) gitInit(t *testing.T) {
+// gitInit puts the gitdir outside the worktree and every child-writable root,
+// as a linked or --separate-git-dir checkout would, so the git-held shortcut
+// is available and the CleanBlob rules are what the tests exercise.
+func (e *editEnv) gitInit(t *testing.T) { e.gitInitSeparate(t) }
+
+// gitInitInWorktree is the ordinary checkout: the gitdir is <worktree>/.git,
+// inside the tree the confined child can write.
+func (e *editEnv) gitInitInWorktree(t *testing.T) {
 	t.Helper()
 	for _, a := range [][]string{{"init", "-q"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}} {
 		c := exec.Command("git", a...)
@@ -430,8 +437,8 @@ func TestWritePreimageUntrackedKeepsCopy(t *testing.T) {
 		t.Fatalf("copy holds %q", got)
 	}
 	out, isErr = e.wr.Run(context.Background(), wr("tracked.txt", "T1"))
-	if isErr || !strings.Contains(out, "preimage_copy: pre-") || strings.Contains(out, "preimage_git_blob") {
-		t.Fatalf("the gitdir is inside the child-writable worktree, so even a clean tracked file keeps a copy: %s", out)
+	if isErr || strings.Contains(out, "preimage_copy") || !strings.Contains(out, "preimage_git_blob: ") {
+		t.Fatalf("a clean tracked file is restored from git, not copied: %s", out)
 	}
 }
 
@@ -505,9 +512,23 @@ func TestWritePreimageStagedAndCleanTracked(t *testing.T) {
 	}
 	e.git(t, "add", "s.txt")
 	e.git(t, "commit", "-q", "-m", "c1")
-	// the gitdir is inside the worktree: no shortcut even for a clean file
 	out, isErr = e.wr.Run(context.Background(), wr("s.txt", "S3"))
-	if isErr || mustFile(t, filepath.Join(e.keep, copyName(t, out))) != "S2" || strings.Contains(out, "preimage_git_blob") {
+	blob := strings.TrimSpace(e.git(t, "rev-parse", "HEAD:s.txt"))
+	if isErr || strings.Contains(out, "preimage_copy") || !strings.Contains(out, "preimage_git_blob: "+blob) {
+		t.Fatalf("clean tracked file: %s", out)
+	}
+}
+
+// C4: with the ordinary in-worktree gitdir even a clean tracked file keeps a
+// copy, because the child can write that gitdir.
+func TestInWorktreeGitdirAlwaysKeepsCopy(t *testing.T) {
+	e := newEditEnv(t)
+	e.gitInitInWorktree(t)
+	e.put(t, "s.txt", "S0")
+	e.git(t, "add", "s.txt")
+	e.git(t, "commit", "-q", "-m", "c0")
+	out, isErr := e.wr.Run(context.Background(), wr("s.txt", "S1"))
+	if isErr || mustFile(t, filepath.Join(e.keep, copyName(t, out))) != "S0" || strings.Contains(out, "preimage_git_blob") {
 		t.Fatalf("clean tracked file with an in-worktree gitdir: %s", out)
 	}
 }
@@ -536,7 +557,7 @@ func (e *editEnv) gitInitSeparate(t *testing.T) {
 // kept a copy that restores the bytes.
 func TestGitHeldBlobErasableKeepsCopy(t *testing.T) {
 	e := newEditEnv(t)
-	e.gitInit(t)
+	e.gitInitInWorktree(t)
 	e.put(t, "base.txt", "B")
 	e.git(t, "add", "base.txt")
 	e.git(t, "commit", "-q", "-m", "c0")
@@ -755,25 +776,25 @@ func TestWritePreimagePlantedGitdir(t *testing.T) {
 	e := newEditEnv(t)
 	e.gitInit(t) // the gitdir recorded at attempt start
 	e.put(t, "x.txt", "X0")
-	// the child plants a repository where x.txt is tracked and repoints .git at it
+	// the child plants a repository where x.txt is tracked and clean, moves the
+	// real gitdir aside and leaves a symlink to the planted one in its place
 	planted := filepath.Join(filepath.Dir(e.wt), "planted")
 	os.MkdirAll(planted, 0o755)
-	for _, a := range [][]string{{"init", "-q"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}} {
-		c := exec.Command("git", a...)
-		c.Dir = planted
-		c.CombinedOutput()
-	}
 	os.WriteFile(filepath.Join(planted, "x.txt"), []byte("X0"), 0o644)
-	// committed and clean there, so only the gitdir check can force the copy
-	for _, a := range [][]string{{"add", "x.txt"}, {"commit", "-q", "-m", "p"}} {
+	for _, a := range [][]string{{"init", "-q"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}, {"add", "x.txt"}, {"commit", "-q", "-m", "p"}} {
 		c := exec.Command("git", a...)
 		c.Dir = planted
 		if o, err := c.CombinedOutput(); err != nil {
 			t.Fatal(string(o))
 		}
 	}
-	os.RemoveAll(filepath.Join(e.wt, ".git"))
-	os.WriteFile(filepath.Join(e.wt, ".git"), []byte("gitdir: "+filepath.Join(planted, ".git")+"\n"), 0o644)
+	gd := e.pre.Git.GitDir
+	if err := os.Rename(gd, gd+".aside"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(planted, ".git"), gd); err != nil {
+		t.Fatal(err)
+	}
 	out, isErr := e.wr.Run(context.Background(), wr("x.txt", "X1"))
 	if isErr || !strings.Contains(out, "preimage_copy: pre-") {
 		t.Fatalf("a planted gitdir suppressed the pre-image copy: %s", out)
