@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-000000000001","model":"fake-model","tools":["Read"],"mcp_servers":[],"plugins":[],"claude_code_version":"0.0.0-fixture"}
+{"type":"assistant","session_id":"00000000-0000-4000-8000-000000000001","message":{"usage":{"input_tokens":3,"cache_creation_input_tokens":1000,"cache_read_input_tokens":7,"output_tokens":11}}}

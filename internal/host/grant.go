@@ -133,6 +133,13 @@ type Profile interface {
 	NegativeControls(scratch string) ([]ControlResult, error)
 }
 
+// StdinStarter is a Profile whose Start can also connect the worker's stdin,
+// for harness adapters that speak a protocol on stdio (goodqa#15373 D1). The
+// confinement is Start's; only stdin differs. A nil stdin is Start.
+type StdinStarter interface {
+	StartIO(g Grant, argv []string, env []string, stdin, stdout, stderr *os.File) (Handle, error)
+}
+
 // Handle names a started run on this host.
 // ErrWorkerManagerBusy reports definite prelaunch contention for the Linux
 // worker manager: no unit or process was started (goodqa#15235 S5b).

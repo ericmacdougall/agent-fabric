@@ -1,0 +1,12 @@
+{
+  "command": {
+    "kind": "FINISH_ATTEMPT",
+    "mission": "m_golden",
+    "attempt": "a_golden",
+    "fence": 7,
+    "outcome": "abandoned",
+    "reason": "stream unreadable: read /tmp/gold-1764795697/stream.jsonl: is a directory"
+  },
+  "error": null,
+  "usage": null
+}

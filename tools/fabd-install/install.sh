@@ -26,6 +26,14 @@
 # remove: stops and disables fabd.service, restores fabric_settings.scheduler_role
 #   to the value saved at install, drops the fabric_svc roles; it never touches
 #   the old fabric_live_* roles or any data.
+#   KNOWN WALL (goodqa#15844): migrations 0033-0036 GRANT to every cluster role
+#   matching *_runner (and its parent roles) in each database they migrate, so
+#   any fabric or test database migrated after the install holds grants to the
+#   fabric_svc*/fabric_svcrh* roles, and DROP ROLE then fails with "objects in
+#   database X depend on it". The removal stops with "left roles behind";
+#   nothing is half-dropped. Before relying on remove as a rollback, check
+#   pg_shdepend for the roles; the way through is REASSIGN/DROP OWNED BY those
+#   roles in each database listed, or dropping a disposable test database.
 #
 # Resume: a rerun with WORKDIR=<the earlier evidence directory> skips the phases
 # recorded in its state file; without WORKDIR a live rerun refuses (the roles

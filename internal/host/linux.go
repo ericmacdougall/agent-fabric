@@ -146,6 +146,15 @@ func envFile(g Grant) string { return filepath.Join(g.RunDir, ".fab-env-"+string
 // owns the worker's stdio, wraps it in `fab __sandbox`, and resolves the
 // unit's cgroup path before returning, so later inventory never needs the bus.
 func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.File) (Handle, error) {
+	return l.StartIO(g, argv, env, nil, stdout, stderr)
+}
+
+var _ StdinStarter = (*Linux)(nil)
+
+// StartIO is Start with the worker's stdin connected (goodqa#15373 D1):
+// `systemd-run --pipe` forwards it, so the unit, its properties and the
+// env file are exactly Start's. A nil stdin is Start.
+func (l *Linux) StartIO(g Grant, argv []string, env []string, stdin, stdout, stderr *os.File) (Handle, error) {
 	if err := g.Validate(); err != nil {
 		return Handle{}, err
 	}
@@ -164,6 +173,9 @@ func (l *Linux) Start(g Grant, argv []string, env []string, stdout, stderr *os.F
 	cmd := l.asWorker("systemd-run", args...)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.Stdin = nil
+	if stdin != nil {
+		cmd.Stdin = stdin // a nil *os.File in the interface would not read as no stdin
+	}
 	if err := cmd.Start(); err != nil {
 		os.Remove(ef)
 		return Handle{}, fmt.Errorf("systemd-run: %w", err)
