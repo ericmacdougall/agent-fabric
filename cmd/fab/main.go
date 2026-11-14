@@ -36,6 +36,8 @@ func main() {
 	switch os.Args[1] {
 	case "__sandbox":
 		err = sandboxMain(os.Args[2:])
+	case "__sweep":
+		err = sweepMain(os.Args[2:])
 	case "provider":
 		err = providerMain(os.Args[2:])
 	case "mission":
