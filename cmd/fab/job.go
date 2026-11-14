@@ -160,6 +160,14 @@ func daemonMain(args []string) error {
 	if err != nil {
 		return err
 	}
+	// goodqa#15966 M1 comment policy: an M1 fabd refuses to start (exit 3,
+	// 0 processes) on a database without the comment_policy marker or with
+	// an unknown value, before any control or worker starts. A non-M1 build
+	// passes this check by definition (its decisions still honour the
+	// marker), so it does not open the database here.
+	if err := daemonPolicyCheck(); err != nil {
+		return err
+	}
 	// The schema is written before the profile and the controls, so the
 	// launch_inputs_readable control sees the file a real launch reads.
 	// The controls used to create the work root; the schema is now written

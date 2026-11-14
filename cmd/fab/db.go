@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"fabric/internal/m1build"
 	"fabric/internal/store"
 )
 
@@ -33,8 +34,20 @@ func dbMain(args []string) error {
 		remove := fs.Bool("remove", false, "with --control-only: print the plan to drop the control roles (acts only with --confirm)")
 		confirm := fs.Bool("confirm", false, "with --control-only --remove: really drop the roles")
 		allowNologin := fs.Bool("allow-nologin", false, "with --control-only: allow an empty password file, which makes that role NOLOGIN")
+		commentPolicy := fs.String("comment-policy", "", "m1: also write the fabric_settings comment_policy marker (M1 builds only, goodqa#15966)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
+		}
+		if *commentPolicy != "" {
+			if !m1build.Enabled {
+				return usageError{errors.New("--comment-policy is accepted only by an M1 build")}
+			}
+			if *commentPolicy != store.CommentPolicyM1 {
+				return usageError{errors.New("--comment-policy accepts only m1")}
+			}
+			if *controlOnly {
+				return usageError{errors.New("--comment-policy cannot be combined with --control-only")}
+			}
 		}
 		if *controlOnly {
 			if *appPW != "" || *runnerPW != "" {
@@ -64,10 +77,13 @@ func dbMain(args []string) error {
 		}
 		return withStore(func(ctx context.Context, st *store.Store) error {
 			r := store.Roles{Prefix: *prefix}
-			if err := st.ApplyRoles(ctx, r, app, runner); err != nil {
+			if err := st.ApplyRolesPolicy(ctx, r, app, runner, *commentPolicy); err != nil {
 				return err
 			}
 			fmt.Printf("roles applied: %s, %s, %s\n", r.Scheduler(), r.App(), r.Runner())
+			if *commentPolicy != "" {
+				fmt.Printf("comment_policy marker: %s\n", *commentPolicy)
+			}
 			return nil
 		})
 	case "check-runner":

@@ -561,3 +561,20 @@ func TestPrefixKeyIsNotCanonical(t *testing.T) {
 		t.Fatalf("another mission's key: %v", err)
 	}
 }
+
+// NEG-22: a broker constructed before the marker existed honours it from
+// its next decision (it reads the marker in every deciding transaction).
+func TestBrokerStartedBeforeMarker(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	if _, err := b.Submit(ctx, fake, spec("k-before", "b")); err != nil {
+		t.Fatal(err)
+	}
+	setMarker(t, ctx, st, "m1")
+	if _, err := b.Submit(ctx, fake, spec("k-after", "a")); !IsPolicyRefusal(err, CodeNonCanonical) {
+		t.Fatalf("got %v", err)
+	}
+	e, _ := b.Load(ctx, effectID("k-before"))
+	if _, err := b.Dispatch(ctx, fake, e.ID); !IsPolicyRefusal(err, CodeNonCanonical) {
+		t.Fatalf("dispatch: %v", err)
+	}
+}
