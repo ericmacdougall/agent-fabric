@@ -63,7 +63,8 @@ func Fabd(rc host.StopReceipt, fabBinary string, roots []string, input []byte, l
 	return rep
 }
 
-// Exposed reports a non-zero count for any label or the literal.
+// Exposed reports a non-zero count for any label. The public literal count
+// (Report.Literal) is not an exposure (owner ruling 2026-11-14).
 func (r Report) Exposed() bool {
 	for _, n := range r.Counts {
 		if n > 0 {

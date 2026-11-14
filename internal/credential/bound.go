@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 )
 
@@ -85,6 +86,12 @@ type Bound struct {
 	grams    map[uint64]struct{} // every 8-byte window of every normalised token form
 	filter   []uint64            // a 2^20-bit prefilter over grams
 	alnum    map[uint64]struct{} // AC-10: 8-char windows of alnum-stripped token forms
+	// pubGrams and pubAlnum are the windows that lie wholly inside a form of
+	// the token's public prefix (PublicPrefix). A run made only of them is
+	// the public literal, never a credential exposure (owner ruling
+	// 2026-11-14, agent ad1ff08b576984a4d).
+	pubGrams map[uint64]struct{}
+	pubAlnum map[uint64]struct{}
 	tokLabel string
 }
 
@@ -110,7 +117,8 @@ func NewBound(token Secret, others ...Secret) (*Bound, error) {
 		return nil, err
 	}
 	b := &Bound{token: token, grams: map[uint64]struct{}{}, alnum: map[uint64]struct{}{},
-		filter: make([]uint64, 1<<14)}
+		pubGrams: map[uint64]struct{}{}, pubAlnum: map[uint64]struct{}{}, filter: make([]uint64, 1<<14)}
+	b.addPublic(PublicPrefix(token.value))
 	b.tokLabel = string(token.kind) + ":" + token.version
 	for _, o := range others {
 		if o.kind == KindToken {
@@ -152,6 +160,44 @@ func NewBound(token Secret, others ...Secret) (*Bound, error) {
 		}
 	}
 	return b, nil
+}
+
+// publicPrefixRE is the public token shape: `sk-ant-`, a lower-case type
+// tag and a dash (sk-ant-oat01- for the AC-17 token).
+var publicPrefixRE = regexp.MustCompile(`^sk-ant-[a-z0-9]{1,16}-`)
+
+// PublicPrefix returns the public leading part of a token value, or nil.
+func PublicPrefix(v []byte) []byte { return publicPrefixRE.Find(v) }
+
+// addPublic records the windows of every form of the public prefix. Base64
+// forms use only the longest 3-byte-aligned prefix, so no window depends on
+// a secret byte.
+func (b *Bound) addPublic(pre []byte) {
+	if len(pre) == 0 {
+		return
+	}
+	for _, f := range AllForms {
+		src := pre
+		if f == FormB64 || f == FormB64URL {
+			src = pre[:len(pre)/3*3]
+		}
+		enc := Encode(f, src)
+		for _, n := range AllNorms {
+			p := NormalizeBytes(n, enc)
+			for i := 0; i+GramLen <= len(p); i++ {
+				b.pubGrams[binary.BigEndian.Uint64(p[i:])] = struct{}{}
+			}
+		}
+		st := stripAlnum(enc)
+		for i := 0; i+GramLen <= len(st); i++ {
+			b.pubAlnum[binary.BigEndian.Uint64(st[i:])] = struct{}{}
+		}
+	}
+}
+
+func (b *Bound) isPublicGram(w []byte) bool {
+	_, ok := b.pubGrams[binary.BigEndian.Uint64(w)]
+	return ok
 }
 
 func gramHash(g uint64) uint64 { return (g * 0x9E3779B97F4A7C15) >> 44 }
@@ -218,10 +264,19 @@ func (b *Bound) ScanTextExcluding(text string, exclusions []string) (hit bool, c
 		return true, ClassEntropy
 	}
 	st := stripAlnum(raw)
+	public := false
 	for i := 0; i+GramLen <= len(st); i++ {
-		if _, ok := b.alnum[binary.BigEndian.Uint64(st[i:])]; ok {
-			return true, ClassFragment
+		g := binary.BigEndian.Uint64(st[i:])
+		if _, ok := b.alnum[g]; ok {
+			if _, pub := b.pubAlnum[g]; !pub {
+				return true, ClassFragment
+			}
+			public = true
 		}
+	}
+	if public {
+		// Only the public prefix: still blocked (AC-10), as the literal.
+		return true, ClassSkAnt
 	}
 	return false, ""
 }

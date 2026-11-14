@@ -24,8 +24,16 @@ const MaxStreamRead = 64 << 20
 // LabelFragment is the per-label suffix of fragment hits.
 const LabelFragment = "fragment"
 
-// LabelLiteral counts `sk-ant-` shapes.
+// LabelLiteral counts the public token shape: an `sk-ant-` literal whose
+// tail adds fewer than GramLen characters past the public prefix, and
+// fragment runs that lie wholly inside the bound token's public prefix. It
+// is never a credential exposure (owner ruling 2026-11-14).
 const LabelLiteral = "literal:sk-ant-"
+
+// LabelLiteralToken counts an `sk-ant-` literal followed by GramLen or more
+// token characters past the public prefix: a token-shaped value (for
+// example an unbound token version). It is an exposure.
+const LabelLiteralToken = "literal:sk-ant-token"
 
 // RedactResult is one redaction of an attempt's two streams.
 type RedactResult struct {
@@ -48,9 +56,10 @@ type RedactResult struct {
 }
 
 // Exposed reports whether any credential form was found (credential_exposure).
+// The public literal (LabelLiteral) is counted but is not an exposure.
 func (r RedactResult) Exposed() bool {
-	for _, n := range r.Counts {
-		if n > 0 {
+	for l, n := range r.Counts {
+		if n > 0 && l != LabelLiteral {
 			return true
 		}
 	}
@@ -101,27 +110,35 @@ func (b *Bound) mark(src []byte, counts map[string]int) []bool {
 			}
 		}
 		// Fragment runs of the token (AC-15).
-		run := -1
-		end := 0
+		// A run made only of public-prefix windows is the public literal.
+		run, end, secret := -1, 0, false
+		flush := func() {
+			cover(run, end)
+			if n == NormWS {
+				if secret {
+					counts[b.tokLabel+":"+LabelFragment]++
+				} else {
+					counts[LabelLiteral]++
+				}
+			}
+		}
 		for i := 0; i+GramLen <= len(norm); i++ {
-			if b.hasGram(norm[i : i+GramLen]) {
+			w := norm[i : i+GramLen]
+			if b.hasGram(w) {
 				if run < 0 || i > end {
 					if run >= 0 {
-						cover(run, end)
-						if n == NormWS {
-							counts[b.tokLabel+":"+LabelFragment]++
-						}
+						flush()
 					}
-					run = i
+					run, secret = i, false
 				}
 				end = i + GramLen
+				if !b.isPublicGram(w) {
+					secret = true
+				}
 			}
 		}
 		if run >= 0 {
-			cover(run, end)
-			if n == NormWS {
-				counts[b.tokLabel+":"+LabelFragment]++
-			}
+			flush()
 		}
 	}
 	// The public literal shape on the original bytes: sk-ant- and the token
@@ -139,7 +156,15 @@ func (b *Bound) mark(src []byte, counts map[string]int) []bool {
 		for k := a; k < e; k++ {
 			cov[k] = true
 		}
-		counts[LabelLiteral]++
+		tail := e - a - len(PublicLiteral)
+		if pre := publicPrefixRE.Find(src[a:e]); pre != nil {
+			tail = e - a - len(pre)
+		}
+		if tail >= GramLen {
+			counts[LabelLiteralToken]++
+		} else {
+			counts[LabelLiteral]++
+		}
 		off = e
 	}
 	return cov
