@@ -56,16 +56,26 @@ func daemonProviderGate(noDispatch, trustProvider bool, providerPath string, p h
 
 // gateDaemonProvider applies daemonProviderGate to fabd's provider and, for
 // a fake-only start, makes its launch re-check the resolved file at every
-// launch (AC-3), so a binary swapped in after the start is refused.
-func gateDaemonProvider(dp *daemonProvider, noDispatch, trustProvider bool, p host.Profile) error {
+// launch (AC-3), so a binary swapped in after the start is refused. real
+// reports that fabd may dispatch a real provider.
+func gateDaemonProvider(dp *daemonProvider, noDispatch, trustProvider bool, p host.Profile) (real bool, err error) {
 	fakeOnly, err := daemonProviderGate(noDispatch, trustProvider, dp.Path, p)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if fakeOnly {
 		dp.Launch.Resolve = pinnedFakeResolve(dp.Launch.Resolve)
 	}
-	return nil
+	return !noDispatch && !fakeOnly, nil
+}
+
+// daemonExitCleanup (goodqa#15976 AC-5): verified descendant cleanup after
+// every worker exit is on by default whenever fabd may run a real provider;
+// FABRIC_WORKER_EXIT_CLEANUP=1 still turns it on for the fakes. (It stays
+// opt-in for the fakes because of the Darwin PGID-reuse window; macOS never
+// runs a real provider.)
+func daemonExitCleanup(real bool) bool {
+	return real || os.Getenv("FABRIC_WORKER_EXIT_CLEANUP") == "1"
 }
 
 // nativeRunnerGate (goodqa#15976 AC-2): the native anthropic-api runner

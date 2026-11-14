@@ -40,6 +40,8 @@ func TestLinuxSourceHasNoFabJobPrefixInventoryExemption(t *testing.T) {
 		"rc.Survivors, err = l.verifyStopped(h)",
 		"baseline, err := l.workerUnits()",
 		"escapedWorkerUnits(baseline, now, h.Unit)",
+		"if err := prepareRunTmp(g); err != nil {",
+		`"-p", workerNoCoreProperty}`,
 		"l.managerOutput(",
 		"return h, fmt.Errorf(",
 		"cgroupHasLiveProcess(h.CGroup)",

@@ -170,3 +170,53 @@ func TestParseUnitList(t *testing.T) {
 		t.Error("an error line parsed as a unit list")
 	}
 }
+
+// goodqa#15976 AC-5 (review M2 and G0 condition 5): the worker unit sets
+// LimitCORE=0, the shared /tmp is not writable, and TMPDIR is the run's
+// private directory, which a caller's TMPDIR cannot replace.
+func TestManagerRunTmpAndNoCore(t *testing.T) {
+	g := mgrControlGrant(t.TempDir())
+	l := &LinuxManager{Self: "/x/fab"}
+	args, pairs, err := l.startArgsEnvWithPolicy(g, "fab-u.service", filepath.Join(g.RunDir, "jobs", "env"), []string{"true"}, []string{"TMPDIR=/tmp"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := " " + strings.Join(args, " ") + " "
+	if !strings.Contains(joined, " -p LimitCORE=0 ") {
+		t.Errorf("worker unit lacks LimitCORE=0: %s", joined)
+	}
+	if strings.Contains(joined, " --rw "+os.TempDir()+" ") {
+		t.Errorf("the shared %s is writable by the worker: %s", os.TempDir(), joined)
+	}
+	want := "TMPDIR=" + filepath.Join(g.RunDir, "tmp")
+	n := 0
+	for _, p := range pairs {
+		if strings.HasPrefix(p, "TMPDIR=") {
+			n++
+			if p != want {
+				t.Errorf("worker %s, want %s", p, want)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("TMPDIR set %d times in %v", n, pairs)
+	}
+}
+
+func TestPrepareRunTmp(t *testing.T) {
+	g := mgrControlGrant(t.TempDir())
+	if err := prepareRunTmp(g); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Lstat(mgrRunTmp(g))
+	if err != nil || !st.IsDir() || st.Mode().Perm() != 0o770 || st.Mode()&os.ModeSetgid == 0 {
+		t.Fatalf("run TMPDIR = %v, %v; want a 0770 setgid directory", st.Mode(), err)
+	}
+	h := mgrControlGrant(t.TempDir())
+	if err := os.Symlink(t.TempDir(), mgrRunTmp(h)); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareRunTmp(h); err == nil {
+		t.Error("a planted symlink was accepted as the run TMPDIR")
+	}
+}

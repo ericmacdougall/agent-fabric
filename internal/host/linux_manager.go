@@ -141,7 +141,8 @@ func (l *LinuxManager) startArgsEnvWithPolicy(g Grant, unit, ef string, argv, en
 	// inherits neither this unit's Landlock filesystem rules nor its TCP rules.
 	args := []string{"--user", "--pipe", "--wait", "--collect", "--quiet", "--expand-environment=no", "--unit", unit,
 		"--working-directory=" + g.Worktree, "-p", "KillMode=control-group", "-p", managerInaccessiblePathsProperty(uid), "-p", managerSocketFamilyProperty,
-		"-p", workerPrivatePIDsProperty, "-p", workerProtectProcProperty, "-p", workerProcSubsetProperty}
+		"-p", workerPrivatePIDsProperty, "-p", workerProtectProcProperty, "-p", workerProcSubsetProperty,
+		"-p", workerNoCoreProperty}
 	for _, property := range network.properties {
 		args = append(args, "-p", property)
 	}
@@ -156,7 +157,7 @@ func (l *LinuxManager) startArgsEnvWithPolicy(g Grant, unit, ef string, argv, en
 	// from the validated per-run descriptor; WorkerEnv rejects caller attempts
 	// to inject those names before this trusted set is appended.
 	pairs := append([]string{"HOME=" + os.Getenv("HOME"), "PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"}, env...)
-	pairs = append(pairs, "FAB_RUN="+g.Token)
+	pairs = append(pairs, "FAB_RUN="+g.Token, "TMPDIR="+mgrRunTmp(g)) // host-owned: appended last
 	pairs, names, err := WorkerEnv(pairs)
 	if err != nil {
 		return nil, nil, err
@@ -172,7 +173,9 @@ func (l *LinuxManager) startArgsEnvWithPolicy(g Grant, unit, ef string, argv, en
 	for _, n := range linuxProxyEnvironmentNames {
 		args = append(args, "-E", n+"=")
 	}
-	rw := []string{g.RunDir, os.TempDir()}
+	// No shared /tmp (review M2, goodqa#15976 AC-5): the run's private
+	// TMPDIR lies inside its run directory, which is already writable.
+	rw := []string{g.RunDir}
 	if g.Profile == "P1" {
 		rw = append(rw, g.Worktree) // review runs cannot write the worktree
 	}
@@ -195,6 +198,34 @@ func (l *LinuxManager) startArgsEnvWithPolicy(g Grant, unit, ef string, argv, en
 	args = append(args, "--")
 	args = append(args, sandbox...)
 	return append(args, argv...), pairs, nil
+}
+
+// workerNoCoreProperty keeps a crashing worker from writing a core file,
+// which would hold its environment and memory (goodqa#15976 AC-5).
+const workerNoCoreProperty = "LimitCORE=0"
+
+// mgrRunTmp is the run's private TMPDIR, inside its fabd-owned run directory.
+func mgrRunTmp(g Grant) string { return filepath.Join(g.RunDir, "tmp") }
+
+// prepareRunTmp creates the run's private TMPDIR, group-shared with the
+// worker (setgid, like run/jobs) and not world-accessible. A non-directory
+// or a symlink planted at that path refuses the start: chmod would follow it.
+func prepareRunTmp(g Grant) error {
+	dir := mgrRunTmp(g)
+	if err := os.Mkdir(dir, 0o770); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("run TMPDIR: %w", err)
+	}
+	st, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("run TMPDIR: %w", err)
+	}
+	if !st.IsDir() {
+		return fmt.Errorf("run TMPDIR %s is not a directory", dir)
+	}
+	if err := os.Chmod(dir, 0o770|os.ModeSetgid); err != nil {
+		return fmt.Errorf("run TMPDIR: %w", err)
+	}
+	return nil
 }
 
 // mgrEnvFile is where a run's environment waits for `fab __sandbox`. The trusted
@@ -340,6 +371,9 @@ func (l *LinuxManager) StartIO(g Grant, argv []string, env []string, stdin, stdo
 	baseline, err := l.workerUnits()
 	if err != nil {
 		return Handle{}, fmt.Errorf("worker manager unit baseline: %w", err)
+	}
+	if err := prepareRunTmp(g); err != nil {
+		return Handle{}, err
 	}
 	var policy *egress.PolicyDescriptor
 	if l.EgressConfig != nil {

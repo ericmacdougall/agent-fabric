@@ -209,8 +209,8 @@ func TestTrustedLaunchRefusesASwappedBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := gateDaemonProvider(&dp, false, true, &host.Linux{User: "fab-worker"}); err != nil {
-		t.Fatalf("a trusted pinned fake was refused: %v", err)
+	if real, err := gateDaemonProvider(&dp, false, true, &host.Linux{User: "fab-worker"}); err != nil || real {
+		t.Fatalf("a trusted pinned fake: real=%v err=%v", real, err)
 	}
 	l := dp.Launch
 	l.Prompt = "checkpoint"
@@ -259,5 +259,49 @@ func TestHarnessDemoRefused(t *testing.T) {
 	wantRealProviderRefusal(t, err, "harness demo")
 	if _, statErr := os.Stat(ev); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("the event file was created (%v)", statErr)
+	}
+}
+
+// goodqa#15976 AC-5: verified exit cleanup is on by default when fabd may
+// dispatch a real provider, and stays opt-in for the pinned fakes.
+func TestExitCleanupDefaultsOnForRealProviders(t *testing.T) {
+	t.Setenv("FABRIC_WORKER_EXIT_CLEANUP", "")
+	orig := managerSupport
+	managerSupport = func(*host.LinuxManager) error { return nil }
+	t.Cleanup(func() { managerSupport = orig })
+	dir := t.TempDir()
+	realClaude := filepath.Join(dir, "claude")
+	if err := os.WriteFile(realClaude, []byte("#!/bin/sh\necho real\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := filepath.Join(dir, "fakeclaude-stdin")
+	copyFile(t, filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude-stdin.sh"), fake)
+	eligible := &host.LinuxManager{User: "fab-worker"}
+	for _, c := range []struct {
+		name, path string
+		noDispatch bool
+		wantReal   bool
+	}{
+		{"real provider under the manager", realClaude, false, true},
+		{"pinned fake under the manager", fake, false, true},
+		{"real provider, no-dispatch", realClaude, true, false},
+	} {
+		dp := daemonProvider{Path: c.path, Launch: productionLaunch(c.path, "/x", "")}
+		real, err := gateDaemonProvider(&dp, c.noDispatch, false, eligible)
+		if err != nil || real != c.wantReal {
+			t.Fatalf("%s: real=%v err=%v, want real=%v", c.name, real, err, c.wantReal)
+		}
+		if got := daemonExitCleanup(real); got != c.wantReal {
+			t.Errorf("%s: exit cleanup=%v, want %v", c.name, got, c.wantReal)
+		}
+	}
+	legacyFake := daemonProvider{Path: fake, Launch: productionLaunch(fake, "/x", "")}
+	real, err := gateDaemonProvider(&legacyFake, false, false, &host.Linux{User: "fab-worker"})
+	if err != nil || real || daemonExitCleanup(real) {
+		t.Errorf("a fake-only start: real=%v err=%v cleanup=%v; want cleanup opt-in", real, err, daemonExitCleanup(real))
+	}
+	t.Setenv("FABRIC_WORKER_EXIT_CLEANUP", "1")
+	if !daemonExitCleanup(false) {
+		t.Error("FABRIC_WORKER_EXIT_CLEANUP=1 no longer turns cleanup on")
 	}
 }

@@ -155,7 +155,8 @@ func daemonMain(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := gateDaemonProvider(&dp, *noDispatch, *trustProvider, gateProfile); err != nil {
+	realProvider, err := gateDaemonProvider(&dp, *noDispatch, *trustProvider, gateProfile)
+	if err != nil {
 		return err
 	}
 	// The schema is written before the profile and the controls, so the
@@ -225,11 +226,12 @@ func daemonMain(args []string) error {
 		}
 		cfg.Registry = reg
 	}
-	// FABRIC_WORKER_EXIT_CLEANUP=1 (exact; default off) verifies descendant
-	// cleanup after every worker exit before settling. Off by default: on
+	// Verified descendant cleanup after every worker exit before settling:
+	// on by default for a real provider (goodqa#15976 AC-5), otherwise only
+	// with FABRIC_WORKER_EXIT_CLEANUP=1 (exact). Opt-in for the fakes: on
 	// Darwin the Stop signals the exited leader's process group, which
 	// widens a PGID-reuse window until the host profile closes it.
-	cfg.ExitCleanup = os.Getenv("FABRIC_WORKER_EXIT_CLEANUP") == "1"
+	cfg.ExitCleanup = daemonExitCleanup(realProvider)
 	// goodqa#15087 AC-6: the same launch the AC-6 (f) live check runs. It
 	// must stay dp.Launch: the operator's name, re-resolved per launch (N1;
 	// TestDaemonLaunchComesFromDaemonProvider guards this line).
