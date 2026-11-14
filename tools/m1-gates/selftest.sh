@@ -9,12 +9,22 @@ gate="$here/m1-gate.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-printf '#!/bin/sh\necho 96bc0ada559d\n' >"$tmp/fab"
-chmod +x "$tmp/fab"
-printf 'review of 96bc0ada559d\nVERDICT: PASS\n' >"$tmp/pass.md"
-printf 'review of 96bc0ada559d\nVERDICT: BLOCK\n' >"$tmp/block.md"
-printf 'review of another head\nVERDICT: PASS\n' >"$tmp/other.md"
-printf 'review of 96bc0ada559d\nVERDICT: PASS\nlater\nVERDICT: BLOCK\n' >"$tmp/flipped.md"
+S=96bc0ada559d3591878a7b73a926e79483cbc0ad
+O=7b563dfbb5360000000000000000000000000000
+mk() { printf '#!/bin/sh\n%s\n' "$2" >"$tmp/$1"; chmod +x "$tmp/$1"; }
+mk fab 'echo 96bc0ada559d'
+mk fabfull "echo $S"
+mk fabrc 'echo 96bc0ada559d; exit 3'
+mk fabshort 'echo 9'
+mk fabjunk 'echo dev-build'
+mk fabempty 'true'
+printf 'Reviewed HEAD: %s\nbody\nVERDICT: PASS\n\n' "$S" >"$tmp/pass.md"
+printf 'Reviewed HEAD: %s\nVERDICT: BLOCK\n' "$S" >"$tmp/block.md"
+printf 'Reviewed HEAD: %s\nbackground mentions %s\nVERDICT: PASS\n' "$O" "$S" >"$tmp/mixed.md"
+printf 'review of %s with no field\nVERDICT: PASS\n' "$S" >"$tmp/nofield.md"
+printf 'Reviewed HEAD: %s\nReviewed HEAD: %s\nVERDICT: PASS\n' "$S" "$O" >"$tmp/two.md"
+printf 'Reviewed HEAD: %s\nVERDICT: PASS\nOne more objection: AC-7 is unsafe.\n' "$S" >"$tmp/trailing.md"
+printf 'Reviewed HEAD: %s\nVERDICT: PASS\n' "${S:0:12}" >"$tmp/short.md"
 
 bad=0
 expect() {
@@ -26,13 +36,26 @@ expect() {
 		bad=1
 	fi
 }
-expect 0 g0-review "$tmp/pass.md" "$tmp/fab"
-expect 1 g0-review "$tmp/block.md" "$tmp/fab"
-expect 1 g0-review "$tmp/other.md" "$tmp/fab"
-expect 1 g0-review "$tmp/flipped.md" "$tmp/fab"
-expect 2 g0-review "$tmp/missing.md" "$tmp/fab"
-expect 0 g1-version "$tmp/fab" 96bc0ada559d3591878a7b73a926e79483cbc0ad
-expect 1 g1-version "$tmp/fab" 7b563dfbb536
+expect 0 g0-review "$tmp/pass.md" "$tmp/fab" "$S"
+expect 0 g0-review "$tmp/pass.md" "$tmp/fabfull" "$S"
+expect 1 g0-review "$tmp/block.md" "$tmp/fab" "$S"
+expect 1 g0-review "$tmp/mixed.md" "$tmp/fab" "$S"
+expect 1 g0-review "$tmp/nofield.md" "$tmp/fab" "$S"
+expect 1 g0-review "$tmp/two.md" "$tmp/fab" "$S"
+expect 1 g0-review "$tmp/trailing.md" "$tmp/fab" "$S"
+expect 1 g0-review "$tmp/short.md" "$tmp/fab" "$S"
+expect 1 g0-review "$tmp/pass.md" "$tmp/fabrc" "$S"
+expect 1 g0-review "$tmp/pass.md" "$tmp/fab" "$O"
+expect 2 g0-review "$tmp/pass.md" "$tmp/fab" 96bc0ada559d
+expect 2 g0-review "$tmp/missing.md" "$tmp/fab" "$S"
+expect 0 g1-version "$tmp/fab" "$S"
+expect 0 g1-version "$tmp/fabfull" "$S"
+expect 1 g1-version "$tmp/fab" "$O"
+expect 1 g1-version "$tmp/fabrc" "$S"
+expect 1 g1-version "$tmp/fabshort" "$S"
+expect 1 g1-version "$tmp/fabjunk" "$S"
+expect 1 g1-version "$tmp/fabempty" "$S"
+expect 2 g1-version "$tmp/fab" 96bc0ada559d
 expect 2 g1-version "$tmp/fab" not-a-sha
 for g in g2 g2b g3 g3-chaos g3b g4 g5 g6 g7 bogus; do
 	expect 2 "$g"

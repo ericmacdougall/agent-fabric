@@ -22,35 +22,50 @@ gate=${1:-}
 [ -n "$gate" ] || die "usage: m1-gate.sh g0-review|g1-version|g2|g2b|g3|g3-chaos|g3b|g4|g5|g6|g7 [args]"
 shift
 
+# deployed_version FAB_BIN FULL_SHA: the binary's version command must exit 0
+# and print 12-40 lowercase hex that is a prefix of the full 40-hex commit.
+deployed_version() {
+	local fab=$1 want=$2 out rc
+	out=$("$fab" version 2>/dev/null); rc=$?
+	out=$(printf '%s' "$out" | head -1 | tr -d '[:space:]')
+	ev "version command exit $rc, output '${out:0:40}'; expected commit $want"
+	[ "$rc" = 0 ] || fail "version command exited $rc"
+	[[ "$out" =~ ^[0-9a-f]{12,40}$ ]] || fail "version output is not 12-40 hex"
+	case "$want" in "$out"*) ;; *) fail "deployed version $out is not a prefix of $want" ;; esac
+}
+
 case "$gate" in
 g0-review)
-	# G0 part 1: an independent adversarial review report for the deployed
-	# head ends "VERDICT: PASS" and names that head.
-	#   m1-gate.sh g0-review REPORT FAB_BIN
-	report=${1:-}; fab=${2:-}
+	# G0 part 1: an independent adversarial review report bound to the
+	# deployed head. The report must carry exactly one "Reviewed HEAD:" field
+	# equal to the full deployed commit, and its last non-empty line must be
+	# exactly "VERDICT: PASS". The deployed binary must report that commit.
+	#   m1-gate.sh g0-review REPORT FAB_BIN DEPLOYED_SHA40
+	report=${1:-}; fab=${2:-}; want=${3:-}
 	[ -f "$report" ] || die "g0-review: report $report not found"
 	[ -x "$fab" ] || die "g0-review: fab binary $fab not executable"
-	head=$("$fab" version 2>/dev/null | head -1 | tr -d '[:space:]')
-	[ -n "$head" ] || die "g0-review: $fab version printed nothing"
-	ev "deployed version $head"
-	last=$(grep -E '^VERDICT: (PASS|BLOCK)$' "$report" | tail -1)
-	ev "report verdict line: ${last:-none}"
-	[ "$last" = "VERDICT: PASS" ] || fail "report verdict is not PASS"
-	grep -q -- "$head" "$report" || fail "report does not name the deployed head $head"
+	[[ "$want" =~ ^[0-9a-f]{40}$ ]] || die "g0-review: deployed sha must be 40 hex"
+	deployed_version "$fab" "$want"
+	heads=$(grep -E '^Reviewed HEAD:' "$report") || true
+	n=$(printf '%s' "$heads" | grep -c . || true)
+	ev "Reviewed HEAD fields: $n"
+	[ "$n" = 1 ] || fail "report must have exactly one Reviewed HEAD field, found $n"
+	got=$(printf '%s' "$heads" | sed -E 's/^Reviewed HEAD:[[:space:]]*//; s/[[:space:]]+$//')
+	ev "Reviewed HEAD $got"
+	[ "$got" = "$want" ] || fail "Reviewed HEAD is not the deployed commit"
+	last=$(grep -v '^[[:space:]]*$' "$report" | tail -1 | sed -E 's/[[:space:]]+$//')
+	ev "last line: ${last:0:60}"
+	[ "$last" = "VERDICT: PASS" ] || fail "last non-empty line is not VERDICT: PASS"
 	pass
 	;;
 g1-version)
-	# G1 part 1: the deployed binary is the merged commit.
-	#   m1-gate.sh g1-version FAB_BIN MERGED_SHA
+	# G1 part 1: the deployed binary is the integrated commit.
+	#   m1-gate.sh g1-version FAB_BIN TARGET_SHA40
 	fab=${1:-}; want=${2:-}
 	[ -x "$fab" ] || die "g1-version: fab binary $fab not executable"
-	[[ "$want" =~ ^[0-9a-f]{12,40}$ ]] || die "g1-version: merged sha must be 12-40 hex"
-	got=$("$fab" version 2>/dev/null | head -1 | tr -d '[:space:]')
-	ev "deployed version ${got:-none}; merged ${want}"
-	[ -n "$got" ] || fail "fab version printed nothing"
-	case "$want" in "$got"*) pass ;; esac
-	case "$got" in "$want"*) pass ;; esac
-	fail "deployed version $got does not match merged $want"
+	[[ "$want" =~ ^[0-9a-f]{40}$ ]] || die "g1-version: target sha must be the full 40 hex"
+	deployed_version "$fab" "$want"
+	pass
 	;;
 g2 | g2b | g3 | g3-chaos | g3b | g4 | g5 | g6 | g7)
 	die "$gate: NOT_IMPLEMENTED (W6 lands after W2-W5)"
