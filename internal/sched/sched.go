@@ -1099,7 +1099,19 @@ func (s *Scheduler) afterWait(ctx context.Context, mission domain.MissionID, att
 	if err != nil || cmd == nil {
 		return err
 	}
-	return s.finishRetry(ctx, *cmd)
+	if err := s.finishRetry(ctx, *cmd); err != nil {
+		return err
+	}
+	if cmd.Outcome == "abandoned" && strings.HasPrefix(cmd.Reason, claude.ReasonCredentialRejected) {
+		// goodqa#15966 AC-19: no retry with a refused token. The existing
+		// hold keeps the mission from a next attempt until the operator
+		// rotates the token and releases it.
+		if herr := s.st.HoldMission(ctx, s.st.Pool(), mission); herr != nil {
+			return fmt.Errorf("hold after a refused token: %w", herr)
+		}
+		fmt.Fprintf(os.Stderr, "fabd: held %s: the subscription token was refused\n", mission)
+	}
+	return nil
 }
 
 // finishRetry is every FINISH_ATTEMPT fabd sends: one finishCmd under
