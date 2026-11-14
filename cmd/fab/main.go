@@ -89,6 +89,8 @@ func main() {
 		err = versionMain(os.Args[2:])
 	case "policy":
 		err = policyMain(os.Args[2:])
+	case "events":
+		err = eventsMain(os.Args[2:])
 	case "migrate":
 		err = withStore(func(ctx context.Context, st *store.Store) error { return st.Migrate(ctx) })
 	default:
@@ -150,6 +152,7 @@ func usage() {
   control export [--since CURSOR]      mc.event/1 lines + cursor for Mission Control (read-only)
   control ingest --source NAME         validate mc.event/1 lines on stdin, store in control.ingested_events
   version                              build revision
+  events --mission M [--json]          mission events with effect rows joined at read time (effect:{state})
   policy build|marker                  M1 build and comment_policy marker (read-only; exit 0 only for m1)
   harness run --adapter native --grant F --events F   run a native mission through the harness seam; record and check its event trace
   harness run --adapter codex --codex-preflight --codex-dir D --events F   check Codex feature and profile metadata without starting a thread (refused in M1, goodqa#15976)

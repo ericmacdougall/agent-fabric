@@ -581,6 +581,10 @@ func waitKind(key string) string {
 	return "event"
 }
 
+// Bump raises a durable fabd counter (fab metrics); the M1 effect loop
+// uses it for m1_late_write_total (goodqa#15966 AC-31).
+func (s *Scheduler) Bump(ctx context.Context, name string) { s.bump(ctx, name) }
+
 func (s *Scheduler) bump(ctx context.Context, name string) {
 	s.st.Pool().Exec(ctx, `INSERT INTO sched_counters (name, value) VALUES ($1, 1) ON CONFLICT (name) DO UPDATE SET value = sched_counters.value + 1`, name) //nolint:errcheck
 }

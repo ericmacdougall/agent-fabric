@@ -18,8 +18,11 @@ import (
 
 	"fabric/internal/dispatch"
 	"fabric/internal/domain"
+	"fabric/internal/effects"
 	"fabric/internal/host"
 	"fabric/internal/hostid"
+	"fabric/internal/m1build"
+	"fabric/internal/m1effect"
 	"fabric/internal/native"
 	"fabric/internal/provider/claude"
 	"fabric/internal/sched"
@@ -272,8 +275,25 @@ func daemonMain(args []string) error {
 	if err := sched.CheckConfig(cfg, ln); err != nil {
 		return err
 	}
+	// goodqa#15966 AC-31: an M1 fabd runs the effect reconcile loop on every
+	// tick (also with --no-dispatch). The pre-submit step (cfg.EffectStep)
+	// is wired at integration with the mission source (W3, W5).
+	var m1g *effects.GoodQA
+	if m1build.Enabled {
+		if m1g, err = goodqaExecutor(); err != nil {
+			return fmt.Errorf("refusing to start an M1 fabd without its GoodQA executor: %w", err)
+		}
+	}
 	return withStoreService(func(ctx context.Context, st *store.Store) error {
+		var loop *m1effect.Loop
+		if m1g != nil {
+			loop = &m1effect.Loop{Store: st, Broker: effects.New(st), Exec: m1g, RecordsDir: m1RecordsDir(*workRoot)}
+			cfg.EffectPass = loop.MaybePass
+		}
 		s := sched.New(st, cfg, ln)
+		if loop != nil {
+			loop.Bump = s.Bump
+		}
 		if p, ok := runnerProber(*workerUser); ok {
 			s.SetProber(p) // G1: reconcile UNKNOWN attempts whose runner is gone
 		}

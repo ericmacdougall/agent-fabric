@@ -374,3 +374,40 @@ func TestDaemonPolicyCheck(t *testing.T) {
 		t.Fatalf("m1 build, marker: %v", err)
 	}
 }
+
+// AC-12: `fab events --mission M` shows the mission's events and its effect
+// rows (effect:{state}) ordered by time, without any new event kind.
+func TestEventsShowsEffects(t *testing.T) {
+	bins := fabBinaries(t)
+	e := newM1Env(t, true)
+	var kinds0 int
+	e.st.Pool().QueryRow(e.ctx, `SELECT count(DISTINCT kind) FROM events WHERE mission_id = 'm_m1'`).Scan(&kinds0) //nolint:errcheck
+	e.fabdSubmit(t, "diagnosis")
+	out, code := e.fab(t, bins["non-m1"], "events", "--mission", "m_m1")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	idx := map[string]int{}
+	for i, l := range lines {
+		f := strings.Fields(l)
+		if len(f) > 1 {
+			if _, ok := idx[f[1]]; !ok {
+				idx[f[1]] = i
+			}
+		}
+	}
+	for _, want := range []string{"ATTEMPT_STARTED", "effect:INTENT", "effect:DISPATCHED", "effect:CONFIRMED"} {
+		if _, ok := idx[want]; !ok {
+			t.Fatalf("missing %s in\n%s", want, out)
+		}
+	}
+	if !(idx["ATTEMPT_STARTED"] < idx["effect:INTENT"] && idx["effect:INTENT"] < idx["effect:DISPATCHED"] && idx["effect:DISPATCHED"] < idx["effect:CONFIRMED"]) {
+		t.Fatalf("out of order:\n%s", out)
+	}
+	var kinds1 int
+	e.st.Pool().QueryRow(e.ctx, `SELECT count(DISTINCT kind) FROM events WHERE mission_id = 'm_m1'`).Scan(&kinds1) //nolint:errcheck
+	if kinds1 != kinds0 {
+		t.Fatal("the effect wrote mission events")
+	}
+}
