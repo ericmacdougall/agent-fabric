@@ -74,3 +74,28 @@ func TestScanTextDiagnosisPasses(t *testing.T) {
 		t.Fatalf("realistic diagnosis blocked: %s", class)
 	}
 }
+
+// Owner ruling conditions (3) and (4) on the entropy exclusion.
+func TestScanTextExclusionNegatives(t *testing.T) {
+	tok := synthToken(t, 108)
+	b := testBound(t, tok)
+	listed := "/srv/fabric/runs/a-1/worktree/lib.sh"
+	excl := []string{listed, "m-1", "a-1"}
+	// (3a) a token or its base64 inside a path-like string not in the list.
+	for _, v := range [][]byte{tok, Encode(FormB64, tok)} {
+		fake := "/srv/fabric/runs/a-1/worktree/" + string(v) + "/x.sh"
+		if hit, _ := b.ScanTextExcluding("see "+fake, excl); !hit {
+			t.Fatal("credential inside an unlisted path-like string not blocked")
+		}
+	}
+	// (3b) a run holding a whole excluded string plus extra high-entropy characters.
+	extra := string(synthSecret(t, 40))
+	if hit, class := b.ScanTextExcluding("see /srv/fabric/runs/a-1/worktree/"+extra+" ok", []string{"/srv/fabric/runs/a-1/worktree/"}); !hit || class != ClassEntropy {
+		t.Fatalf("superset run not blocked: %v %q", hit, class)
+	}
+	// (4) a file-list entry that itself holds a bound credential form.
+	bad := "/srv/x/" + string(Encode(FormHexLower, tok)) + ".sh"
+	if hit, class := b.ScanTextExcluding("see "+bad, []string{bad}); !hit || !strings.HasPrefix(class, ClassFormPrefix) {
+		t.Fatalf("listed entry with a credential form not blocked: %v %q", hit, class)
+	}
+}

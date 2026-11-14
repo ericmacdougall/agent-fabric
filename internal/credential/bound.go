@@ -256,7 +256,10 @@ func highEntropyRun(text string, exclusions []string) bool {
 // excluded reports that run equals an exclusion or lies inside one. A
 // quoted path splits into runs at '.', so a run inside an excluded path is
 // part of that path. ASSUMPTION (owner to confirm with W2's AC-10): the
-// spec's "equal a path" covers these sub-runs.
+// spec's "equal a path" covers these sub-runs. Owner ruling 2026-11-14
+// (agent ad1ff08b576984a4d): accepted because exclusions are built only from
+// the extract file list, mission id and attempt id; it applies only to the
+// entropy rule, and containment is one-directional.
 func excluded(run string, exclusions []string) bool {
 	for _, e := range exclusions {
 		if strings.Contains(e, run) {
