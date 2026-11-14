@@ -77,10 +77,25 @@ const MinEntropy = 4.5
 // Scan checks the model text (never the fixed header) before Submit. It
 // returns blocked=true and a class on the first rule that matches. A nil
 // credential set blocks: the scan cannot be skipped by a missing binding.
+//
+// It scans both the raw text and its Neutralise form, because the
+// neutralised bytes are what GoodQA publishes: removing brackets, angle
+// brackets, CR or control characters can join pieces of a secret that the
+// raw text keeps apart (for example "sk-[ant-" or a DSN split by "]").
 func Scan(modelText string, creds BoundCredentials, allow Allow) (blocked bool, class string) {
 	if creds == nil {
 		return true, ClassNoCreds
 	}
+	if blocked, class = scanOne(modelText, creds, allow); blocked {
+		return blocked, class
+	}
+	if n := Neutralise(modelText); n != modelText {
+		return scanOne(n, creds, allow)
+	}
+	return false, ""
+}
+
+func scanOne(modelText string, creds BoundCredentials, allow Allow) (blocked bool, class string) {
 	if hit, c := creds.ScanTextExcluding(modelText, allow.list()); hit {
 		if c == "" || !classRE.MatchString(c) {
 			c = ClassCredential

@@ -125,6 +125,46 @@ func TestScanUsesBoundVersionAfterRotation(t *testing.T) {
 	}
 }
 
+// The scan must see what GoodQA publishes: Neutralise removes brackets,
+// angle brackets, CR and control characters, so text that is clean raw can
+// rejoin into credential material in the posted body.
+func TestScanSeesNeutralisedBytes(t *testing.T) {
+	split := func(s, sep string, every int) string {
+		var b strings.Builder
+		for i := 0; i < len(s); i += every {
+			end := i + every
+			if end > len(s) {
+				end = len(s)
+			}
+			if i > 0 {
+				b.WriteString(sep)
+			}
+			b.WriteString(s[i:end])
+		}
+		return b.String()
+	}
+	run := "Zx9Qw2Lk8Vb3Np7Rt5Ym1Hc4Jd6Fg0SaUeIoPyTrEwQAs7Df"
+	cases := map[string]struct {
+		text  string
+		class string
+	}{
+		"sk-ant split by bracket":  {"prefix sk-[ant-api03 here", ClassSkAnt},
+		"postgres split by angle":  {"see postgres:<//user@host/db", ClassPostgresURL},
+		"secret split by brackets": {"value " + split(gqKey, "]", 5), ClassCredential + ":secret"},
+		"entropy run split by CR":  {"blob " + split(run, "\r", 20) + " end", ClassEntropy},
+	}
+	for name, c := range cases {
+		raw, _ := scanOne(c.text, credsA, allow)
+		if raw {
+			t.Errorf("%s: raw text already blocks; the fixture tests nothing", name)
+		}
+		blocked, class := Scan(c.text, credsA, allow)
+		if !blocked || class != c.class {
+			t.Errorf("%s: blocked=%v class=%q, want %q", name, blocked, class, c.class)
+		}
+	}
+}
+
 func TestScanNilCredentialsBlocks(t *testing.T) {
 	if blocked, class := Scan("harmless", nil, allow); !blocked || class != ClassNoCreds {
 		t.Fatalf("nil credential set: blocked=%v class=%q", blocked, class)

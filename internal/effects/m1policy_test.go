@@ -405,6 +405,31 @@ func TestReadbackGuardWindow(t *testing.T) {
 	}
 }
 
+// AC-7(7): the window is judged when the readback begins. A readback that
+// starts inside the window and returns after it stays UNKNOWN.
+func TestReadbackGuardJudgedAtStart(t *testing.T) {
+	ctx, st, b, fake := setup(t)
+	setMarker(t, ctx, st, "m1")
+	b.SetTransportTimeout(time.Second)
+	b.quietWindow = 500 * time.Millisecond
+	e, _ := b.Submit(ctx, fake, canon("g"))
+	fake.LoseBefor = true
+	e, err := b.Dispatch(ctx, fake, e.ID)
+	if err != nil || e.State != Unknown {
+		t.Fatalf("%s %v", e.State, err)
+	}
+	// The window closes 1.5 s after dispatch; the readback starts at once
+	// and returns about 2.5 s later.
+	fake.Stall = 2500 * time.Millisecond
+	if e, err = b.Reconcile(ctx, fake, e.ID); err != nil || e.State != Unknown || !strings.Contains(e.LastError, "quiet window") {
+		t.Fatalf("readback begun inside the window: %s %v %q", e.State, err, e.LastError)
+	}
+	fake.Stall = 0
+	if e, err = b.Reconcile(ctx, fake, e.ID); err != nil || e.State != NotApplied {
+		t.Fatalf("readback begun after the window: %s %v", e.State, err)
+	}
+}
+
 // The guard also holds on an M1 build whose marker is missing.
 func TestReadbackGuardOnM1BuildWithoutMarker(t *testing.T) {
 	ctx, _, b, fake := setup(t)

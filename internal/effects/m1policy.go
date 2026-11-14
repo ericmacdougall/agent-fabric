@@ -192,6 +192,16 @@ func (b *Broker) quietWindowPassed(ctx context.Context, tx pgx.Tx, e Effect) (bo
 	return passed != nil && *passed, nil
 }
 
+// quietPassedNow is quietWindowPassed in its own read-only transaction.
+func (b *Broker) quietPassedNow(ctx context.Context, e Effect) (bool, error) {
+	tx, err := b.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck
+	return b.quietWindowPassed(ctx, tx, e)
+}
+
 // CheckPolicy is the start-time check (spec table, last column): fabd's
 // start and every mutating `fab effect` subcommand call it once. An M1 build
 // refuses without the marker or with an unknown value; a non-M1 build is

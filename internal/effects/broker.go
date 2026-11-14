@@ -634,6 +634,15 @@ func (b *Broker) Reconcile(ctx context.Context, exec Executor, id string) (Effec
 	if err != nil {
 		return Effect{}, err
 	}
+	// AC-7 early-readback guard: the quiet window is judged when the
+	// readback begins, not when it returns. A readback that starts inside the
+	// window can miss a write still in flight even if it returns after it.
+	quietBefore := true
+	if e.Kind == GovernedKind {
+		if quietBefore, err = b.quietPassedNow(ctx, e); err != nil {
+			return Effect{}, err
+		}
+	}
 	obs, detail, oerr := exec.Reconcile(ctx, e)
 	if oerr != nil {
 		obs, detail = ObsUnknown, "readback: "+oerr.Error()
@@ -662,19 +671,9 @@ func (b *Broker) Reconcile(ctx context.Context, exec Executor, id string) (Effec
 		if err != nil {
 			return Effect{}, err
 		}
-		if on {
-			cur, err := b.loadTx(ctx, tx, "id", id)
-			if err != nil {
-				return Effect{}, err
-			}
-			passed, err := b.quietWindowPassed(ctx, tx, cur)
-			if err != nil {
-				return Effect{}, err
-			}
-			if !passed {
-				state, obs = Unknown, ObsUnknown
-				detail = "readback empty inside the M1 quiet window; " + detail
-			}
+		if on && !quietBefore {
+			state, obs = Unknown, ObsUnknown
+			detail = "readback empty inside the M1 quiet window; " + detail
 		}
 	}
 	rc, _ := json.Marshal(Receipt{Outcome: Outcome(obs), Detail: detail})

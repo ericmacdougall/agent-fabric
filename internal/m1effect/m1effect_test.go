@@ -547,6 +547,7 @@ func TestLoopLateWrite(t *testing.T) {
 	e := newEnv(t)
 	e.b.TestHooks(0, nil, nil)
 	e.fake.Hold = true
+	e.loop.Recheck = time.Nanosecond
 	bumps := 0
 	e.loop.Bump = func(_ context.Context, name string) {
 		if name == "m1_late_write_total" {
@@ -598,5 +599,95 @@ func TestLoopPredicate(t *testing.T) {
 	}
 	if y, _ := e.b.Load(e.ctx, x.ID); y.State != effects.Intent {
 		t.Fatalf("legacy row changed: %s", y.State)
+	}
+}
+
+// AC-31 starvation: terminal rows that never change state (record-only
+// FAILED_DEFINITE, and NOT_APPLIED inside the late-write window) are older
+// than, and outnumber, a stranded INTENT. With Limit 2 the INTENT is still
+// abandoned in the first pass, and a second pass does not redo the
+// record-only rows or re-read the late-write ones.
+func TestLoopOldTerminalRowsDoNotStarve(t *testing.T) {
+	e := newEnv(t)
+	e.loop.Limit = 2
+	reads := 0
+	for i := 0; i < 3; i++ {
+		for _, st := range []string{"FAILED_DEFINITE", "NOT_APPLIED"} {
+			m := domain.MissionID(fmt.Sprintf("m_old_%s_%d", strings.ToLower(st[:1]), i))
+			if err := e.st.CreateMission(e.ctx, m, domain.ProviderClaudeCode, "GoodQA goodqa#15966", "fabric", "main"); err != nil {
+				t.Fatal(err)
+			}
+			// Fixture only: seed settled rows directly, past the
+			// born-as-intent trigger (replica role skips user triggers).
+			tx, err := e.st.Pool().Begin(e.ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(e.ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(e.ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state, dispatches, updated_at)
+				VALUES ($1, $2, 'r_gone', 1, 'ticket_comment', $1, $3, '{}', 'x', $4, 1, now() - interval '1 hour')`,
+				"e_old_"+string(m), string(m), effects.M1Key(m), st); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(e.ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	e.loop.Exec = countingExec{Executor: e.fake, n: &reads}
+	e.step.afterSubmit = func(effects.Effect) { crashAt() }
+	a, _ := e.start()
+	runCrashing(func() { e.step.Run(e.ctx, a, nil) })
+	e.crashEnd(a)
+	ps, err := e.loop.Pass(e.ctx)
+	if err != nil || ps.Abandoned != 1 {
+		t.Fatalf("first pass %+v %v: the stranded INTENT starved", ps, err)
+	}
+	if x, _ := e.effect(); x.State != effects.NotApplied {
+		t.Fatalf("intent %s", x.State)
+	}
+	first := reads
+	ps, err = e.loop.Pass(e.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 3 rows of each kind, 2 done in the first pass: the third record-only
+	// row, and one late-write read of the third NOT_APPLIED row (which also
+	// writes its delivery_blocked).
+	if ps.Blocked != 2 || reads != first+1 {
+		t.Fatalf("second pass %+v reads %d->%d: done rows were not skipped", ps, first, reads)
+	}
+	if ps, err = e.loop.Pass(e.ctx); err != nil || ps != (PassStats{}) || reads != first+1 {
+		t.Fatalf("third pass %+v %v reads %d: nothing is left to do", ps, err, reads)
+	}
+}
+
+type countingExec struct {
+	effects.Executor
+	n *int
+}
+
+func (c countingExec) FindComment(ctx context.Context, e effects.Effect) (string, bool, error) {
+	*c.n++
+	return c.Executor.(effects.CommentFinder).FindComment(ctx, e)
+}
+
+// AC-31: a pass is bounded by its own deadline, so a hung GoodQA readback
+// cannot stall the scheduler tick.
+func TestLoopPassDeadline(t *testing.T) {
+	e := newEnv(t)
+	e.b.TestHooks(0, nil, nil)
+	e.fake.LoseBefor = true
+	a, _ := e.start()
+	e.step.Run(e.ctx, a, nil)
+	e.crashEnd(a)
+	e.fake.Hang = true
+	e.loop.Timeout = 300 * time.Millisecond
+	t0 := time.Now()
+	e.loop.Pass(e.ctx) //nolint:errcheck
+	if d := time.Since(t0); d > 3*time.Second {
+		t.Fatalf("pass took %v with a 300 ms deadline", d)
 	}
 }
