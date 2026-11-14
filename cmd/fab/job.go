@@ -163,14 +163,6 @@ func daemonMain(args []string) error {
 	if err != nil {
 		return err
 	}
-	// goodqa#15966 M1 comment policy: an M1 fabd refuses to start (exit 3,
-	// 0 processes) on a database without the comment_policy marker or with
-	// an unknown value, before any control or worker starts. A non-M1 build
-	// passes this check by definition (its decisions still honour the
-	// marker), so it does not open the database here.
-	if err := daemonPolicyCheck(); err != nil {
-		return err
-	}
 	// The schema is written before the profile and the controls, so the
 	// launch_inputs_readable control sees the file a real launch reads.
 	// The controls used to create the work root; the schema is now written
@@ -212,21 +204,6 @@ func daemonMain(args []string) error {
 	ln, err := launcherForThisHost()
 	if err != nil {
 		return err
-	}
-	// An untrusted provider (anything but the recorded fake) runs only on a
-	// host whose negative controls demonstrated containment (review C1).
-	if !*trustProvider {
-		p, err := profileForThisHost()
-		if err != nil {
-			return err
-		}
-		results, err := p.NegativeControls(filepath.Join(*workRoot, "controls"))
-		if err != nil {
-			return err
-		}
-		if containment, failed := host.Capabilities(results); !containment {
-			return fmt.Errorf("refusing to launch an untrusted provider: this host did not demonstrate containment (failing controls: %s); use --trust-provider only for the recorded fake", strings.Join(failed, ", "))
-		}
 	}
 	cfg := sched.Config{Host: domain.HostID(*hostID), Model: model, Effort: effort, Rung: *rung, TierTableSHA: sha, Profile: *profile,
 		MaxTurns: 40, MaxBudgetUSD: 2, Wall: 45 * time.Minute, WorkRoot: *workRoot, FabBin: selfPath()}
@@ -274,6 +251,31 @@ func daemonMain(args []string) error {
 	// so a bad flag exits once and never crash-loops the unit.
 	if err := sched.CheckConfig(cfg, ln); err != nil {
 		return err
+	}
+	// goodqa#15966 M1 comment policy (NEG-23): an M1 fabd refuses to start
+	// (exit 3, 0 processes) on a database without the comment_policy marker
+	// or with an unknown value. It runs after every configuration refusal
+	// above (which open no store, goodqa#15373 AC-2) and before the
+	// containment controls below start any probe unit. A non-M1 build passes
+	// by definition (its decisions still honour the marker), so it does not
+	// open the database here.
+	if err := daemonPolicyCheck(); err != nil {
+		return err
+	}
+	// An untrusted provider (anything but the recorded fake) runs only on a
+	// host whose negative controls demonstrated containment (review C1).
+	if !*trustProvider {
+		p, err := profileForThisHost()
+		if err != nil {
+			return err
+		}
+		results, err := p.NegativeControls(filepath.Join(*workRoot, "controls"))
+		if err != nil {
+			return err
+		}
+		if containment, failed := host.Capabilities(results); !containment {
+			return fmt.Errorf("refusing to launch an untrusted provider: this host did not demonstrate containment (failing controls: %s); use --trust-provider only for the recorded fake", strings.Join(failed, ", "))
+		}
 	}
 	// goodqa#15966 AC-31: an M1 fabd runs the effect reconcile loop on every
 	// tick (also with --no-dispatch). The pre-submit step (cfg.EffectStep)

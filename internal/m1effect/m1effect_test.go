@@ -326,7 +326,9 @@ func TestStepForeignRowBlocks(t *testing.T) {
 	a, _ := e.start()
 	e.st.Pool().Exec(e.ctx, `DELETE FROM fabric_settings WHERE key = 'comment_policy'`) //nolint:errcheck
 	req := []byte(`{"ticket":"goodqa#1","body":"foreign"}`)
-	if _, err := e.b.Submit(e.ctx, e.fake, effects.IntentSpec{Mission: mission, Attempt: a.Attempt, Fence: a.Fence, Kind: "ticket_comment",
+	legacy := effects.New(e.st) // a non-M1 broker, also in an M1 test build
+	legacy.TestAsNonM1()
+	if _, err := legacy.Submit(e.ctx, e.fake, effects.IntentSpec{Mission: mission, Attempt: a.Attempt, Fence: a.Fence, Kind: "ticket_comment",
 		Subject: "ticket:goodqa#1", IdemKey: "k-foreign", Request: req}); err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +586,9 @@ func TestLoopPredicate(t *testing.T) {
 	e.st.Pool().Exec(e.ctx, `DELETE FROM fabric_settings WHERE key = 'comment_policy'`) //nolint:errcheck
 	a, _ := e.start()
 	req := []byte(`{"ticket":"goodqa#1","body":"x"}`)
-	x, err := e.b.Submit(e.ctx, e.fake, effects.IntentSpec{Mission: mission, Attempt: a.Attempt, Fence: a.Fence, Kind: "ticket_comment",
+	legacy := effects.New(e.st) // a non-M1 broker, also in an M1 test build
+	legacy.TestAsNonM1()
+	x, err := legacy.Submit(e.ctx, e.fake, effects.IntentSpec{Mission: mission, Attempt: a.Attempt, Fence: a.Fence, Kind: "ticket_comment",
 		Subject: "ticket:goodqa#1", IdemKey: "k-legacy", Request: req})
 	if err != nil {
 		t.Fatal(err)
