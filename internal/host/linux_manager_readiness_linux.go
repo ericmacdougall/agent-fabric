@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -172,6 +173,96 @@ func (l *LinuxManager) stopAndVerifyUnit(h Handle) error {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+}
+
+// verifyStopped is the end of a verified Stop: the unit is inactive with no
+// control group, its cgroup holds no process, no worker-uid process lives
+// elsewhere under the manager, and the worker manager holds no unit this run
+// added (goodqa#15976 AC-4, review H1). A timer or path unit has no process
+// until it fires, so process inventory alone cannot see it. Escaped units
+// are stopped as cleanup, but the stop stays unverified; a retried Stop
+// verifies once they are gone.
+func (l *LinuxManager) verifyStopped(h Handle) ([]Process, error) {
+	if err := l.stopAndVerifyUnit(h); err != nil {
+		return nil, fmt.Errorf("stop %s: late-unit cleanup: %w", h.Run, err)
+	}
+	survivors, err := l.Inventory(h)
+	if err != nil {
+		return nil, fmt.Errorf("stop %s: final inventory: %w", h.Run, err)
+	}
+	if len(survivors) != 0 {
+		return survivors, fmt.Errorf("stop %s: %d survivors", h.Run, len(survivors))
+	}
+	l.mu.Lock()
+	baseline := l.unitBaseline
+	l.mu.Unlock()
+	if baseline == nil {
+		return nil, fmt.Errorf("stop %s: no worker manager unit baseline was recorded at start", h.Run)
+	}
+	now, err := l.workerUnits()
+	if err != nil {
+		return nil, fmt.Errorf("stop %s: worker manager units: %w", h.Run, err)
+	}
+	escaped := escapedWorkerUnits(baseline, now, h.Unit)
+	if len(escaped) > 0 {
+		for _, u := range escaped {
+			_, _ = l.managerOutput("systemctl", "--user", "stop", u) // cleanup only; never proof
+		}
+		return nil, fmt.Errorf("stop %s: the worker manager holds units this run added: %s", h.Run, strings.Join(escaped, ", "))
+	}
+	return nil, nil
+}
+
+// workerUnits lists every unit the worker manager has loaded, active or not.
+func (l *LinuxManager) workerUnits() (map[string]bool, error) {
+	out, err := l.managerOutput("systemctl", "--user", "list-units", "--all", "--plain", "--no-legend", "--full", "--no-pager")
+	if err != nil {
+		return nil, fmt.Errorf("list-units: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return parseUnitList(out)
+}
+
+// parseUnitList reads `systemctl list-units --plain --no-legend` output. A
+// line whose first field is not a unit name fails the parse (fail closed).
+func parseUnitList(out []byte) (map[string]bool, error) {
+	units := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && (fields[0] == "●" || fields[0] == "*") {
+			fields = fields[1:]
+		}
+		if len(fields) == 0 {
+			continue
+		}
+		name := fields[0]
+		if i := strings.LastIndexByte(name, '.'); i <= 0 || i == len(name)-1 {
+			return nil, fmt.Errorf("unparsable unit line %q", line)
+		}
+		units[name] = true
+	}
+	return units, nil
+}
+
+// passiveUnitTypes appear and disappear with the host (mounts, devices,
+// swap) or only group other units (slices, targets); none runs a command.
+var passiveUnitTypes = map[string]bool{"slice": true, "device": true, "mount": true, "swap": true, "target": true}
+
+// escapedWorkerUnits are the units in now that were not in the baseline,
+// other than the run's own unit and passive types. Services, scopes,
+// timers, paths, sockets and automounts all count.
+func escapedWorkerUnits(baseline, now map[string]bool, own string) []string {
+	var out []string
+	for u := range now {
+		if baseline[u] || u == own {
+			continue
+		}
+		if passiveUnitTypes[u[strings.LastIndexByte(u, '.')+1:]] {
+			continue
+		}
+		out = append(out, u)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func cgroupHasLiveProcess(path string) (bool, error) {

@@ -65,6 +65,7 @@ type LinuxManager struct {
 	runLockInfo          os.FileInfo
 	mediator             *egress.Mediator
 	proxyURL             string
+	unitBaseline         map[string]bool                                    // worker manager units loaded before this run (goodqa#15976 AC-4)
 	commandFn            func(context.Context, string, ...string) *exec.Cmd // native controls may delay the manager
 	writeEnvFile         func(string, []string, bool) error                 // deterministic creation faults in unit tests; defaults to WriteEnvFile
 	removeFile           func(string) error                                 // deterministic cleanup faults in unit tests; defaults to os.Remove
@@ -333,6 +334,13 @@ func (l *LinuxManager) StartIO(g Grant, argv []string, env []string, stdin, stdo
 	if err := assertNoAbandonedRuns(uid); err != nil {
 		return Handle{}, err
 	}
+	// goodqa#15976 AC-4: the worker manager's units before this run. Stop
+	// refuses verification while any unit the run added remains, timers and
+	// paths included: they hold no process until they fire.
+	baseline, err := l.workerUnits()
+	if err != nil {
+		return Handle{}, fmt.Errorf("worker manager unit baseline: %w", err)
+	}
 	var policy *egress.PolicyDescriptor
 	if l.EgressConfig != nil {
 		mediator, err = egress.Start(context.Background(), *l.EgressConfig)
@@ -360,6 +368,7 @@ func (l *LinuxManager) StartIO(g Grant, argv []string, env []string, stdin, stdo
 	l.active = h
 	l.launcher = nil
 	l.mgrEnvFile = ef
+	l.unitBaseline = baseline
 	l.mediator = mediator
 	l.proxyURL = ""
 	if mediator != nil {
@@ -647,15 +656,9 @@ func (l *LinuxManager) Stop(h Handle, reason string, grace time.Duration) (StopR
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	if err := l.stopAndVerifyUnit(h); err != nil {
-		return finish(fmt.Errorf("stop %s: late-unit cleanup: %w", h.Run, err))
-	}
-	rc.Survivors, err = l.Inventory(h)
+	rc.Survivors, err = l.verifyStopped(h)
 	if err != nil {
-		return finish(fmt.Errorf("stop %s: final inventory: %w", h.Run, err))
-	}
-	if len(rc.Survivors) != 0 {
-		return finish(fmt.Errorf("stop %s: %d survivors", h.Run, len(rc.Survivors)))
+		return finish(err)
 	}
 	if err := l.releaseRunLocked(); err != nil {
 		rc.Verified = false
