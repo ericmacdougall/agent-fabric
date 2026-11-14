@@ -48,7 +48,8 @@ type Linux struct {
 
 	mu       sync.Mutex
 	cmds     map[string]*exec.Cmd
-	envFiles map[string]string // unit -> environment file, removed after Wait
+	envFiles map[string]string  // unit -> environment file, removed after Wait
+	ctl      *linuxControlHooks // tests only; nil uses the host
 }
 
 func (l *Linux) Name() string { return "linux-cgroup-landlock" }
@@ -528,9 +529,12 @@ func (l *Linux) runControl(g Grant, script string) (string, int, error) {
 // NegativeControls proves (or disproves) the Linux boundaries on this host.
 // Controls 1-4 are the process and resource boundaries of days 4-5; 5-9 are
 // the ones the 8f83662f review added (secret reads, config writes, TCP,
-// the user bus, same-UID signals). The last two are expected to FAIL on a
-// same-UID host without a user-namespace or a dedicated worker account; a
-// failing control is reported, never hidden.
+// the user bus, same-UID signals). Those two are expected to FAIL on a
+// same-UID host without a user-namespace or a dedicated worker account.
+// With a worker account, two more probe the worker uid's own manager bus and
+// manager process (goodqa#15976); this profile does not block either, so
+// they FAIL here and only LinuxManager can pass them. A failing control is
+// reported, never hidden.
 func (l *Linux) NegativeControls(scratch string) ([]ControlResult, error) {
 	var out []ControlResult
 	add := func(name string, ok bool, detail string) { out = append(out, ControlResult{name, ok, detail}) }
@@ -582,8 +586,9 @@ func (l *Linux) NegativeControls(scratch string) ([]ControlResult, error) {
 	add("landlock_denies_write_outside_worktree", errors.Is(errOut, os.ErrNotExist) && errIn == nil,
 		fmt.Sprintf("outside exists=%v inside exists=%v", errOut == nil, errIn == nil))
 
-	// 4. MemoryMax ends a 300 MiB allocation.
-	small := &Linux{Self: l.Self, MemoryMax: "64M", ReadOnly: l.ReadOnly}
+	// 4. MemoryMax ends a 300 MiB allocation, under the worker account the
+	// real runs use (review M1: without User it measured the operator).
+	small := l.memoryControlProfile()
 	h, err = small.Start(freshRun(g), []string{"python3", "-c", "x = bytearray(300 * 1024 * 1024); print(len(x))"}, nil, devnull, devnull)
 	if err != nil {
 		return out, err
@@ -625,17 +630,31 @@ except OSError as e:
 	}
 	add("tcp_connect_limited_to_allowed_ports", strings.Contains(res, "tcp=denied"), res)
 
-	// 8. The user manager is unreachable: a worker cannot create a unit.
+	mc, err := l.managerControls(g)
+	return append(out, mc...), err
+}
+
+// managerControls are controls 8 and 9 (the controlling user's manager and
+// process) and, when a worker account is set, the same two boundaries for
+// the worker uid's OWN manager (goodqa#15976 AC-1, review C1). The worker
+// controls are required like every other control: a worker that reaches
+// its own manager's bus can start a sibling unit outside its cgroup,
+// Landlock domain and network rules, so containment is not demonstrated.
+func (l *Linux) managerControls(g Grant) ([]ControlResult, error) {
+	var out []ControlResult
+	add := func(name string, ok bool, detail string) { out = append(out, ControlResult{name, ok, detail}) }
+
+	// 8. The controlling user's manager is unreachable: a worker cannot create a unit.
 	sibling := fmt.Sprintf("fab-nc-sibling-%d", time.Now().UnixNano()%1_000_000)
-	res, _, err = l.runControl(g, fmt.Sprintf(`XDG_RUNTIME_DIR=/run/user/%d DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%d/bus systemd-run --user --collect --quiet --unit %s sleep 2 >/dev/null 2>&1 && echo unit=created || echo unit=denied`, os.Getuid(), os.Getuid(), sibling))
+	res, _, err := l.ctlRun(g, fmt.Sprintf(`XDG_RUNTIME_DIR=/run/user/%d DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%d/bus systemd-run --user --collect --quiet --unit %s sleep 2 >/dev/null 2>&1 && echo unit=created || echo unit=denied`, os.Getuid(), os.Getuid(), sibling))
 	if err != nil {
 		return out, err
 	}
-	_ = exec.Command("systemctl", "--user", "stop", sibling+".service").Run()
+	l.ctlStopUnit(false, sibling+".service")
 	add("controlling_user_manager_unreachable", strings.Contains(res, "unit=denied"), res+" (fails on a same-UID host: the pathname bus is outside Landlock ABI 4; passes under a dedicated worker uid)")
 
 	// 9. A foreign same-UID process cannot be signalled.
-	res, _, err = l.runControl(g, fmt.Sprintf(`MGR=$(pgrep -u %d -x systemd | head -1); python3 -c "`, os.Getuid())+`
+	res, _, err = l.ctlRun(g, fmt.Sprintf(`MGR=$(pgrep -u %d -x systemd | head -1); python3 -c "`, os.Getuid())+`
 import os, sys
 try:
     os.kill(int(sys.argv[1]), 0); print('signal=allowed')
@@ -648,7 +667,144 @@ except ProcessLookupError:
 		return out, err
 	}
 	add("controlling_user_process_unsignallable", strings.Contains(res, "signal=denied"), res+" (fails on a same-UID host: Landlock signal scoping needs ABI 6; passes under a dedicated worker uid)")
+
+	if l.User == "" {
+		return out, nil
+	}
+	// 8w and 9w (goodqa#15976): the worker uid's own manager. A failed
+	// lookup or probe is a failing control, never a skipped one.
+	wuid, err := l.ctlWorkerUID()
+	if err != nil {
+		add("controlling_worker_manager_unreachable", false, "worker uid unresolved: "+err.Error())
+		add("worker_manager_unsignallable", false, "worker uid unresolved: "+err.Error())
+		return out, nil
+	}
+	wsibling := fmt.Sprintf("fab-nc-wsibling-%d", time.Now().UnixNano()%1_000_000)
+	res, _, err = l.ctlRun(g, busProbeScript(wuid, wsibling))
+	l.ctlStopUnit(true, wsibling+".service") // in the worker's manager, which owns it if it exists
+	if err != nil {
+		add("controlling_worker_manager_unreachable", false, fmt.Sprintf("uid=%d probe error: %v", wuid, err))
+	} else {
+		add("controlling_worker_manager_unreachable", strings.Contains(res, "bus=denied") && !strings.Contains(res, "unit=created"),
+			fmt.Sprintf("uid=%d %s (review C1: passes only when a policy denies the worker its own manager's bus)", wuid, strings.Join(strings.Fields(res), " ")))
+	}
+	out = append(out, signalControl(g, "worker_manager_unsignallable", wuid, l.ctlManagerPID, l.ctlRun,
+		"the worker shares its uid with its own manager; passes only under a cross-process policy"))
 	return out, nil
+}
+
+// signalControl is a controller-targeted signal probe (review M3): the
+// controller, outside the sandbox, finds uid's systemd user manager and
+// passes its pid to the probe, so the result never depends on what the
+// worker can see. Only EPERM passes; a lookup failure, a missing manager or
+// a probe error fails the control.
+func signalControl(g Grant, name string, uid int, managerPID func(int) (int, error), run func(Grant, string) (string, int, error), note string) ControlResult {
+	pid, err := managerPID(uid)
+	if err != nil {
+		return ControlResult{name, false, fmt.Sprintf("uid=%d %v", uid, err)}
+	}
+	res, _, err := run(g, signalProbeScript(pid))
+	if err != nil {
+		return ControlResult{name, false, fmt.Sprintf("uid=%d pid=%d probe error: %v", uid, pid, err)}
+	}
+	return ControlResult{name, strings.Contains(res, "signal=denied"), fmt.Sprintf("uid=%d pid=%d %s (%s)", uid, pid, strings.TrimSpace(res), note)}
+}
+
+// memoryControlProfile is the profile control 4 runs under: this one's
+// binary, read roots, TCP ports and worker account, with a 64M MemoryMax.
+func (l *Linux) memoryControlProfile() *Linux {
+	return &Linux{Self: l.Self, MemoryMax: "64M", ReadOnly: l.ReadOnly, TCPPorts: l.TCPPorts, User: l.User}
+}
+
+// linuxControlHooks replace the host calls of the manager controls in unit
+// tests (goodqa#15976 NEG-1). A nil field, or nil hooks, uses the host.
+type linuxControlHooks struct {
+	run        func(g Grant, script string) (string, int, error)
+	workerUID  func() (int, error)
+	managerPID func(uid int) (int, error)
+	stopUnit   func(asWorker bool, unit string)
+}
+
+func (l *Linux) ctlRun(g Grant, script string) (string, int, error) {
+	if l.ctl != nil && l.ctl.run != nil {
+		return l.ctl.run(g, script)
+	}
+	return l.runControl(g, script)
+}
+
+func (l *Linux) ctlWorkerUID() (int, error) {
+	if l.ctl != nil && l.ctl.workerUID != nil {
+		return l.ctl.workerUID()
+	}
+	return l.workerUID()
+}
+
+// ctlManagerPID finds uid's systemd user manager from the controller,
+// outside the sandbox, so the probe never depends on what the worker can
+// see (review M3).
+func (l *Linux) ctlManagerPID(uid int) (int, error) {
+	if l.ctl != nil && l.ctl.managerPID != nil {
+		return l.ctl.managerPID(uid)
+	}
+	return userManagerPID(uid)
+}
+
+// userManagerPID finds uid's systemd user manager with pgrep, run by the
+// controller.
+func userManagerPID(uid int) (int, error) {
+	out, err := exec.Command("pgrep", "-u", strconv.Itoa(uid), "-x", "systemd").Output()
+	if err != nil {
+		return 0, fmt.Errorf("no systemd user manager found for uid %d: %w", uid, err)
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	pid, err := strconv.Atoi(first)
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("no systemd user manager found for uid %d: %q", uid, first)
+	}
+	return pid, nil
+}
+
+// ctlStopUnit stops a sibling a control created, in the manager that owns
+// it: the worker's through the profile's own sudo route, or the operator's.
+func (l *Linux) ctlStopUnit(asWorker bool, unit string) {
+	if l.ctl != nil && l.ctl.stopUnit != nil {
+		l.ctl.stopUnit(asWorker, unit)
+		return
+	}
+	if asWorker {
+		_ = l.asWorker("systemctl", "--user", "stop", unit).Run()
+		return
+	}
+	_ = exec.Command("systemctl", "--user", "stop", unit).Run()
+}
+
+// busProbeScript connects to uid's user bus, then asks that manager for a
+// transient sibling. Only a policy denial of the connect (EACCES/EPERM)
+// prints bus=denied: a missing socket or a missing systemd-run proves
+// nothing, because a worker can speak D-Bus itself.
+func busProbeScript(uid int, sibling string) string {
+	bus := fmt.Sprintf("/run/user/%d/bus", uid)
+	return fmt.Sprintf(`python3 -c '
+import socket, errno, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect(sys.argv[1]); print("bus=connected")
+except OSError as e:
+    print("bus=" + ("denied" if e.errno in (errno.EACCES, errno.EPERM) else "inconclusive:" + str(e.errno)))
+' %s; XDG_RUNTIME_DIR=/run/user/%d DBUS_SESSION_BUS_ADDRESS=unix:path=%s systemd-run --user --collect --quiet --unit %s sleep 2 >/dev/null 2>&1 && echo unit=created || echo unit=refused`, bus, uid, bus, sibling)
+}
+
+// signalProbeScript sends signal 0 to pid; signal=denied only on EPERM.
+func signalProbeScript(pid int) string {
+	return fmt.Sprintf(`python3 -c "
+import os, sys
+try:
+    os.kill(int(sys.argv[1]), 0); print('signal=allowed')
+except PermissionError:
+    print('signal=denied')
+except ProcessLookupError:
+    print('signal=nomanager')
+" %d`, pid)
 }
 
 // findChildSleeper returns the pid of the python sleeper descended from

@@ -363,7 +363,19 @@ at all. An operator-only role for these commands is follow-up work.
   a sibling unit outside its cgroup and Landlock domain, and can signal
   same-UID processes. The repair runs workers under a dedicated locked
   account and verifies stops by cgroup emptiness; until re-review passes, no
-  real provider runs on Linux, only the recorded fake.
+  real provider runs on Linux, only the recorded fake. Under a worker account
+  the legacy profile still lets the worker reach its own manager (goodqa#15976);
+  its controls `controlling_worker_manager_unreachable` and
+  `worker_manager_unsignallable` report that and fail. The hold is enforced in
+  code, with exit 3 and nothing started. A provider is real unless its file
+  hashes to a pinned fake (the stdin fake or the recorded `fakeclaude.sh`).
+  `fab daemon` dispatches a real provider only under the worker manager
+  (`FABRIC_LINUX_WORKER_MANAGER=1`), with `FABRIC_WORKER_USER` set, on a
+  systemd that supports it, and never on macOS; a fake-only start re-checks
+  the file at every launch. `--trust-provider` is refused for anything but a
+  pinned fake. `fab mission run` (native) is off except
+  `--unconfined-fake-host`, and `fab harness run` runs only a pinned fake
+  claude and no codex model turn.
 - macOS cannot see the environment of Apple platform binaries; attribution
   uses an inherited descriptor as a second signal, and a platform binary that
   calls `setsid` and closes inherited descriptors is still invisible.

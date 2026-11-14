@@ -111,7 +111,8 @@ func exitCode(err error) int {
 	var ref *store.Refusal
 	var ue usageError
 	var rr reconcileRefused
-	if errors.As(err, &ref) || errors.As(err, &ue) || errors.As(err, &rr) {
+	var rp realProviderRefused
+	if errors.As(err, &ref) || errors.As(err, &ue) || errors.As(err, &rr) || errors.As(err, &rp) {
 		return 3
 	}
 	return 1

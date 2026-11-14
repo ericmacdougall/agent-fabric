@@ -28,6 +28,33 @@ func TestStdinFakePinned(t *testing.T) {
 	}
 }
 
+// goodqa#15976 AC-2: the recorded fake's Go pin, install.sh's FAKE_SHA and
+// the stdin fake's DELEGATE_SHA are one reviewed value, the file's hash.
+func TestRecordedFakePinned(t *testing.T) {
+	got, err := FileSHA256(filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != RecordedFakeSHA256 {
+		t.Fatalf("RecordedFakeSHA256 is %s; fakeclaude.sh hashes to %s", RecordedFakeSHA256, got)
+	}
+	for file, prefix := range map[string]string{
+		filepath.Join("..", "..", "tools", "fabd-install", "install.sh"):        "FAKE_SHA=",
+		filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude-stdin.sh"): "DELEGATE_SHA=",
+	} {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), "\n"+prefix+RecordedFakeSHA256+"\n") {
+			t.Errorf("%s has no line %s%s", file, prefix, RecordedFakeSHA256)
+		}
+	}
+	if !PinnedFake(StdinFakeSHA256) || !PinnedFake(RecordedFakeSHA256) || PinnedFake("") || PinnedFake(strings.Repeat("0", 64)) {
+		t.Error("PinnedFake accepts exactly the two pins")
+	}
+}
+
 var forbiddenImports = map[string]bool{"os/exec": true, "syscall": true, "golang.org/x/sys/unix": true}
 
 // noExecProblems lists process-start routes in the non-test Go files of dir.

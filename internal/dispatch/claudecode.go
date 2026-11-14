@@ -19,6 +19,20 @@ import (
 // provider file with this hash. TestStdinFakePinned keeps it equal to the file.
 const StdinFakeSHA256 = "d72cc2aea59c6cc19de5e3ba278d3ee1e3a53ee2424a6dd8f563c2aa70788684"
 
+// RecordedFakeSHA256 is the reviewed sha256 of tools/fakeclaude/fakeclaude.sh,
+// the recorded argv fake (installed as fakeclaude-live). The same pin is
+// FAKE_SHA in tools/fabd-install/install.sh and DELEGATE_SHA in the stdin
+// fake; TestRecordedFakePinned keeps all four equal. With StdinFakeSHA256
+// it is the only provider identity a host without a demonstrated worker
+// boundary may launch (goodqa#15976 AC-2).
+const RecordedFakeSHA256 = "50d4f1d864de7b2b2ab38808d4414a3adf8a2c4b0fc0047571bdb515689d5285"
+
+// PinnedFake reports whether sha is a reviewed fake provider's sha256.
+// Anything else, including a file renamed to look like a fake, is real.
+func PinnedFake(sha string) bool {
+	return sha == StdinFakeSHA256 || sha == RecordedFakeSHA256
+}
+
 // ClaudeCode is the claude-code dispatcher. Plan uses claude.StreamArgv, so
 // the prompt travels on stdin and in no argv element. Settle is the body
 // today's scheduler settled every claude-code stream with.

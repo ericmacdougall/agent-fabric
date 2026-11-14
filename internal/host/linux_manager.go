@@ -990,21 +990,25 @@ for label, target in (("abstract", sys.argv[1]), ("nonstandard", sys.argv[2])):
 		fmt.Sprintf("%d/%d manager attempts denied; %s", denied, attempts, res))
 	add("abstract_and_nonstandard_unix_sockets_denied", strings.Contains(res, "abstract_unix=denied") && strings.Contains(res, "nonstandard_unix=denied"), res)
 
-	// 9. A foreign same-UID process cannot be signalled.
-	res, _, err = l.runControl(g, fmt.Sprintf(`MGR=$(pgrep -u %d -x systemd | head -1); python3 -c "`, os.Getuid())+`
-import os, sys
-try:
-    os.kill(int(sys.argv[1]), 0); print('signal=allowed')
-except PermissionError:
-    print('signal=denied')
-except ProcessLookupError:
-    print('signal=nomanager')
-" "$MGR"`)
-	if err != nil {
-		return out, err
-	}
-	add("controlling_user_process_unsignallable", strings.Contains(res, "signal=denied"), res+" (fails on a same-UID host: Landlock signal scoping needs ABI 6; passes under a dedicated worker uid)")
+	// 9. Processes outside the unit cannot be signalled: the controlling
+	// user's manager and, with a worker account, the worker uid's own manager.
+	out = append(out, l.signalControls(g, workerUID, userManagerPID, l.runControl)...)
 	return out, nil
+}
+
+// signalControls is manager control 9 (goodqa#15976 AC-1, review M3). Inside
+// PrivatePIDs the worker cannot find a pid outside its unit, so the
+// controller supplies each target: the controlling user's manager and, when
+// a worker account is set, the worker uid's own manager, a same-uid process
+// outside the unit. Each passes only on EPERM.
+func (l *LinuxManager) signalControls(g Grant, workerUID int, managerPID func(int) (int, error), run func(Grant, string) (string, int, error)) []ControlResult {
+	out := []ControlResult{signalControl(g, "controlling_user_process_unsignallable", os.Getuid(), managerPID, run,
+		"passes under a dedicated worker uid or the cross-process filter")}
+	if l.User != "" {
+		out = append(out, signalControl(g, "worker_manager_unsignallable", workerUID, managerPID, run,
+			"a same-uid process outside the unit; passes only under the cross-process filter"))
+	}
+	return out
 }
 
 // mgrFindChildSleeper returns the pid of the python sleeper descended from
@@ -1069,6 +1073,11 @@ func parseSystemdVersion(out string) (int, bool) {
 	}
 	return v, true
 }
+
+// CheckSupport is checkManagerSupport for callers that must refuse before
+// anything starts (goodqa#15976 AC-2): it reads the systemd version only and
+// never launches a unit.
+func (l *LinuxManager) CheckSupport() error { return l.checkManagerSupport() }
 
 // checkManagerSupport refuses before any unit starts when systemd is too old
 // for PrivatePIDs, or when its version cannot be read (fail closed).

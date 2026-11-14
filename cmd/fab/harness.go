@@ -151,6 +151,10 @@ func harnessRunMain(args []string) error {
 	default:
 		return usageErr(fmt.Sprintf("--adapter %q is not wired into fab harness run (native, claude-code)", *adapter))
 	}
+	// goodqa#15976 AC-2: refused before the event file or any process.
+	if err := harnessProviderGate(*adapter, *claudeBin, *codexRun, *fake); err != nil {
+		return err
+	}
 	extra, secrets, err := parsePassEnv(*passEnv)
 	if err != nil {
 		return err

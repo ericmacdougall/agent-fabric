@@ -60,7 +60,26 @@ func TestNegativeControls(t *testing.T) {
 	// namespace, a dedicated worker account or Landlock ABI 6 (review C1):
 	// they must be reported as failing, and Capabilities must say so.
 	expectedToFail := map[string]bool{"controlling_user_manager_unreachable": true, "controlling_user_process_unsignallable": true}
-	if os.Getenv("FABRIC_EXPECT_CONTAINMENT") != "" || os.Getenv("FABRIC_WORKER_USER") != "" {
+	if os.Getenv("FABRIC_WORKER_USER") != "" {
+		// goodqa#15976 (review C1): under a worker account the operator's
+		// boundaries hold, but the legacy Linux profile does not deny the
+		// worker its own manager's bus or process. Those controls must be
+		// present, and they are expected to fail there.
+		expectedToFail = map[string]bool{}
+		if runtime.GOOS == "linux" {
+			expectedToFail = map[string]bool{"controlling_worker_manager_unreachable": true, "worker_manager_unsignallable": true}
+			ran := map[string]bool{}
+			for _, r := range results {
+				ran[r.Name] = true
+			}
+			for n := range expectedToFail {
+				if !ran[n] {
+					t.Errorf("worker-uid control %s did not run", n)
+				}
+			}
+		}
+	}
+	if os.Getenv("FABRIC_EXPECT_CONTAINMENT") != "" {
 		expectedToFail = nil
 	}
 	var failed, unexpected []string

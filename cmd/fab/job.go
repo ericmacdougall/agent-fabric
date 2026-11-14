@@ -146,6 +146,22 @@ func daemonMain(args []string) error {
 	}
 	os.Setenv("FABRIC_WORKER_USER", *workerUser)
 	os.Setenv("FABRIC_RUNNER_DSN_ENV", *runnerDSNEnv) // its port joins the worker's TCP allow-list (goodqa#15161)
+	// goodqa#15976 AC-2, AC-3: a real provider (any file that does not hash
+	// to a pinned fake) needs the Linux worker manager, a worker account and
+	// a supporting systemd, and --trust-provider is honoured only for a
+	// pinned fake. Checked before anything is written and before any control
+	// starts a unit; a fake-only start re-checks the file at every launch.
+	gateProfile, err := profileForThisHost()
+	if err != nil {
+		return err
+	}
+	fakeOnly, err := daemonProviderGate(*noDispatch, *trustProvider, dp.Path, gateProfile)
+	if err != nil {
+		return err
+	}
+	if fakeOnly {
+		dp.Launch.Resolve = pinnedFakeResolve(dp.Launch.Resolve)
+	}
 	// The schema is written before the profile and the controls, so the
 	// launch_inputs_readable control sees the file a real launch reads.
 	// The controls used to create the work root (0775, like controlGrant);
