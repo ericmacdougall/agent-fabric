@@ -93,8 +93,12 @@ type Bound struct {
 	// straddles it with fewer than 8 secret bytes) is the public literal
 	// (owner ruling 2026-11-14, agent ad1ff08b576984a4d). Coverage is
 	// unchanged: every token window is still redacted.
-	secGrams map[uint64]struct{}
-	secAlnum map[uint64]struct{}
+	// The window length is the encoded length of 8 secret bytes in that
+	// form (SecretWindow): 8 for raw, JSON and URL forms, 11 for base64, 16
+	// for hex. An 8-character hex window is only 4 bytes and matched random
+	// hex ids in clean text (goodqa#16040 corpus 2 at b19789e: 5 of 4000).
+	secWin   map[int]map[string]struct{} // by length, normalised forms
+	secAlnum map[int]map[string]struct{} // by length, alnum-stripped forms
 	tokLabel string
 }
 
@@ -120,7 +124,7 @@ func NewBound(token Secret, others ...Secret) (*Bound, error) {
 		return nil, err
 	}
 	b := &Bound{token: token, grams: map[uint64]struct{}{}, alnum: map[uint64]struct{}{},
-		secGrams: map[uint64]struct{}{}, secAlnum: map[uint64]struct{}{}, filter: make([]uint64, 1<<14)}
+		secWin: map[int]map[string]struct{}{}, secAlnum: map[int]map[string]struct{}{}, filter: make([]uint64, 1<<14)}
 	b.addSecret(token.value, len(PublicPrefix(token.value)))
 	b.tokLabel = string(token.kind) + ":" + token.version
 	for _, o := range others {
@@ -182,22 +186,45 @@ func (b *Bound) addSecret(v []byte, pre int) {
 			src = v[(pre+2)/3*3:]
 		}
 		enc := Encode(f, src)
+		l := SecretWindow(f)
+		if b.secWin[l] == nil {
+			b.secWin[l], b.secAlnum[l] = map[string]struct{}{}, map[string]struct{}{}
+		}
 		for _, n := range AllNorms {
 			p := NormalizeBytes(n, enc)
-			for i := 0; i+GramLen <= len(p); i++ {
-				b.secGrams[binary.BigEndian.Uint64(p[i:])] = struct{}{}
+			for i := 0; i+l <= len(p); i++ {
+				b.secWin[l][string(p[i:i+l])] = struct{}{}
 			}
 		}
 		st := stripAlnum(enc)
-		for i := 0; i+GramLen <= len(st); i++ {
-			b.secAlnum[binary.BigEndian.Uint64(st[i:])] = struct{}{}
+		for i := 0; i+l <= len(st); i++ {
+			b.secAlnum[l][string(st[i:i+l])] = struct{}{}
 		}
 	}
 }
 
-func (b *Bound) isSecretGram(w []byte) bool {
-	_, ok := b.secGrams[binary.BigEndian.Uint64(w)]
-	return ok
+// SecretWindow is the encoded length of GramLen (8) secret bytes in form f.
+func SecretWindow(f Form) int {
+	switch f {
+	case FormHexLower, FormHexUpper:
+		return 2 * GramLen
+	case FormB64, FormB64URL:
+		return (4*GramLen + 2) / 3
+	}
+	return GramLen
+}
+
+// secretAt reports a window of 8 or more secret bytes, in some form,
+// starting at s[i].
+func secretAt(sets map[int]map[string]struct{}, s []byte, i int) bool {
+	for l, set := range sets {
+		if i+l <= len(s) {
+			if _, ok := set[string(s[i:i+l])]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func gramHash(g uint64) uint64 { return (g * 0x9E3779B97F4A7C15) >> 44 }
@@ -271,7 +298,7 @@ func (b *Bound) ScanTextExcluding(text string, exclusions []string) (hit bool, c
 		norm := NormalizeBytes(n, raw)
 		for i := 0; i+GramLen <= len(norm); i++ {
 			if w := norm[i : i+GramLen]; b.hasGram(w) {
-				if b.isSecretGram(w) {
+				if secretAt(b.secWin, norm, i) {
 					return true, ClassFragment
 				}
 				public = true
@@ -282,7 +309,7 @@ func (b *Bound) ScanTextExcluding(text string, exclusions []string) (hit bool, c
 	for i := 0; i+GramLen <= len(st); i++ {
 		g := binary.BigEndian.Uint64(st[i:])
 		if _, ok := b.alnum[g]; ok {
-			if _, sec := b.secAlnum[g]; sec {
+			if secretAt(b.secAlnum, st, i) {
 				return true, ClassFragment
 			}
 			public = true

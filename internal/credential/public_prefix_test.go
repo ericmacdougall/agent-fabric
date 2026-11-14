@@ -2,6 +2,8 @@ package credential
 
 import (
 	"bytes"
+	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -67,5 +69,33 @@ func TestSecretFragmentIsAnExposure(t *testing.T) {
 	}
 	if hit, class := b.ScanText("note " + string(secret[20:28]) + " end"); !hit || class != ClassFragment {
 		t.Fatalf("secret fragment class %q", class)
+	}
+}
+
+// goodqa#16040 corpus 2 at b19789e: a random hex id that shares one
+// 8-character window (4 bytes) with the token's hex form is not an
+// exposure; 8 secret bytes in hex (16 characters) are. The id is still
+// rewritten where it matches, and it never blocks.
+func TestHexWindowNeedsEightSecretBytes(t *testing.T) {
+	tok := synthToken(t, 108)
+	b := testBound(t, tok)
+	secret := tok[len(PublicPrefix(tok)):]
+	hx := []byte(hex.EncodeToString(secret))
+	for name, c := range map[string]struct {
+		text    string
+		exposed bool
+	}{
+		"4 secret bytes inside a hex id": {"\"id\":\"toolu_1e5cf454" + string(hx[40:48]) + "c8a869c8\"", false},
+		"7 secret bytes in hex":          {"sum " + string(hx[40:54]) + " ok", false},
+		"8 secret bytes in hex":          {"sum " + string(hx[40:56]) + " ok", true},
+		"8 secret bytes in HEX":          {"sum " + strings.ToUpper(string(hx[40:56])) + " ok", true},
+	} {
+		r := b.Redact(jsonLine(c.text), nil)
+		if r.Exposed() != c.exposed || r.Blocked != "" {
+			t.Errorf("%s: exposed=%v blocked=%q labels=%v", name, r.Exposed(), r.Blocked, SortedLabels(r.Counts))
+		}
+		if hit, class := b.ScanText(c.text); !hit || (class == ClassFragment) != c.exposed {
+			t.Errorf("%s: comment scan hit=%v class=%q", name, hit, class)
+		}
 	}
 }

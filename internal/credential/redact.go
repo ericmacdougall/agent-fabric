@@ -132,7 +132,7 @@ func (b *Bound) mark(src []byte, counts map[string]int) []bool {
 					run, secret = i, false
 				}
 				end = i + GramLen
-				if b.isSecretGram(w) {
+				if secretAt(b.secWin, norm, i) {
 					secret = true
 				}
 			}
