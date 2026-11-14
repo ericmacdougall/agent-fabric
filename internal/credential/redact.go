@@ -329,7 +329,8 @@ func tokens(s []byte) ([]string, error) {
 // RedactStreams reads the attempt's raw streams (at most MaxStreamRead each)
 // and writes the redacted copies, mode 0600, as outDir/stream.jsonl and
 // outDir/stderr.log (O_EXCL, fsync). Settle, usage capture, events and the
-// comment read only these copies.
+// comment read only these copies. When the result is Blocked it writes
+// nothing.
 func (b *Bound) RedactStreams(rawStdout, rawStderr, outDir string) (RedactResult, error) {
 	so, t1, err := readCapped(rawStdout)
 	if err != nil {
@@ -341,6 +342,12 @@ func (b *Bound) RedactStreams(rawStdout, rawStderr, outDir string) (RedactResult
 	}
 	res := b.Redact(so, se)
 	res.Truncated = t1 || t2
+	if res.Blocked != "" {
+		// AC-15: a blocked delivery publishes nothing, so no copy exists for
+		// settle, usage capture, events or the comment to read; the raw
+		// streams stay, unpublished, for the operator.
+		return res, nil
+	}
 	for name, data := range map[string][]byte{"stream.jsonl": res.Stdout, "stderr.log": res.Stderr} {
 		if err := writeExcl(filepath.Join(outDir, name), data); err != nil {
 			return res, fmt.Errorf("redact: write %s: %w", name, err)

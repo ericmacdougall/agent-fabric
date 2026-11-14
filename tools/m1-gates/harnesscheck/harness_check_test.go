@@ -16,7 +16,8 @@ import (
 // optionally writes a transcript or echoes the token, and prints stream-json.
 func fakeClaude(scrub, transcript, echoToken bool) string {
 	s := "#!/bin/bash\n"
-	s += "if touch ./w 2>/dev/null; then echo writable >&2; exit 3; fi\n"
+	// Root can write a 0555 directory, so the check only holds for non-root.
+	s += "if [ \"$(id -u)\" != 0 ] && touch ./w 2>/dev/null; then echo writable >&2; exit 3; fi\n"
 	if scrub {
 		s += "out=$(env -u CLAUDE_CODE_OAUTH_TOKEN ./probe.sh)\n"
 	} else {

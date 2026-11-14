@@ -76,6 +76,9 @@ func TestSettleSubmitFailsClosed(t *testing.T) {
 		if calls != 0 || !errors.Is(err, ErrDeliveryBlocked) {
 			t.Fatalf("calls=%d err=%v", calls, err)
 		}
+		if ents, _ := os.ReadDir(out); len(ents) != 0 {
+			t.Fatalf("%d redacted copies published on a blocked delivery", len(ents))
+		}
 	})
 }
 

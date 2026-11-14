@@ -41,7 +41,7 @@ got=$(sha256sum "$CLAUDE" 2>/dev/null | cut -d' ' -f1)
 RUN=$(mktemp -d "${TMPDIR:-/tmp}/fab-harness-check.XXXXXX") || exit 2
 cleanup() { [ "$KEEP" = 1 ] || { chmod -R u+w "$RUN" 2>/dev/null; rm -rf "$RUN"; }; }
 trap cleanup EXIT
-mkdir -p "$RUN/claude-config" "$RUN/home" "$RUN/wt" "$RUN/tmp"
+mkdir -p "$RUN/claude-config" "$RUN/home" "$RUN/wt" "$RUN/tmp" "$RUN/cache" "$RUN/config/git"
 cat > "$RUN/wt/probe.sh" <<'EOF'
 #!/bin/sh
 if [ -n "${CLAUDE_CODE_OAUTH_TOKEN+x}" ]; then echo TOKEN_VAR_PRESENT; else echo TOKEN_VAR_ABSENT; fi
@@ -49,8 +49,12 @@ EOF
 echo "harness check canary" > "$RUN/wt/README"
 chmod 0555 "$RUN/wt/probe.sh"; chmod 0444 "$RUN/wt/README"; chmod 0555 "$RUN/wt"
 
-# The claude process gets exactly the AC-14 environment plus the token, read
-# from the file inside the subshell (never argv).
+# The claude process gets the production launch environment
+# (internal/provider/claude/launch.go Argv, host/linux_manager.go TMPDIR and
+# credential.ClaudeEnv: the AC-14 fixed variables and a per-run HOME) plus
+# the token, read from the file inside the subshell (never argv). Like the
+# production argv it passes no --no-session-persistence: whether a
+# transcript is written is what check 2 measures.
 (
   cd "$RUN/wt" || exit 2
   for v in $(compgen -e); do
@@ -59,18 +63,19 @@ chmod 0555 "$RUN/wt/probe.sh"; chmod 0444 "$RUN/wt/README"; chmod 0555 "$RUN/wt"
   export LANG=${LANG:-C.UTF-8} HOME="$RUN/home" TMPDIR="$RUN/tmp" CLAUDE_CONFIG_DIR="$RUN/claude-config" \
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 CLAUDE_CODE_SKIP_PROMPT_HISTORY=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 \
-    DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_CLAUDE_MDS=1
+    DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 \
+    XDG_CACHE_HOME="$RUN/cache" XDG_CONFIG_HOME="$RUN/config" GIT_CONFIG_GLOBAL="$RUN/config/git/config"
   IFS= read -r CLAUDE_CODE_OAUTH_TOKEN < "$TOKEN_FILE" || [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]
   export CLAUDE_CODE_OAUTH_TOKEN
   exec "$CLAUDE" -p "Run ./probe.sh with the Bash tool, then reply with exactly its output." \
-    --output-format stream-json --verbose --max-turns 3 --setting-sources "" \
+    --output-format stream-json --verbose --max-turns 3 --exclude-dynamic-system-prompt-sections --setting-sources "" \
     --tools Bash --allowedTools "Bash(./probe.sh)" --permission-mode default
 ) > "$RUN/stream.jsonl" 2> "$RUN/stderr.log"
 code=$?
 
 present=$(grep -c TOKEN_VAR_PRESENT "$RUN/stream.jsonl" "$RUN/stderr.log" | awk -F: '{s+=$2} END {print s+0}')
 absent=$(grep -c TOKEN_VAR_ABSENT "$RUN/stream.jsonl" | awk -F: '{s+=$NF} END {print s+0}')
-transcripts=$(find "$RUN/claude-config" -type f \( -name '*.jsonl' -o -path '*/projects/*' -o -path '*/transcripts/*' \) | wc -l | tr -d ' ')
+transcripts=$(find "$RUN/claude-config" "$RUN/home" -type f \( -name '*.jsonl' -o -path '*/projects/*' -o -path '*/transcripts/*' \) | wc -l | tr -d ' ')
 result=$(grep '"type":"result"' "$RUN/stream.jsonl" | tail -1)
 ok_result=0
 case "$result" in *'"subtype":"success"'*'"is_error":false'*|*'"is_error":false'*'"subtype":"success"'*) ok_result=1 ;; esac
