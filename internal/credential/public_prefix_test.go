@@ -33,7 +33,10 @@ func TestPublicPrefixIsNotAnExposure(t *testing.T) {
 }
 
 func TestSecretFragmentIsAnExposure(t *testing.T) {
-	tok := synthToken(t, 108)
+	// The secret part starts after 20 random bytes with a punctuated run:
+	// "Ab-cD_eF" has only 6 alphanumerics (the t2-dev failure of 6952bcc).
+	tok := append(synthToken(t, 33), []byte("Ab-cD_eF")...)
+	tok = append(tok, synthToken(t, 80)[13:]...)
 	b := testBound(t, tok)
 	secret := tok[len(PublicPrefix(tok)):]
 	for name, text := range map[string]string{

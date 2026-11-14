@@ -263,8 +263,22 @@ func (b *Bound) ScanTextExcluding(text string, exclusions []string) (hit bool, c
 	if highEntropyRun(text, exclusions) {
 		return true, ClassEntropy
 	}
-	st := stripAlnum(raw)
+	// Raw fragment windows, as redaction counts them: an 8-byte fragment
+	// that holds '-' or '_' has fewer than 8 alphanumerics, so the
+	// alnum-stripped check below alone would miss it.
 	public := false
+	for _, n := range AllNorms {
+		norm := NormalizeBytes(n, raw)
+		for i := 0; i+GramLen <= len(norm); i++ {
+			if w := norm[i : i+GramLen]; b.hasGram(w) {
+				if !b.isPublicGram(w) {
+					return true, ClassFragment
+				}
+				public = true
+			}
+		}
+	}
+	st := stripAlnum(raw)
 	for i := 0; i+GramLen <= len(st); i++ {
 		g := binary.BigEndian.Uint64(st[i:])
 		if _, ok := b.alnum[g]; ok {
