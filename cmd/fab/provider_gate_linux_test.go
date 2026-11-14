@@ -98,23 +98,21 @@ func TestDaemonProviderGateTable(t *testing.T) {
 						eligible := pc.manager && user != "" && pc.supported
 						fakeOnly, err := daemonProviderGate(noDispatch, trust, pv.path, pc.make(user))
 						switch {
-						case trust && !pv.fake:
+						case pv.fake:
+							// (a) whatever the flags: re-checked and sealed per launch.
+							if err != nil || !fakeOnly {
+								t.Fatalf("a pinned fake must start fake-only (sealed per launch), got fakeOnly=%v err=%v", fakeOnly, err)
+							}
+						case trust:
 							// AC-3 / NEG-3: the flag is honoured only for a pinned fake.
 							wantRealProviderRefusal(t, err, name)
 							if !strings.Contains(err.Error(), "--trust-provider") {
 								t.Errorf("refusal does not name --trust-provider: %v", err)
 							}
-						case trust:
-							if err != nil || !fakeOnly {
-								t.Fatalf("a trusted pinned fake must start fake-only (re-checked per launch), got fakeOnly=%v err=%v", fakeOnly, err)
-							}
-						case noDispatch, eligible:
+						case eligible:
+							// (b) a real provider behind the worker boundary.
 							if err != nil || fakeOnly {
-								t.Fatalf("want an unrestricted start, got fakeOnly=%v err=%v", fakeOnly, err)
-							}
-						case pv.fake:
-							if err != nil || !fakeOnly {
-								t.Fatalf("a pinned fake must start fake-only, got fakeOnly=%v err=%v", fakeOnly, err)
+								t.Fatalf("want a real start behind the boundary, got fakeOnly=%v err=%v", fakeOnly, err)
 							}
 						default:
 							wantRealProviderRefusal(t, err, name)
@@ -301,8 +299,8 @@ func TestExitCleanupDefaultsOnForRealProviders(t *testing.T) {
 		wantReal   bool
 	}{
 		{"real provider under the manager", realClaude, false, true},
-		{"pinned fake under the manager", fake, false, true},
-		{"real provider, no-dispatch", realClaude, true, false},
+		{"pinned fake under the manager (sealed, cleanup opt-in)", fake, false, false},
+		{"real provider under the manager, no-dispatch", realClaude, true, true},
 	} {
 		dp := daemonProvider{Path: c.path, Launch: productionLaunch(c.path, "/x", "")}
 		real, err := gateDaemonProvider(&dp, c.noDispatch, false, eligible)

@@ -27,8 +27,8 @@ func wantRealProviderRefusal(t *testing.T, err error, what string) {
 // gate, so this test runs unchanged against 96bc0ad and fails there): on the
 // legacy profile a real provider is refused with exit 3 before the work root
 // exists and before the store is opened, with or without a worker account,
-// and --trust-provider does not lift it. The pinned stdin fake and
-// --no-dispatch get past the gate to the (closed) store.
+// and --trust-provider does not lift it. The pinned fakes (with or without
+// --no-dispatch) get past the gate to the (closed) store.
 func TestDaemonRefusesRealProviderOnLegacyLinux(t *testing.T) {
 	t.Setenv("FABRIC_LINUX_WORKER_MANAGER", "")
 	t.Setenv("FABRIC_WORKER_USER", "")    // daemonMain sets it from --worker-user; restored after

@@ -19,6 +19,11 @@ func TestDarwinRefusesRealProviders(t *testing.T) {
 	if fakeOnly, err := daemonProviderGate(false, false, pinned, nil); err != nil || !fakeOnly {
 		t.Fatalf("the pinned fake: fakeOnly=%v err=%v", fakeOnly, err)
 	}
+	// PR #57 v3 F1: --no-dispatch lifts nothing (the startup control
+	// would execute the provider).
+	if _, err := daemonProviderGate(true, false, "/bin/sh", nil); err == nil {
+		t.Error("--no-dispatch started an unpinned provider on Darwin")
+	}
 	if _, err := daemonProviderGate(false, false, "/bin/sh", nil); err == nil {
 		t.Fatal("a real provider started on macOS")
 	}

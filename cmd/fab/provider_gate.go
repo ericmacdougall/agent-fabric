@@ -34,36 +34,38 @@ func providerIsPinnedFake(path string) bool {
 }
 
 // daemonProviderGate decides whether fabd may start with this provider
-// (goodqa#15976 AC-2, AC-3). A provider is real unless its resolved file
-// hashes to a pinned fake. --trust-provider is honoured only for a pinned
-// fake and is refused otherwise, even with --no-dispatch (it would skip the
-// negative controls). --no-dispatch starts nothing and is otherwise never
-// refused. A real provider needs a profile that passes realProviderGate.
-// fakeOnly reports that the start rests on the provider being a pinned
-// fake: every launch must then re-check the file it resolves, because an
-// update or a repointed symlink could swap in a real binary after the start.
+// (goodqa#15976 AC-2, AC-3). It is total (PR #57 v3 F1): every combination
+// of --no-dispatch, --trust-provider, provider and profile ends in exactly
+// one outcome.
+//
+//	(a) The resolved file hashes to a pinned fake: fakeOnly, and every
+//	    launch runs only a sealed copy of a re-verified pinned fake.
+//	(b) Not a pinned fake, no --trust-provider, and the profile passes
+//	    realProviderGate: a real provider behind the worker boundary.
+//	(c) Anything else is refused with exit 3. --trust-provider is honoured
+//	    only for a pinned fake. --no-dispatch lifts nothing: the startup
+//	    controls still execute the provider (the Darwin --version control).
+//
+// Identity comes from content, never from a name or a flag.
 func daemonProviderGate(noDispatch, trustProvider bool, providerPath string, p host.Profile) (fakeOnly bool, err error) {
-	fake := providerIsPinnedFake(providerPath)
-	if trustProvider && !fake {
-		return false, realProviderRefused{fmt.Sprintf("--trust-provider is honoured only for a pinned fake, and %s does not hash to one", providerPath)}
-	}
-	if noDispatch || trustProvider {
-		return trustProvider, nil
-	}
-	gateErr := realProviderGate(p)
-	if gateErr == nil {
-		return false, nil
-	}
-	if fake {
+	_ = noDispatch // deliberately not an input to the outcome (see above)
+	if providerIsPinnedFake(providerPath) {
 		return true, nil
 	}
-	return false, gateErr
+	if trustProvider {
+		return false, realProviderRefused{fmt.Sprintf("--trust-provider is honoured only for a pinned fake, and %s does not hash to one", providerPath)}
+	}
+	if err := realProviderGate(p); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
-// gateDaemonProvider applies daemonProviderGate to fabd's provider and, for
-// a fake-only start, makes its launch re-check the resolved file at every
-// launch (AC-3), so a binary swapped in after the start is refused. real
-// reports that fabd may dispatch a real provider.
+// gateDaemonProvider applies daemonProviderGate to fabd's provider. For
+// outcome (a) it makes every launch re-check and seal the file it resolves
+// (AC-3), so a binary swapped in after the start is refused and
+// verification and execution use the same bytes. real reports outcome (b):
+// a real provider behind a verified worker boundary.
 func gateDaemonProvider(dp *daemonProvider, noDispatch, trustProvider bool, p host.Profile) (real bool, err error) {
 	fakeOnly, err := daemonProviderGate(noDispatch, trustProvider, dp.Path, p)
 	if err != nil {
@@ -71,8 +73,9 @@ func gateDaemonProvider(dp *daemonProvider, noDispatch, trustProvider bool, p ho
 	}
 	if fakeOnly {
 		dp.Launch.Resolve = pinnedFakeResolve(dp.Launch.Resolve, dp.SealRoot)
+		return false, nil
 	}
-	return !noDispatch && !fakeOnly, nil
+	return true, nil
 }
 
 // daemonExitCleanup (goodqa#15976 AC-5): verified descendant cleanup after
