@@ -21,6 +21,11 @@ func TestPublicPrefixIsNotAnExposure(t *testing.T) {
 		"prefix alone":          string(pre),
 		"prefix without sk-":    "out := []byte(\"sk-\" + \"" + string(pre[3:]) + "\")",
 		"scanner regexp source": "regexp.MustCompile(`^" + string(pre) + "[A-Za-z0-9_-]{67,499}$`)",
+		// The corpus-2 case at ff56c15: prose naming the prefix, then a word
+		// that N_ws joins to it. Here the word starts with the first 7 secret
+		// bytes: a straddle with fewer than 8 secret bytes is the literal.
+		// ')' ends the run: it appears in no token form.
+		"prefix, space, 7 secret bytes": "the prefix (" + string(pre) + " " + string(tok[len(pre):len(pre)+7]) + ") for the AC-17 token",
 	} {
 		r := b.Redact(jsonLine(text), []byte(text+"\n"))
 		if r.Exposed() || r.Counts[LabelLiteral] == 0 || r.Counts[b.tokLabel+":"+LabelFragment] != 0 {

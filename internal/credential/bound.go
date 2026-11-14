@@ -86,12 +86,15 @@ type Bound struct {
 	grams    map[uint64]struct{} // every 8-byte window of every normalised token form
 	filter   []uint64            // a 2^20-bit prefilter over grams
 	alnum    map[uint64]struct{} // AC-10: 8-char windows of alnum-stripped token forms
-	// pubGrams and pubAlnum are the windows that lie wholly inside a form of
-	// the token's public prefix (PublicPrefix). A run made only of them is
-	// the public literal, never a credential exposure (owner ruling
-	// 2026-11-14, agent ad1ff08b576984a4d).
-	pubGrams map[uint64]struct{}
-	pubAlnum map[uint64]struct{}
+	// secGrams and secAlnum are the windows of the forms of the token's
+	// secret part alone (the value after PublicPrefix). Only a run holding
+	// one of them, an 8-byte fragment from the secret part, is a credential
+	// exposure; any other token window (the public prefix, or a window that
+	// straddles it with fewer than 8 secret bytes) is the public literal
+	// (owner ruling 2026-11-14, agent ad1ff08b576984a4d). Coverage is
+	// unchanged: every token window is still redacted.
+	secGrams map[uint64]struct{}
+	secAlnum map[uint64]struct{}
 	tokLabel string
 }
 
@@ -117,8 +120,8 @@ func NewBound(token Secret, others ...Secret) (*Bound, error) {
 		return nil, err
 	}
 	b := &Bound{token: token, grams: map[uint64]struct{}{}, alnum: map[uint64]struct{}{},
-		pubGrams: map[uint64]struct{}{}, pubAlnum: map[uint64]struct{}{}, filter: make([]uint64, 1<<14)}
-	b.addPublic(PublicPrefix(token.value))
+		secGrams: map[uint64]struct{}{}, secAlnum: map[uint64]struct{}{}, filter: make([]uint64, 1<<14)}
+	b.addSecret(token.value, len(PublicPrefix(token.value)))
 	b.tokLabel = string(token.kind) + ":" + token.version
 	for _, o := range others {
 		if o.kind == KindToken {
@@ -169,34 +172,31 @@ var publicPrefixRE = regexp.MustCompile(`^sk-ant-[a-z0-9]{1,16}-`)
 // PublicPrefix returns the public leading part of a token value, or nil.
 func PublicPrefix(v []byte) []byte { return publicPrefixRE.Find(v) }
 
-// addPublic records the windows of every form of the public prefix. Base64
-// forms use only the longest 3-byte-aligned prefix, so no window depends on
-// a secret byte.
-func (b *Bound) addPublic(pre []byte) {
-	if len(pre) == 0 {
-		return
-	}
+// addSecret records the windows of every form of the token's secret part,
+// v[pre:]. Base64 forms start at the next 3-byte boundary, so their windows
+// are exactly the base64 windows of the whole token that hold no prefix bit.
+func (b *Bound) addSecret(v []byte, pre int) {
 	for _, f := range AllForms {
-		src := pre
+		src := v[pre:]
 		if f == FormB64 || f == FormB64URL {
-			src = pre[:len(pre)/3*3]
+			src = v[(pre+2)/3*3:]
 		}
 		enc := Encode(f, src)
 		for _, n := range AllNorms {
 			p := NormalizeBytes(n, enc)
 			for i := 0; i+GramLen <= len(p); i++ {
-				b.pubGrams[binary.BigEndian.Uint64(p[i:])] = struct{}{}
+				b.secGrams[binary.BigEndian.Uint64(p[i:])] = struct{}{}
 			}
 		}
 		st := stripAlnum(enc)
 		for i := 0; i+GramLen <= len(st); i++ {
-			b.pubAlnum[binary.BigEndian.Uint64(st[i:])] = struct{}{}
+			b.secAlnum[binary.BigEndian.Uint64(st[i:])] = struct{}{}
 		}
 	}
 }
 
-func (b *Bound) isPublicGram(w []byte) bool {
-	_, ok := b.pubGrams[binary.BigEndian.Uint64(w)]
+func (b *Bound) isSecretGram(w []byte) bool {
+	_, ok := b.secGrams[binary.BigEndian.Uint64(w)]
 	return ok
 }
 
@@ -271,7 +271,7 @@ func (b *Bound) ScanTextExcluding(text string, exclusions []string) (hit bool, c
 		norm := NormalizeBytes(n, raw)
 		for i := 0; i+GramLen <= len(norm); i++ {
 			if w := norm[i : i+GramLen]; b.hasGram(w) {
-				if !b.isPublicGram(w) {
+				if b.isSecretGram(w) {
 					return true, ClassFragment
 				}
 				public = true
@@ -282,7 +282,7 @@ func (b *Bound) ScanTextExcluding(text string, exclusions []string) (hit bool, c
 	for i := 0; i+GramLen <= len(st); i++ {
 		g := binary.BigEndian.Uint64(st[i:])
 		if _, ok := b.alnum[g]; ok {
-			if _, pub := b.pubAlnum[g]; !pub {
+			if _, sec := b.secAlnum[g]; sec {
 				return true, ClassFragment
 			}
 			public = true
