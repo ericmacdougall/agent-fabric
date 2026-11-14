@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,6 +93,12 @@ func writeFakeClaude(t *testing.T, body string) string {
 	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// goodqa#15976: the harness gate runs only pinned fakes; register this one.
+	sum := sha256.Sum256([]byte("#!/bin/sh\n" + body))
+	if harnessTestPins == nil {
+		harnessTestPins = map[string]bool{}
+	}
+	harnessTestPins[hex.EncodeToString(sum[:])] = true
 	return p
 }
 

@@ -24,8 +24,11 @@ func TestDaemonRegistryConfigFailsFast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := filepath.Join(t.TempDir(), "other-provider")
-	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0o755); err != nil {
+	// The recorded argv fake: a pinned fake for the goodqa#15976 gate, so these
+	// cases reach the checks they name on a Linux host without a worker
+	// boundary, but not the stdin fake registry mode needs.
+	other, err := filepath.Abs(filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude.sh"))
+	if err != nil {
 		t.Fatal(err)
 	}
 	run := func(provider string, extra ...string) error {
@@ -40,8 +43,8 @@ func TestDaemonRegistryConfigFailsFast(t *testing.T) {
 	}{
 		{"registry without trust", pinned, []string{"--dispatch-via", "registry"}, "without --trust-provider"},
 		{"registry with trust and a non-fake provider", other, []string{"--dispatch-via", "registry", "--trust-provider"}, "not the pinned stdin fake"},
-		{"unknown dispatch-via", other, []string{"--dispatch-via", "regsitry", "--trust-provider"}, "unknown dispatch path"},
-		{"negative launch limit", other, []string{"--launch-limit", "-1", "--trust-provider"}, "negative"},
+		{"unknown dispatch-via", pinned, []string{"--dispatch-via", "regsitry", "--trust-provider"}, "unknown dispatch path"},
+		{"negative launch limit", pinned, []string{"--launch-limit", "-1", "--trust-provider"}, "negative"},
 	}
 	for _, c := range refusals {
 		t.Run(c.name, func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -146,22 +147,57 @@ func daemonMain(args []string) error {
 	}
 	os.Setenv("FABRIC_WORKER_USER", *workerUser)
 	os.Setenv("FABRIC_RUNNER_DSN_ENV", *runnerDSNEnv) // its port joins the worker's TCP allow-list (goodqa#15161)
+	// goodqa#15976 AC-2, AC-3: a real provider (any file that does not hash
+	// to a pinned fake) needs the Linux worker manager, a worker account and
+	// a supporting systemd, and --trust-provider is honoured only for a
+	// pinned fake. Checked before anything is written and before any control
+	// starts a unit; a fake-only start re-checks the file at every launch.
+	gateProfile, err := profileForThisHost()
+	if err != nil {
+		return err
+	}
+	realProvider, err := gateDaemonProvider(&dp, *noDispatch, *trustProvider, gateProfile)
+	if err != nil {
+		return err
+	}
 	// The schema is written before the profile and the controls, so the
 	// launch_inputs_readable control sees the file a real launch reads.
-	// The controls used to create the work root (0775, like controlGrant);
-	// the schema is now written first, so create it here (review 716fc04).
-	if err := os.MkdirAll(*workRoot, 0o775); err != nil {
+	// The controls used to create the work root; the schema is now written
+	// first, so create it here (review 716fc04). 0755, not 0775: the sealed
+	// provider copies live under it and every ancestor of them must be
+	// writable only by fabd (goodqa#15976 delta review F1).
+	if err := os.MkdirAll(*workRoot, 0o755); err != nil {
 		return err
 	}
 	if err := os.WriteFile(schemaPath, []byte(checkpointSchema), 0o644); err != nil {
 		return err
 	}
+	// goodqa#15976 F1: the directory of sealed fake copies exists before
+	// any profile is built, so both profiles can grant it read-only.
+	if err := ownedSealDir(dp.SealRoot); err != nil {
+		return err
+	}
+	// Launches exec the resolved path, so the read root is resolved too. A
+	// fake-only daemon refuses at start when another uid could replace a
+	// directory above the seal (delta review F1); each launch checks again.
+	if real, err := filepath.EvalSymlinks(dp.SealRoot); err == nil {
+		dp.SealRoot = real
+	}
+	if !realProvider {
+		if _, err := trustedAncestry(dp.SealRoot); err != nil {
+			return fmt.Errorf("refusing to start (goodqa#15976): %w", err)
+		}
+	}
+	sealedProviderRO = []string{dp.SealRoot}
 	// The read-allow-back and the control use the same start-time
 	// resolution; each launch resolves the name again (productionLaunch),
 	// so an update that repoints the symlink is followed (goodqa#15161
 	// reviews C and N1).
-	darwinLaunchRO = launchInputs(dp.Path, hooksDir, schemaPath)
-	darwinProvider = dp.Path
+	darwinLaunchRO = append(launchInputs(dp.Path, hooksDir, schemaPath), dp.SealRoot)
+	darwinProvider, err = startupControlProvider(&dp, realProvider, runtime.GOOS)
+	if err != nil {
+		return err
+	}
 	ln, err := launcherForThisHost()
 	if err != nil {
 		return err
@@ -213,11 +249,12 @@ func daemonMain(args []string) error {
 		}
 		cfg.Registry = reg
 	}
-	// FABRIC_WORKER_EXIT_CLEANUP=1 (exact; default off) verifies descendant
-	// cleanup after every worker exit before settling. Off by default: on
+	// Verified descendant cleanup after every worker exit before settling:
+	// on by default for a real provider (goodqa#15976 AC-5), otherwise only
+	// with FABRIC_WORKER_EXIT_CLEANUP=1 (exact). Opt-in for the fakes: on
 	// Darwin the Stop signals the exited leader's process group, which
 	// widens a PGID-reuse window until the host profile closes it.
-	cfg.ExitCleanup = os.Getenv("FABRIC_WORKER_EXIT_CLEANUP") == "1"
+	cfg.ExitCleanup = daemonExitCleanup(realProvider)
 	// goodqa#15087 AC-6: the same launch the AC-6 (f) live check runs. It
 	// must stay dp.Launch: the operator's name, re-resolved per launch (N1;
 	// TestDaemonLaunchComesFromDaemonProvider guards this line).
@@ -280,6 +317,9 @@ func resolveStartProvider(provider string) (string, error) {
 type daemonProvider struct {
 	Path   string
 	Launch claude.Launch
+	// SealRoot holds the sealed copies a fake-only start launches
+	// (goodqa#15976 F1): <work root>/pinned-providers, beside the schema.
+	SealRoot string
 }
 
 func newDaemonProvider(operator, schemaPath, hooksDir string) (daemonProvider, error) {
@@ -287,7 +327,23 @@ func newDaemonProvider(operator, schemaPath, hooksDir string) (daemonProvider, e
 	if err != nil {
 		return daemonProvider{}, err
 	}
-	return daemonProvider{Path: p, Launch: productionLaunch(operator, schemaPath, hooksDir)}, nil
+	return daemonProvider{Path: p, Launch: productionLaunch(operator, schemaPath, hooksDir), SealRoot: sealRootFor(schemaPath)}, nil
+}
+
+// startupControlProvider is the binary the Darwin profile's startup control
+// runs with --version. For a fake-only start on Darwin it is the sealed copy
+// that launches will exec (the same Resolve path), so the control never runs
+// unverified bytes (goodqa#15976 PR #57). A real provider never starts on
+// Darwin; elsewhere the value is unused and stays the resolved path.
+func startupControlProvider(dp *daemonProvider, real bool, goos string) (string, error) {
+	if real || goos != "darwin" {
+		return dp.Path, nil
+	}
+	sealed := dp.Launch.Resolve(dp.Launch.Binary)
+	if sealed == "" {
+		return "", realProviderRefused{fmt.Sprintf("the provider %s could not be sealed for the startup control", dp.Path)}
+	}
+	return sealed, nil
 }
 
 // productionLaunch is the launch fabd hands the scheduler. Binary keeps

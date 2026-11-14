@@ -16,7 +16,10 @@ import (
 // database port of fabd's DSN and of the runner DSN the worker actually
 // uses (goodqa#15161 review F9). A postgres URL without a port means 5432;
 // every host of a multi-host URL counts; ports outside 1-65535 are dropped.
-// A unix-socket DSN adds nothing (the sandboxes deny unix sockets).
+// A unix-socket DSN adds no port. That does not make it unreachable: only
+// the worker manager's seccomp filter and RestrictAddressFamilies deny unix
+// sockets; the legacy Linux profile allows any socket that file permissions
+// allow (goodqa#15976), so it never runs a real provider.
 func workerTCPPorts() []int {
 	ports := []int{443}
 	add := func(s string) {

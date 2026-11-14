@@ -72,6 +72,10 @@ func nativeOptions(g native.Grant, fake bool) (result native.Options, rerr error
 		opts.Starter = fakehost.New()
 		opts.Boundary = tools.Boundary{Host: "fake-unconfined", Contained: true}
 	} else {
+		// goodqa#15976 AC-2: off in M1 builds, before the run dir or any control.
+		if err := nativeRunnerGate(); err != nil {
+			return native.Options{}, err
+		}
 		p, err := profileForThisHost()
 		if err != nil {
 			return native.Options{}, err

@@ -41,6 +41,14 @@ chmod 0755 "$bindir/fab"
 export FABRIC_FAB_BIN="$bindir/fab"
 export FABRIC_WORKER_ROOT="$workerroot"
 export FABRIC_HOST_CONTROLS=1
+
+# The legacy profile's controls run without FABRIC_EXPECT_CONTAINMENT, even
+# when the caller exported it: under a worker account that profile cannot
+# deny the worker its own manager (goodqa#15976), so its two worker controls
+# are expected to fail and the test asserts that they ran. Containment is the
+# manager's run below.
+env -u FABRIC_EXPECT_CONTAINMENT "$GO" test ./internal/host -run '^TestNegativeControls$' -count=1 -v
+
 export FABRIC_EXPECT_CONTAINMENT=1
 
 # Native controls cover delayed submission and blocked-manager deadlines,
@@ -48,5 +56,5 @@ export FABRIC_EXPECT_CONTAINMENT=1
 # abstract buses, UDP/DNS, lock replacement, dedicated-worker traversal,
 # mediator cleanup, concurrent Stop and verified failover.
 "$GO" test ./internal/host \
-    -run '^(TestNegativeControls|TestLinuxManagerNegativeControls|TestLinuxRuntimeSerializationCleanupFailover|TestLinuxRuntimeDelayedManagerReadiness|TestLinuxRuntimeDelayedSubmissionCannotEscapeCleanup|TestLinuxRuntimeBlockedManagerReturnsRetryableHandle|TestLinuxRuntimeFastSuccessfulCommand|TestLinuxRuntimeSameUIDProcessAttacksDenied|TestLinuxRuntimeDedicatedWorkerTraversal|TestLinuxRuntimeWorkerCannotReplaceManagerLock)$' \
+    -run '^(TestLinuxManagerNegativeControls|TestLinuxRuntimeSerializationCleanupFailover|TestLinuxRuntimeDelayedManagerReadiness|TestLinuxRuntimeDelayedSubmissionCannotEscapeCleanup|TestLinuxRuntimeBlockedManagerReturnsRetryableHandle|TestLinuxRuntimeFastSuccessfulCommand|TestLinuxRuntimeSameUIDProcessAttacksDenied|TestLinuxRuntimeDedicatedWorkerTraversal|TestLinuxRuntimeWorkerCannotReplaceManagerLock)$' \
     -count=1 -v

@@ -111,7 +111,8 @@ func exitCode(err error) int {
 	var ref *store.Refusal
 	var ue usageError
 	var rr reconcileRefused
-	if errors.As(err, &ref) || errors.As(err, &ue) || errors.As(err, &rr) {
+	var rp realProviderRefused
+	if errors.As(err, &ref) || errors.As(err, &ue) || errors.As(err, &rr) || errors.As(err, &rp) {
 		return 3
 	}
 	return 1
@@ -145,7 +146,7 @@ func usage() {
   control ingest --source NAME         validate mc.event/1 lines on stdin, store in control.ingested_events
   version                              build revision
   harness run --adapter native --grant F --events F   run a native mission through the harness seam; record and check its event trace
-  harness run --adapter codex --codex-preflight --codex-dir D --events F   check Codex feature and profile metadata without starting a thread
+  harness run --adapter codex --codex-preflight --codex-dir D --events F   check Codex feature and profile metadata without starting a thread (refused in M1, goodqa#15976)
   ladder status --state F --policy F [--json]   model ladder from an escalation.py state file (read-only)
   asks [--state open]                  the inbox
   ask new --id I --question Q --source S [--mission M --kind K --option O ...]

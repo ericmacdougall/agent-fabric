@@ -32,6 +32,7 @@ import (
 func newLinuxProfile(self string) host.Profile {
 	home := os.Getenv("HOME")
 	ro := []string{"/usr/local/go", filepath.Join(home, "go", "pkg", "mod"), filepath.Join(home, ".local", "bin"), filepath.Join(home, ".local", "share", "fabric")}
+	ro = append(ro, sealedProviderRO...) // goodqa#15976 F1: the sealed fake copies
 	if os.Getenv("FABRIC_LINUX_WORKER_MANAGER") == "1" {
 		return newLinuxManagerProfile(self, ro)
 	}

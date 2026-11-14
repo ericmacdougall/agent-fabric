@@ -65,6 +65,7 @@ type LinuxManager struct {
 	runLockInfo          os.FileInfo
 	mediator             *egress.Mediator
 	proxyURL             string
+	unitBaseline         map[string]bool                                    // worker manager units loaded before this run (goodqa#15976 AC-4)
 	commandFn            func(context.Context, string, ...string) *exec.Cmd // native controls may delay the manager
 	writeEnvFile         func(string, []string, bool) error                 // deterministic creation faults in unit tests; defaults to WriteEnvFile
 	removeFile           func(string) error                                 // deterministic cleanup faults in unit tests; defaults to os.Remove
@@ -140,7 +141,8 @@ func (l *LinuxManager) startArgsEnvWithPolicy(g Grant, unit, ef string, argv, en
 	// inherits neither this unit's Landlock filesystem rules nor its TCP rules.
 	args := []string{"--user", "--pipe", "--wait", "--collect", "--quiet", "--expand-environment=no", "--unit", unit,
 		"--working-directory=" + g.Worktree, "-p", "KillMode=control-group", "-p", managerInaccessiblePathsProperty(uid), "-p", managerSocketFamilyProperty,
-		"-p", workerPrivatePIDsProperty, "-p", workerProtectProcProperty, "-p", workerProcSubsetProperty}
+		"-p", workerPrivatePIDsProperty, "-p", workerProtectProcProperty, "-p", workerProcSubsetProperty,
+		"-p", workerNoCoreProperty}
 	for _, property := range network.properties {
 		args = append(args, "-p", property)
 	}
@@ -155,7 +157,7 @@ func (l *LinuxManager) startArgsEnvWithPolicy(g Grant, unit, ef string, argv, en
 	// from the validated per-run descriptor; WorkerEnv rejects caller attempts
 	// to inject those names before this trusted set is appended.
 	pairs := append([]string{"HOME=" + os.Getenv("HOME"), "PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8"}, env...)
-	pairs = append(pairs, "FAB_RUN="+g.Token)
+	pairs = append(pairs, "FAB_RUN="+g.Token, "TMPDIR="+mgrRunTmp(g)) // host-owned: appended last
 	pairs, names, err := WorkerEnv(pairs)
 	if err != nil {
 		return nil, nil, err
@@ -171,7 +173,9 @@ func (l *LinuxManager) startArgsEnvWithPolicy(g Grant, unit, ef string, argv, en
 	for _, n := range linuxProxyEnvironmentNames {
 		args = append(args, "-E", n+"=")
 	}
-	rw := []string{g.RunDir, os.TempDir()}
+	// No shared /tmp (review M2, goodqa#15976 AC-5): the run's private
+	// TMPDIR lies inside its run directory, which is already writable.
+	rw := []string{g.RunDir}
 	if g.Profile == "P1" {
 		rw = append(rw, g.Worktree) // review runs cannot write the worktree
 	}
@@ -194,6 +198,34 @@ func (l *LinuxManager) startArgsEnvWithPolicy(g Grant, unit, ef string, argv, en
 	args = append(args, "--")
 	args = append(args, sandbox...)
 	return append(args, argv...), pairs, nil
+}
+
+// workerNoCoreProperty keeps a crashing worker from writing a core file,
+// which would hold its environment and memory (goodqa#15976 AC-5).
+const workerNoCoreProperty = "LimitCORE=0"
+
+// mgrRunTmp is the run's private TMPDIR, inside its fabd-owned run directory.
+func mgrRunTmp(g Grant) string { return filepath.Join(g.RunDir, "tmp") }
+
+// prepareRunTmp creates the run's private TMPDIR, group-shared with the
+// worker (setgid, like run/jobs) and not world-accessible. A non-directory
+// or a symlink planted at that path refuses the start: chmod would follow it.
+func prepareRunTmp(g Grant) error {
+	dir := mgrRunTmp(g)
+	if err := os.Mkdir(dir, 0o770); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("run TMPDIR: %w", err)
+	}
+	st, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("run TMPDIR: %w", err)
+	}
+	if !st.IsDir() {
+		return fmt.Errorf("run TMPDIR %s is not a directory", dir)
+	}
+	if err := os.Chmod(dir, 0o770|os.ModeSetgid); err != nil {
+		return fmt.Errorf("run TMPDIR: %w", err)
+	}
+	return nil
 }
 
 // mgrEnvFile is where a run's environment waits for `fab __sandbox`. The trusted
@@ -333,6 +365,16 @@ func (l *LinuxManager) StartIO(g Grant, argv []string, env []string, stdin, stdo
 	if err := assertNoAbandonedRuns(uid); err != nil {
 		return Handle{}, err
 	}
+	// goodqa#15976 AC-4: the worker manager's units before this run. Stop
+	// refuses verification while any unit the run added remains, timers and
+	// paths included: they hold no process until they fire.
+	baseline, err := l.workerUnits()
+	if err != nil {
+		return Handle{}, fmt.Errorf("worker manager unit baseline: %w", err)
+	}
+	if err := prepareRunTmp(g); err != nil {
+		return Handle{}, err
+	}
 	var policy *egress.PolicyDescriptor
 	if l.EgressConfig != nil {
 		mediator, err = egress.Start(context.Background(), *l.EgressConfig)
@@ -360,6 +402,7 @@ func (l *LinuxManager) StartIO(g Grant, argv []string, env []string, stdin, stdo
 	l.active = h
 	l.launcher = nil
 	l.mgrEnvFile = ef
+	l.unitBaseline = baseline
 	l.mediator = mediator
 	l.proxyURL = ""
 	if mediator != nil {
@@ -647,15 +690,9 @@ func (l *LinuxManager) Stop(h Handle, reason string, grace time.Duration) (StopR
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	if err := l.stopAndVerifyUnit(h); err != nil {
-		return finish(fmt.Errorf("stop %s: late-unit cleanup: %w", h.Run, err))
-	}
-	rc.Survivors, err = l.Inventory(h)
+	rc.Survivors, err = l.verifyStopped(h)
 	if err != nil {
-		return finish(fmt.Errorf("stop %s: final inventory: %w", h.Run, err))
-	}
-	if len(rc.Survivors) != 0 {
-		return finish(fmt.Errorf("stop %s: %d survivors", h.Run, len(rc.Survivors)))
+		return finish(err)
 	}
 	if err := l.releaseRunLocked(); err != nil {
 		rc.Verified = false
@@ -990,21 +1027,25 @@ for label, target in (("abstract", sys.argv[1]), ("nonstandard", sys.argv[2])):
 		fmt.Sprintf("%d/%d manager attempts denied; %s", denied, attempts, res))
 	add("abstract_and_nonstandard_unix_sockets_denied", strings.Contains(res, "abstract_unix=denied") && strings.Contains(res, "nonstandard_unix=denied"), res)
 
-	// 9. A foreign same-UID process cannot be signalled.
-	res, _, err = l.runControl(g, fmt.Sprintf(`MGR=$(pgrep -u %d -x systemd | head -1); python3 -c "`, os.Getuid())+`
-import os, sys
-try:
-    os.kill(int(sys.argv[1]), 0); print('signal=allowed')
-except PermissionError:
-    print('signal=denied')
-except ProcessLookupError:
-    print('signal=nomanager')
-" "$MGR"`)
-	if err != nil {
-		return out, err
-	}
-	add("controlling_user_process_unsignallable", strings.Contains(res, "signal=denied"), res+" (fails on a same-UID host: Landlock signal scoping needs ABI 6; passes under a dedicated worker uid)")
+	// 9. Processes outside the unit cannot be signalled: the controlling
+	// user's manager and, with a worker account, the worker uid's own manager.
+	out = append(out, l.signalControls(g, workerUID, userManagerPID, l.runControl)...)
 	return out, nil
+}
+
+// signalControls is manager control 9 (goodqa#15976 AC-1, review M3). Inside
+// PrivatePIDs the worker cannot find a pid outside its unit, so the
+// controller supplies each target: the controlling user's manager and, when
+// a worker account is set, the worker uid's own manager, a same-uid process
+// outside the unit. Each passes only on EPERM.
+func (l *LinuxManager) signalControls(g Grant, workerUID int, managerPID func(int) (int, error), run func(Grant, string) (string, int, error)) []ControlResult {
+	out := []ControlResult{signalControl(g, "controlling_user_process_unsignallable", os.Getuid(), managerPID, run,
+		"passes under a dedicated worker uid or the cross-process filter")}
+	if l.User != "" {
+		out = append(out, signalControl(g, "worker_manager_unsignallable", workerUID, managerPID, run,
+			"a same-uid process outside the unit; passes only under the cross-process filter"))
+	}
+	return out
 }
 
 // mgrFindChildSleeper returns the pid of the python sleeper descended from
@@ -1069,6 +1110,11 @@ func parseSystemdVersion(out string) (int, bool) {
 	}
 	return v, true
 }
+
+// CheckSupport is checkManagerSupport for callers that must refuse before
+// anything starts (goodqa#15976 AC-2): it reads the systemd version only and
+// never launches a unit.
+func (l *LinuxManager) CheckSupport() error { return l.checkManagerSupport() }
 
 // checkManagerSupport refuses before any unit starts when systemd is too old
 // for PrivatePIDs, or when its version cannot be read (fail closed).
