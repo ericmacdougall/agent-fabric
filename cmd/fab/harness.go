@@ -7,8 +7,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -85,6 +85,10 @@ func parsePassEnv(list string) (env map[string]string, secrets []string, err err
 	return env, secrets, nil
 }
 
+// harnessAfterGate runs between the provider gate and the run; tests use
+// it to change the provider file after verification.
+var harnessAfterGate = func() {}
+
 func harnessRunMain(args []string) error {
 	fs := flag.NewFlagSet("harness run", flag.ContinueOnError)
 	adapter := fs.String("adapter", "", "harness adapter (native, claude-code, codex preflight)")
@@ -151,10 +155,14 @@ func harnessRunMain(args []string) error {
 	default:
 		return usageErr(fmt.Sprintf("--adapter %q is not wired into fab harness run (native, claude-code)", *adapter))
 	}
-	// goodqa#15976 AC-2: refused before the event file or any process.
-	if err := harnessProviderGate(*adapter, *claudeBin, *codexRun, *fake); err != nil {
+	// goodqa#15976 AC-2: refused before the event file or any process. The
+	// claude-code run executes only the sealed copy the gate returns.
+	sealedClaude, sealCleanup, err := harnessProviderGate(*adapter, *claudeBin, *codexRun, *fake)
+	if err != nil {
 		return err
 	}
+	defer sealCleanup()
+	harnessAfterGate()
 	extra, secrets, err := parsePassEnv(*passEnv)
 	if err != nil {
 		return err
@@ -177,7 +185,7 @@ func harnessRunMain(args []string) error {
 	} else if *adapter == "native" {
 		runErr = runNative(sctx, *grantFile, *fake, out)
 	} else {
-		runErr = runClaudeCode(sctx, *claudeBin, *model, *prompt, *input, extra, red, *cancelInput, *wait, out)
+		runErr = runClaudeCode(sctx, sealedClaude, *model, *prompt, *input, extra, red, *cancelInput, *wait, out)
 	}
 	if cerr := sink.Close(); cerr != nil && runErr == nil {
 		runErr = cerr
@@ -219,10 +227,12 @@ func runNative(sctx context.Context, grantFile string, fake bool, sink harness.S
 // Input with an already-cancelled context (it must be refused), a real second
 // Input, an Interrupt, and a Stop. The child's environment is PATH, HOME and
 // the allow-listed variables named by --pass-env.
-func runClaudeCode(sctx context.Context, bin, model, prompt, input string, extra map[string]string, red harness.Redactor, cancelInput bool, wait time.Duration, sink harness.Sink) error {
-	path, err := exec.LookPath(bin)
-	if err != nil {
-		return fmt.Errorf("claude executable: %w", err)
+//
+// path is the sealed copy harnessProviderGate returned; it is executed as
+// is and never looked up again (PR #57 review F1).
+func runClaudeCode(sctx context.Context, path, model, prompt, input string, extra map[string]string, red harness.Redactor, cancelInput bool, wait time.Duration, sink harness.Sink) error {
+	if !filepath.IsAbs(path) {
+		return errors.New("claude executable: not the gate's sealed copy")
 	}
 	dir, err := os.MkdirTemp("", "fab-harness-")
 	if err != nil {

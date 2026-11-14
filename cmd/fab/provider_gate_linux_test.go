@@ -165,6 +165,12 @@ func TestHarnessProviderGate(t *testing.T) {
 	dir := t.TempDir()
 	stdinFake := filepath.Join(dir, "fakeclaude-stdin")
 	copyFile(t, filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude-stdin.sh"), stdinFake)
+	// The gate seals the stdin fake with its verified delegate, so a stdin
+	// fake needs the recorded fake beside it (and one without is refused).
+	loneDir := t.TempDir()
+	loneStdin := filepath.Join(loneDir, "fakeclaude-stdin")
+	copyFile(t, filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude-stdin.sh"), loneStdin)
+	copyFile(t, filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude.sh"), filepath.Join(dir, "fakeclaude-live"))
 	realClaude := filepath.Join(dir, "claude")
 	if err := os.WriteFile(realClaude, []byte("#!/bin/sh\necho real\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -178,10 +184,12 @@ func TestHarnessProviderGate(t *testing.T) {
 		{"claude-code real", "claude-code", realClaude, false, false, false},
 		{"claude-code missing", "claude-code", filepath.Join(dir, "none"), false, false, false},
 		{"claude-code pinned fake", "claude-code", stdinFake, false, false, true},
+		{"claude-code stdin fake without its delegate", "claude-code", loneStdin, false, false, false},
 		{"codex run", "codex", "claude", true, false, false},
 		{"codex preflight", "codex", "claude", false, false, true},
 	} {
-		err := harnessProviderGate(c.adapter, c.bin, c.codexRun, c.fake)
+		_, cleanup, err := harnessProviderGate(c.adapter, c.bin, c.codexRun, c.fake)
+		cleanup()
 		if c.want {
 			if err != nil {
 				t.Errorf("%s: refused: %v", c.name, err)

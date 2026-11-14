@@ -95,23 +95,51 @@ func nativeRunnerGate() error {
 // claude-code adapter runs its binary unconfined, so only a pinned fake
 // runs; a codex model turn (--codex-run) is a real provider and is refused;
 // the codex preflight runs no model turn; native is nativeRunnerGate.
-func harnessProviderGate(adapter, claudeBin string, codexRun, unconfinedFake bool) error {
+//
+// For claude-code it returns the absolute path of a sealed copy of the
+// verified bytes (and the stdin fake's verified delegate) in a fresh
+// private directory, and a cleanup that removes it. The run executes that
+// copy and never resolves the name again, so replacing the original file
+// or repointing its symlink after the check changes nothing (PR #57
+// review F1).
+func harnessProviderGate(adapter, claudeBin string, codexRun, unconfinedFake bool) (string, func(), error) {
+	none := func() {}
 	switch adapter {
 	case "native":
 		if !unconfinedFake {
-			return nativeRunnerGate()
+			return "", none, nativeRunnerGate()
 		}
 	case "claude-code":
+		refused := realProviderRefused{fmt.Sprintf("the claude-code harness adapter runs unconfined, and %q is not a pinned fake", claudeBin)}
 		path, err := exec.LookPath(claudeBin)
-		if err != nil || !(providerIsPinnedFake(path) || harnessTestFake(path)) {
-			return realProviderRefused{fmt.Sprintf("the claude-code harness adapter runs unconfined, and %q is not a pinned fake", claudeBin)}
+		if err != nil {
+			return "", none, refused
 		}
+		// Resolve symlinks once; the seal reads that file (no symlink at
+		// its last component) and the run never looks at the name again.
+		if path, err = filepath.Abs(path); err != nil {
+			return "", none, refused
+		}
+		if path, err = filepath.EvalSymlinks(path); err != nil {
+			return "", none, refused
+		}
+		root, err := os.MkdirTemp("", "fab-harness-seal-")
+		if err != nil {
+			return "", none, fmt.Errorf("sealed provider directory: %w", err)
+		}
+		cleanup := func() { _ = os.RemoveAll(root) }
+		sealed, err := sealPinnedFake(path, filepath.Join(root, "pinned-providers"))
+		if err != nil {
+			cleanup()
+			return "", none, realProviderRefused{fmt.Sprintf("%s: %v", refused.reason, err)}
+		}
+		return sealed, cleanup, nil
 	case "codex":
 		if codexRun {
-			return realProviderRefused{"a codex model turn (--codex-run) is a real provider"}
+			return "", none, realProviderRefused{"a codex model turn (--codex-run) is a real provider"}
 		}
 	}
-	return nil
+	return "", none, nil
 }
 
 // demoProviderGate (goodqa#15976 AC-2): `fab harness demo` always drives a
@@ -122,16 +150,9 @@ func demoProviderGate(provider string) error {
 
 // harnessTestPins holds the sha256 of the throwaway claude fakes the
 // harness tests write (their behaviour is the subject of those tests). Only
-// test code in this package sets it; it is nil in a built binary.
+// test code in this package sets it; it is nil in a built binary. readPinned
+// accepts them, so they are sealed and run exactly like the pinned fakes.
 var harnessTestPins map[string]bool
-
-func harnessTestFake(path string) bool {
-	if harnessTestPins == nil {
-		return false
-	}
-	sha, err := dispatch.FileSHA256(path)
-	return err == nil && harnessTestPins[sha]
-}
 
 // pinnedFakeResolve wraps a launch's Resolve so each launch runs only a
 // pinned fake: any other resolved file refuses that launch ("" is Resolve's
@@ -196,7 +217,7 @@ func readPinned(path, want string) ([]byte, string, error) {
 	}
 	sum := sha256.Sum256(b)
 	sha := hex.EncodeToString(sum[:])
-	if (want != "" && sha != want) || (want == "" && !dispatch.PinnedFake(sha)) {
+	if (want != "" && sha != want) || (want == "" && !dispatch.PinnedFake(sha) && !harnessTestPins[sha]) {
 		return nil, "", fmt.Errorf("provider %s has sha256 %s, not a pinned fake, and this host has not shown a worker boundary", path, sha)
 	}
 	return b, sha, nil
