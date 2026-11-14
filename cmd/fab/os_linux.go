@@ -42,7 +42,9 @@ func newLinuxProfile(self string) host.Profile {
 // newLinuxManagerProfile is a variable so a test can prove the flag-off
 // path never reaches it.
 var newLinuxManagerProfile = func(self string, ro []string) host.Profile {
-	return &host.LinuxManager{Self: self, ReadOnly: ro, EgressConfig: &egress.Config{}, User: os.Getenv("FABRIC_WORKER_USER")}
+	// goodqa#15966 AC-20: per-run egress counts land in a fabd-only directory.
+	return &host.LinuxManager{Self: self, ReadOnly: ro, EgressConfig: &egress.Config{}, User: os.Getenv("FABRIC_WORKER_USER"),
+		EgressCountsDir: os.Getenv("FABRIC_EGRESS_COUNTS_DIR")}
 }
 
 func newDarwinProfile(string) host.Profile { return nil }

@@ -46,6 +46,10 @@ type LinuxManager struct {
 	// its listener and injects its PolicyDescriptor; Stop closes it before the
 	// serialization gate can fail over. Nil is reserved for loopback-only tests.
 	EgressConfig *egress.Config
+	// EgressCountsDir (goodqa#15966 AC-20) is a fabd-only directory; when
+	// set, closing a run's mediator writes its per-host byte and connection
+	// counts there as {attempt}.egress.json for `fab mission show`.
+	EgressCountsDir string
 	// User is the dedicated, locked worker account (D3 as decided by the user
 	// on 2026-11-06: fab-worker). When set, units run under that uid through
 	// a scoped sudoers rule, so the worker cannot reach the controlling
@@ -64,6 +68,7 @@ type LinuxManager struct {
 	runLock              *os.File
 	runLockInfo          os.FileInfo
 	mediator             *egress.Mediator
+	mediatorMission      string
 	proxyURL             string
 	unitBaseline         map[string]bool                                    // worker manager units loaded before this run (goodqa#15976 AC-4)
 	commandFn            func(context.Context, string, ...string) *exec.Cmd // native controls may delay the manager
@@ -404,6 +409,7 @@ func (l *LinuxManager) StartIO(g Grant, argv []string, env []string, stdin, stdo
 	l.mgrEnvFile = ef
 	l.unitBaseline = baseline
 	l.mediator = mediator
+	l.mediatorMission = string(g.Mission)
 	l.proxyURL = ""
 	if mediator != nil {
 		l.proxyURL = mediator.URL()
@@ -606,11 +612,18 @@ func (l *LinuxManager) closeMediator(h Handle) {
 		return
 	}
 	mediator := l.mediator
+	mission := l.mediatorMission
 	l.mediator = nil
 	l.proxyURL = ""
 	l.mu.Unlock()
 	if mediator != nil {
 		_ = mediator.Close()
+		if l.EgressCountsDir != "" {
+			rec := egress.CountsRecord{Mission: mission, Attempt: string(h.Run), Hosts: mediator.Counts()}
+			if err := egress.WriteCounts(l.EgressCountsDir, rec); err != nil {
+				fmt.Fprintf(os.Stderr, "fabd: egress counts for %s not written: %v\n", h.Run, err)
+			}
+		}
 	}
 }
 
