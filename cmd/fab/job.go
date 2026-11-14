@@ -161,9 +161,11 @@ func daemonMain(args []string) error {
 	}
 	// The schema is written before the profile and the controls, so the
 	// launch_inputs_readable control sees the file a real launch reads.
-	// The controls used to create the work root (0775, like controlGrant);
-	// the schema is now written first, so create it here (review 716fc04).
-	if err := os.MkdirAll(*workRoot, 0o775); err != nil {
+	// The controls used to create the work root; the schema is now written
+	// first, so create it here (review 716fc04). 0755, not 0775: the sealed
+	// provider copies live under it and every ancestor of them must be
+	// writable only by fabd (goodqa#15976 delta review F1).
+	if err := os.MkdirAll(*workRoot, 0o755); err != nil {
 		return err
 	}
 	if err := os.WriteFile(schemaPath, []byte(checkpointSchema), 0o644); err != nil {
@@ -173,6 +175,17 @@ func daemonMain(args []string) error {
 	// any profile is built, so both profiles can grant it read-only.
 	if err := ownedSealDir(dp.SealRoot); err != nil {
 		return err
+	}
+	// Launches exec the resolved path, so the read root is resolved too. A
+	// fake-only daemon refuses at start when another uid could replace a
+	// directory above the seal (delta review F1); each launch checks again.
+	if real, err := filepath.EvalSymlinks(dp.SealRoot); err == nil {
+		dp.SealRoot = real
+	}
+	if !realProvider {
+		if _, err := trustedAncestry(dp.SealRoot); err != nil {
+			return fmt.Errorf("refusing to start (goodqa#15976): %w", err)
+		}
 	}
 	sealedProviderRO = []string{dp.SealRoot}
 	// The read-allow-back and the control use the same start-time

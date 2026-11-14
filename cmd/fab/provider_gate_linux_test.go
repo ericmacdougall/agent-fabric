@@ -354,3 +354,56 @@ func TestSealPinnedFakeRefusesUnsafeLayouts(t *testing.T) {
 		}
 	}
 }
+
+// goodqa#15976 delta review F1: another uid that can write any directory
+// above the seal (the work root or an ancestor) can rename pinned-providers
+// and substitute a tree after verification. The seal is refused unless
+// every ancestor up to / is owned by root or fabd and writable by nobody
+// else, except a sticky directory whose child on the path is fabd's.
+func TestSealRefusesAReplaceableAncestor(t *testing.T) {
+	fake := filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude.sh")
+	bin := t.TempDir()
+	copyFile(t, fake, filepath.Join(bin, "fakeclaude-live"))
+	provider := filepath.Join(bin, "fakeclaude-live")
+	mkdir := func(d string, mode os.FileMode) string {
+		t.Helper()
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(d, mode); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	for _, c := range []struct {
+		name   string
+		layout func(base string) string // returns the work root
+		ok     bool
+	}{
+		{"group-writable work root", func(b string) string { return mkdir(filepath.Join(b, "work"), 0o775) }, false},
+		{"world-writable non-sticky ancestor", func(b string) string {
+			mkdir(filepath.Join(b, "shared"), 0o777)
+			return mkdir(filepath.Join(b, "shared", "work"), 0o755)
+		}, false},
+		{"group-writable ancestor", func(b string) string {
+			mkdir(filepath.Join(b, "shared"), 0o770)
+			return mkdir(filepath.Join(b, "shared", "work"), 0o700)
+		}, false},
+		{"sticky world-writable ancestor with fabd's own child", func(b string) string {
+			mkdir(filepath.Join(b, "tmp"), 0o777|os.ModeSticky)
+			return mkdir(filepath.Join(b, "tmp", "work"), 0o700)
+		}, true},
+		{"private work root", func(b string) string { return mkdir(filepath.Join(b, "work"), 0o700) }, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			wr := c.layout(t.TempDir())
+			_, err := sealPinnedFake(provider, filepath.Join(wr, "pinned-providers"))
+			if c.ok && err != nil {
+				t.Fatalf("a protected layout was refused: %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Fatal("a seal under a directory another uid can rename was accepted")
+			}
+		})
+	}
+}

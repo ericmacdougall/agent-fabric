@@ -203,11 +203,13 @@ func readPinned(path, want string) ([]byte, string, error) {
 }
 
 // sealPinnedFake copies the verified bytes of a pinned fake into
-// sealRoot/<sha>/<name>, in directories fabd owns and only fabd can write
-// (0755, files 0555), and returns the copy's path. The stdin fake execs the
+// sealRoot/<sha>/<name>, in directories fabd owns and only fabd can write (0755,
+// files 0555), and returns the copy's path. The stdin fake execs the
 // recorded fake beside it, so its delegate is verified (RecordedFakeSHA256)
-// and sealed into the same directory. A worker running as another uid can
-// read and execute the copies but cannot replace them.
+// and sealed into the same directory. The returned path has no symlinks
+// and every directory on it is protected (trustedAncestry), so a worker
+// running as another uid can read and execute the copies but cannot
+// replace them or any directory above them.
 func sealPinnedFake(path, sealRoot string) (string, error) {
 	if sealRoot == "" || !filepath.IsAbs(sealRoot) {
 		return "", errors.New("no sealed provider directory configured")
@@ -221,6 +223,10 @@ func sealPinnedFake(path, sealRoot string) (string, error) {
 		if err := ownedSealDir(d); err != nil {
 			return "", err
 		}
+	}
+	dir, err = trustedAncestry(dir)
+	if err != nil {
+		return "", err
 	}
 	if sha == dispatch.StdinFakeSHA256 {
 		// The stdin fake's own lookup order: fakeclaude-live, then fakeclaude.sh.
@@ -247,6 +253,43 @@ func sealPinnedFake(path, sealRoot string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, name), nil
+}
+
+// trustedAncestry resolves dir and requires every directory from it up to
+// / to be owned by root or this uid and writable by nobody else, so no
+// other uid can rename a component and substitute a tree after the seal is
+// verified (goodqa#15976 delta review F1). The one exception is a sticky
+// directory (such as /tmp) whose child on the path is owned by this uid:
+// the sticky bit stops other uids renaming that child. It returns the
+// resolved directory.
+func trustedAncestry(dir string) (string, error) {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("sealed provider directory: %w", err)
+	}
+	uid := os.Getuid()
+	childUID := -1 // no child below the seal directory itself
+	for p := real; ; p = filepath.Dir(p) {
+		st, err := os.Lstat(p)
+		if err != nil {
+			return "", fmt.Errorf("sealed provider ancestor: %w", err)
+		}
+		sys, ok := st.Sys().(*syscall.Stat_t)
+		if !ok || !st.IsDir() {
+			return "", fmt.Errorf("sealed provider ancestor %s is not a directory", p)
+		}
+		owner := int(sys.Uid)
+		if owner != 0 && owner != uid {
+			return "", fmt.Errorf("sealed provider ancestor %s is owned by uid %d, not root or uid %d", p, owner, uid)
+		}
+		if st.Mode().Perm()&0o022 != 0 && !(st.Mode()&os.ModeSticky != 0 && childUID == uid) {
+			return "", fmt.Errorf("sealed provider ancestor %s is writable by group or others (mode %v), so another uid could replace the sealed copies", p, st.Mode())
+		}
+		if p == filepath.Dir(p) {
+			return real, nil
+		}
+		childUID = owner
+	}
 }
 
 // ownedSealDir creates d (0755) if needed and requires a real directory
