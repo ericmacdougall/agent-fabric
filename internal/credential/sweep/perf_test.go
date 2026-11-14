@@ -74,11 +74,8 @@ func TestGeneratePerfWorkload(t *testing.T) {
 	must(os.MkdirAll(root, 0o755))
 	const dirs, entries, total = 20, 20000, 512 << 20
 	files := entries - dirs
-	size := total / files
-	last := total - size*(files-1)
-	if last < len(planted) {
-		t.Fatal("planted payload too big")
-	}
+	size := (total - len(planted) - 4096) / (files - 1)
+	last := total - size*(files-1) // holds every planted pattern
 	buf := make([]byte, last)
 	fill := func(b []byte) { // base64 text: realistic, high-entropy, not matching
 		rand.Read(b)
