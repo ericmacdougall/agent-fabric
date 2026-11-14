@@ -16,6 +16,9 @@ const BashGateName = "fab-bash-gate"
 // denied in -p mode (AC-24 "everything else is denied").
 const PermissionMode = "dontAsk"
 
+// GateTimeoutSeconds bounds one Bash gate run.
+const GateTimeoutSeconds = 30
+
 // readOnlyBash lists the commands Claude Code runs without a prompt in every
 // mode (code.claude.com/docs/en/permissions, "Read-only commands", read
 // 2026-11-14), plus environment printers, shells, interpreters and network
@@ -59,7 +62,11 @@ func Settings(worktree, hooksDir string) ([]byte, error) {
 		"hooks": map[string]any{
 			"PreToolUse": []any{map[string]any{
 				"matcher": "Bash",
-				"hooks":   []any{map[string]any{"type": "command", "command": filepath.Join(hooksDir, BashGateName)}},
+				// onFailure block: a gate that cannot start, times out or
+				// exits other than 0 or 2 blocks the call (Claude Code
+				// v2.1.295 or later; code.claude.com/docs/en/hooks).
+				"hooks": []any{map[string]any{"type": "command", "command": filepath.Join(hooksDir, BashGateName),
+					"timeout": GateTimeoutSeconds, "onFailure": "block"}},
 			}},
 		},
 	}

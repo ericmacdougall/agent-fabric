@@ -191,6 +191,11 @@ func daemonMain(args []string) error {
 		}
 	}
 	sealedProviderRO = []string{dp.SealRoot}
+	// goodqa#15966 W5: the worker reads its attempt directory (settings,
+	// brief copy, worktree) and runs the Bash gate from the hooks dir.
+	if m1Enabled && !*noDispatch {
+		m1ExtraRO = m1ReadRoots(*workRoot, hooksDir)
+	}
 	// The read-allow-back and the control use the same start-time
 	// resolution; each launch resolves the name again (productionLaunch),
 	// so an update that repoints the symlink is followed (goodqa#15161
@@ -234,11 +239,6 @@ func daemonMain(args []string) error {
 	cfg.WorkerUser = *workerUser
 	cfg.LaunchLimit = *launchLimit
 	cfg.OnlyMission = domain.MissionID(*onlyMission)
-	// goodqa#15966 W5: only an M1 build reads mission.json.
-	if cfg.Mission, err = m1MissionPreparer(m1MissionOptions{enabled: m1Enabled, workRoot: *workRoot, missionsRoot: *missionsRoot,
-		fabSecretGroup: *fabSecretGroup, workerUser: *workerUser, profile: *profile, hooksDir: hooksDir, self: selfPath()}); err != nil {
-		return err
-	}
 	if cfg.DispatchVia == sched.DispatchRegistry {
 		// NEG-11: registry mode runs only the pinned stdin fake. --trust-provider
 		// alone is never enough: the resolved file must hash to the pin here,
@@ -269,6 +269,11 @@ func daemonMain(args []string) error {
 	// goodqa#15373 AC-2: every configuration refusal before the store opens,
 	// so a bad flag exits once and never crash-loops the unit.
 	if err := sched.CheckConfig(cfg, ln); err != nil {
+		return err
+	}
+	// goodqa#15966 W5: only an M1 build that dispatches reads mission.json.
+	if cfg.Mission, err = m1MissionPreparer(m1MissionOptions{enabled: m1Enabled && !*noDispatch, workRoot: *workRoot, missionsRoot: *missionsRoot,
+		fabSecretGroup: *fabSecretGroup, workerUser: *workerUser, profile: *profile, hooksDir: hooksDir, self: selfPath()}); err != nil {
 		return err
 	}
 	return withStoreService(func(ctx context.Context, st *store.Store) error {

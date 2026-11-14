@@ -124,7 +124,10 @@ func TestSettingsDocument(t *testing.T) {
 		} `json:"permissions"`
 		Hooks map[string][]struct {
 			Matcher string `json:"matcher"`
-			Hooks   []struct{ Type, Command string }
+			Hooks   []struct {
+				Type, Command, OnFailure string
+				Timeout                  int
+			}
 		} `json:"hooks"`
 	}
 	if err := json.Unmarshal(b, &doc); err != nil {
@@ -155,7 +158,8 @@ func TestSettingsDocument(t *testing.T) {
 	}
 	pre := doc.Hooks["PreToolUse"]
 	if len(doc.Hooks) != 1 || len(pre) != 1 || pre[0].Matcher != "Bash" || len(pre[0].Hooks) != 1 ||
-		pre[0].Hooks[0].Type != "command" || pre[0].Hooks[0].Command != "/srv/fabric/hooks/fab-bash-gate" {
+		pre[0].Hooks[0].Type != "command" || pre[0].Hooks[0].Command != "/srv/fabric/hooks/fab-bash-gate" ||
+		pre[0].Hooks[0].OnFailure != "block" || pre[0].Hooks[0].Timeout != GateTimeoutSeconds {
 		t.Errorf("hooks %+v", doc.Hooks)
 	}
 	for _, bad := range []string{"relative/wt", "/srv/wt*", "/srv/w t", "/srv/../wt", "/srv/wt/", "/srv/[wt]", "/"} {
@@ -191,7 +195,7 @@ func TestM1LaunchArgv(t *testing.T) {
 	base.ManagedRoot = managed
 	base.Tools = []string{"Read", "Edit", "Write"}
 	base.PermissionMode = "acceptEdits"
-	l := c.ApplyLaunch(base, settings, hooks)
+	l := c.ApplyLaunch(base, settings, "/srv/fabric/work/attempts/r_canary_1/brief.md", hooks)
 	g := host.Grant{Run: "r_canary_1", Mission: "m_canary", Fence: 1, Model: "m", Effort: "low", Rung: "r", TierTableSHA: "t",
 		ConfigSHA: "n/a", Profile: "P0", MaxTurns: 999, MaxBudgetUSD: 999, Wall: 24 * time.Hour, RunDir: dir, Token: "r_canary_1-1-0123456789abcdef0123"}
 	if err := c.ApplyGrant(&g, wt); err != nil {
@@ -203,7 +207,7 @@ func TestM1LaunchArgv(t *testing.T) {
 	}
 	joined := strings.Join(argv, "\x00")
 	for _, want := range []string{
-		"--tools\x00Read,Grep,Glob,Bash", "--settings\x00" + settings, "--append-system-prompt-file\x00/srv/fabric/missions/m_canary/brief.md",
+		"--tools\x00Read,Grep,Glob,Bash", "--settings\x00" + settings, "--append-system-prompt-file\x00/srv/fabric/work/attempts/r_canary_1/brief.md",
 		"--permission-mode\x00dontAsk", "--max-turns\x0040", "--max-budget-usd\x002.00",
 	} {
 		if !strings.Contains(joined, want) {

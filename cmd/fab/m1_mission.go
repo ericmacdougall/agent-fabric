@@ -115,3 +115,16 @@ func bashGateMain() int { return mission.RunBashGate(os.Stdin, os.Stderr) }
 
 // m1Enabled is the build fact the daemon wiring reads.
 var m1Enabled = m1build.Enabled
+
+// m1ExtraRO are read roots the Linux worker profiles add on the M1 path:
+// the attempt root (each attempt's settings, brief copy and worktree; all
+// operator-owned and read-only) and the hooks dir (the Bash gate).
+var m1ExtraRO []string
+
+func m1ReadRoots(workRoot, hooksDir string) []string {
+	out := []string{filepath.Join(filepath.Clean(workRoot), "attempts")}
+	if hooksDir != "" && filepath.IsAbs(hooksDir) {
+		out = append(out, filepath.Clean(hooksDir))
+	}
+	return out
+}

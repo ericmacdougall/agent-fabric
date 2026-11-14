@@ -31,8 +31,8 @@ func git(t *testing.T, dir string, args ...string) string {
 }
 
 type prepRig struct {
-	base, hooks, roots, mirror, sha, fab string
-	p                                    *Preparer
+	base, hooks, roots, mirror, sha, fab, brief string
+	p                                           *Preparer
 }
 
 func newPrepRig(t *testing.T) *prepRig {
@@ -65,13 +65,14 @@ func newPrepRig(t *testing.T) *prepRig {
 	}
 	sum := sha256.Sum256([]byte("\x7fELF sealed fab build"))
 	f := newFixture(t, nil)
+	r.brief = f.brief
 	r.p = &Preparer{Loader: f.loader(nil), Git: gitBin, AttemptRoot: r.roots, HooksDir: r.hooks, GateSHA: hex.EncodeToString(sum[:])}
 	return r
 }
 
 func (r *prepRig) config(t *testing.T, sha string) *Config {
 	t.Helper()
-	d := validDoc("/srv/fabric/missions/m_canary/brief.md")
+	d := validDoc(r.brief)
 	d["repo"], d["sha"] = r.mirror, sha
 	b, _ := json.Marshal(d)
 	c, err := Parse(b)
@@ -99,6 +100,12 @@ func TestPrepareBuildsAttemptDir(t *testing.T) {
 		if err != nil || fi.Mode().Perm() != want {
 			t.Errorf("%s: %v %v, want %v", p, fi.Mode(), err, want)
 		}
+	}
+	if out.Brief != filepath.Join(out.Dir, BriefFile) {
+		t.Errorf("brief %q", out.Brief)
+	}
+	if b, err := os.ReadFile(out.Brief); err != nil || string(b) != "diagnose the failing test\n" {
+		t.Errorf("brief copy %q %v", b, err)
 	}
 	if strings.Join(out.Files, ",") != "lib.sh,test.sh" {
 		t.Errorf("files %v", out.Files)

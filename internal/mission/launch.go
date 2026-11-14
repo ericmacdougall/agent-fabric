@@ -11,11 +11,11 @@ import (
 // Read,Grep,Glob,Bash, the attempt's settings file (permission rules and
 // the Bash gate), the brief through --append-system-prompt-file, and the
 // dontAsk mode. Whatever the base launch said about these is replaced.
-func (c *Config) ApplyLaunch(l claude.Launch, settingsPath, hooksDir string) claude.Launch {
+func (c *Config) ApplyLaunch(l claude.Launch, settingsPath, briefPath, hooksDir string) claude.Launch {
 	l.Tools = c.Tools()
 	l.SettingsPath = settingsPath
 	l.HooksDir = hooksDir
-	l.BriefPath = c.brief
+	l.BriefPath = briefPath
 	l.PermissionMode = PermissionMode
 	return l
 }

@@ -214,7 +214,7 @@ func TestM1LaunchUsesMissionPath(t *testing.T) {
 	wt := filepath.Join(dir, mission.WorktreeDir)
 	joined := strings.Join(argv, "\x00")
 	for _, want := range []string{"--tools\x00Read,Grep,Glob,Bash", "--settings\x00" + filepath.Join(dir, mission.SettingsFile),
-		"--append-system-prompt-file\x00" + filepath.Join(r.base, "brief.md"), "--permission-mode\x00dontAsk",
+		"--append-system-prompt-file\x00" + filepath.Join(dir, mission.BriefFile), "--permission-mode\x00dontAsk",
 		"--max-turns\x0012", "--max-budget-usd\x001.50"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("argv lacks %q", strings.ReplaceAll(want, "\x00", " "))
@@ -247,4 +247,58 @@ func contains(a []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// AC-22: when the worktree cannot be built after START (here the mirror no
+// longer has the configured commit), the attempt is abandoned before any
+// process starts, and no event carries the sha or the mirror path: the
+// reason is a fixed class.
+func TestM1PrepareFailureKeepsConfigOutOfEvents(t *testing.T) {
+	st := storetest.Open(t)
+	setCap(t, st, 5)
+	r := newM1Rig(t)
+	const id = domain.MissionID("m_m1gone")
+	admitSpec(t, st, id, domain.ProviderClaudeCode, 1)
+	r.sha = strings.Repeat("ab", 20) // valid shape, absent from the mirror
+	r.writeConfig(t, id, map[string]any{"max_turns": 10, "wall_minutes": 10, "max_budget_usd": 1})
+	ln := &fakeLauncher{st: st, block: make(chan struct{})}
+	t.Cleanup(func() { close(ln.block) })
+	cfg := m1Config(t, st, t.TempDir())
+	cfg.RunnerDSN = storetest.RunnerDSN(t, st)
+	cfg.Launch.Binary = "/bin/true"
+	cfg.Mission = r.prep
+	s := New(st, cfg, ln)
+	if err := s.runOnce(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if got := atomic.LoadInt32(&ln.starts); got != 0 {
+		t.Fatalf("%d processes started, want 0", got)
+	}
+	var state string
+	if err := st.Pool().QueryRow(context.Background(), `SELECT state FROM attempts WHERE mission_id = $1`, string(id)).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	var payloads []string
+	rows, err := st.Pool().Query(context.Background(), `SELECT payload::text FROM events WHERE mission_id = $1`, string(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var p string
+		rows.Scan(&p)
+		payloads = append(payloads, p)
+	}
+	rows.Close()
+	all := strings.Join(payloads, "\n")
+	if !strings.Contains(all, "m1_checkout_refused") {
+		t.Errorf("no abandon reason class in events (attempt %s): %s", state, all)
+	}
+	for _, v := range []string{r.sha, r.base, "mirror.git"} {
+		if strings.Contains(all, v) {
+			t.Errorf("an event carries the config value %q", v)
+		}
+	}
+	if entries, _ := os.ReadDir(r.prep.AttemptRoot); len(entries) != 0 {
+		t.Errorf("attempt dir left behind")
+	}
 }

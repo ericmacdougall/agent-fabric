@@ -743,7 +743,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 			return fmt.Errorf("M1 path runs only profile P0, not %q; nothing started", s.cfg.Profile)
 		}
 		if mc, err = s.cfg.Mission.Load(mission); err != nil {
-			return fmt.Errorf("mission config refused before START, nothing started: %w", err)
+			return fmt.Errorf("mission config refused before START, nothing started (%s): %w", missioncfg.Class(err), err)
 		}
 	}
 	if s.afterRead != nil {
@@ -785,10 +785,13 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		dirs = dirs[1:]
 		prep, err := s.cfg.Mission.Prepare(ctx, mc, attempt)
 		if err != nil {
-			return s.abandonPrelaunch(ctx, mission, attempt, fence, "M1 worktree not prepared: "+err.Error())
+			// AC-22: the event carries a fixed class; the detail (paths,
+			// the sha) goes to fabd's log only.
+			fmt.Fprintf(os.Stderr, "fabd: %s: M1 worktree not prepared: %v\n", attempt, err)
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "M1 worktree not prepared: "+missioncfg.Class(err))
 		}
 		worktree = prep.Worktree
-		launch = mc.ApplyLaunch(launch, prep.Settings, s.cfg.Mission.HooksDir)
+		launch = mc.ApplyLaunch(launch, prep.Settings, prep.Brief, s.cfg.Mission.HooksDir)
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o775); err != nil {

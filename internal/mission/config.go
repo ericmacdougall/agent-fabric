@@ -177,8 +177,9 @@ func (l Loader) checkFile(i checkout.Info) error {
 // checkBrief: the brief is read by the claude process as fab-worker, so it
 // must be readable by it, and must not be changeable by it.
 func (l Loader) checkBrief(p string) error {
+	// The ancestor error names directories; the brief's are config values.
 	if err := checkout.CheckAncestors(l.Stat, l.Who, filepath.Dir(p), "brief directory"); err != nil {
-		return fmt.Errorf("%w: brief: %v", ErrConfig, err)
+		return fmt.Errorf("%w: brief: a directory above it is not operator- or root-owned, or is worker-writable", ErrConfig)
 	}
 	i, err := l.Stat.Lstat(p)
 	if err != nil {
