@@ -234,3 +234,29 @@ func ReadMarker(ctx context.Context, b *Broker) (value string, present bool, err
 type CommentFinder interface {
 	FindComment(ctx context.Context, e Effect) (commentID string, found bool, err error)
 }
+
+// LoadKey reads the effect stored under an idempotency key (pgx.ErrNoRows
+// when none).
+func (b *Broker) LoadKey(ctx context.Context, key string) (Effect, error) {
+	tx, err := b.pool.Begin(ctx)
+	if err != nil {
+		return Effect{}, err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck
+	return b.loadTx(ctx, tx, "idem_key", key)
+}
+
+// PolicyEnforced reports whether this broker enforces the M1 comment policy
+// on this database right now (the AC-31 loop runs only then).
+func (b *Broker) PolicyEnforced(ctx context.Context) (bool, error) {
+	tx, err := b.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck
+	p, err := readPolicy(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	return b.m1 || (p.present && p.value == PolicyMarkerM1), nil
+}

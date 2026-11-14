@@ -113,6 +113,23 @@ type Config struct {
 	LaunchLimit int
 	// OnlyMission, when set, restricts dispatch to that one mission.
 	OnlyMission domain.MissionID
+	// EffectStep (goodqa#15966 AC-7, M1) is the pre-submit step: it runs
+	// after the stream settled, while the attempt is live, before
+	// FINISH_ATTEMPT, and returns a FINISH reason prefix ("" for none).
+	// heartbeat renews the attempt's lease. nil: no effect step (today).
+	EffectStep func(ctx context.Context, a EffectAttempt, heartbeat func(context.Context) error) string
+	// EffectPass (goodqa#15966 AC-31) runs once per tick, also with
+	// NoDispatch; it rate-limits itself. nil: none (today).
+	EffectPass func(ctx context.Context)
+}
+
+// EffectAttempt is the settled attempt the EffectStep sees.
+type EffectAttempt struct {
+	Mission domain.MissionID
+	Attempt domain.AttemptID
+	Fence   int64
+	RunDir  string
+	Outcome string
 }
 
 // Dispatch paths.
@@ -371,6 +388,9 @@ func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 		if _, err := s.st.ExpireEndedReservations(ctx, 50); err != nil {
 			fmt.Fprintln(os.Stderr, "fabd: reservation sweep:", err)
 		}
+	}
+	if s.cfg.EffectPass != nil {
+		s.cfg.EffectPass(ctx) // AC-31: recovery outside admission, never a dispatch
 	}
 	if n, err := s.retireRequestedJobs(ctx); err != nil {
 		return false, err
@@ -1005,7 +1025,26 @@ func (s *Scheduler) afterWait(ctx context.Context, mission domain.MissionID, att
 	if err != nil || cmd == nil {
 		return err
 	}
+	s.effectStep(ctx, cmd, runDir)
 	return s.finishRetry(ctx, *cmd)
+}
+
+// effectStep runs the configured EffectStep once, before the finish
+// command, and puts its prefix on the finish reason (AC-29).
+func (s *Scheduler) effectStep(ctx context.Context, cmd *domain.Command, runDir string) {
+	if s.cfg.EffectStep == nil {
+		return
+	}
+	hb := func(hctx context.Context) error { return s.st.Heartbeat(hctx, cmd.Attempt, cmd.Fence) }
+	prefix := s.cfg.EffectStep(ctx, EffectAttempt{Mission: cmd.Mission, Attempt: cmd.Attempt, Fence: cmd.Fence, RunDir: runDir, Outcome: cmd.Outcome}, hb)
+	if prefix == "" {
+		return
+	}
+	if cmd.Reason == "" {
+		cmd.Reason = prefix
+	} else {
+		cmd.Reason = prefix + " " + cmd.Reason
+	}
 }
 
 // finishRetry is every FINISH_ATTEMPT fabd sends: one finishCmd under
@@ -1164,6 +1203,7 @@ func (s *Scheduler) settle(ctx context.Context, mission domain.MissionID, attemp
 	if err != nil || cmd == nil {
 		return err
 	}
+	s.effectStep(ctx, cmd, runDir)
 	return s.finishRetry(ctx, *cmd)
 }
 
