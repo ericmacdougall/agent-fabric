@@ -141,9 +141,10 @@ func TestDaemonProviderGateTable(t *testing.T) {
 func TestPinnedFakeResolveRechecksEachLaunch(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "fakeclaude-stdin")
 	copyFile(t, filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude-stdin.sh"), p)
-	resolve := pinnedFakeResolve(func(string) string { return p })
-	if got := resolve("fakeclaude-stdin"); got != p {
-		t.Fatalf("pinned fake refused: %q", got)
+	copyFile(t, filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude.sh"), filepath.Join(filepath.Dir(p), "fakeclaude-live"))
+	resolve := pinnedFakeResolve(func(string) string { return p }, t.TempDir())
+	if got := resolve("fakeclaude-stdin"); got == "" || got == p {
+		t.Fatalf("pinned fake not launched from a sealed copy: %q", got)
 	}
 	if err := os.WriteFile(p, []byte("#!/bin/sh\nexec claude \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -151,7 +152,7 @@ func TestPinnedFakeResolveRechecksEachLaunch(t *testing.T) {
 	if got := resolve("fakeclaude-stdin"); got != "" {
 		t.Fatalf("a swapped-in real binary resolved: %q", got)
 	}
-	if got := pinnedFakeResolve(func(string) string { return "" })("x"); got != "" {
+	if got := pinnedFakeResolve(func(string) string { return "" }, t.TempDir())("x"); got != "" {
 		t.Fatalf("an unresolved name resolved: %q", got)
 	}
 }
@@ -205,7 +206,7 @@ func TestHarnessProviderGate(t *testing.T) {
 func TestTrustedLaunchRefusesASwappedBinary(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "fakeclaude-live")
 	copyFile(t, filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude.sh"), p)
-	dp, err := newDaemonProvider(p, "/srv/wr/checkpoint.schema.json", "")
+	dp, err := newDaemonProvider(p, filepath.Join(t.TempDir(), "checkpoint.schema.json"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,8 +216,8 @@ func TestTrustedLaunchRefusesASwappedBinary(t *testing.T) {
 	l := dp.Launch
 	l.Prompt = "checkpoint"
 	g := launchGrant(t)
-	if argv, _, err := claude.Argv(g, l); err != nil || argv[0] != realPathT(t, p) {
-		t.Fatalf("first launch argv=%v err=%v", argv, err)
+	if argv, _, err := claude.Argv(g, l); err != nil || !strings.HasPrefix(argv[0], dp.SealRoot+"/") {
+		t.Fatalf("first launch argv=%v err=%v; want a sealed copy under %s", argv, err, dp.SealRoot)
 	}
 	if err := os.WriteFile(p, []byte("#!/bin/sh\nexec claude \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -303,5 +304,53 @@ func TestExitCleanupDefaultsOnForRealProviders(t *testing.T) {
 	t.Setenv("FABRIC_WORKER_EXIT_CLEANUP", "1")
 	if !daemonExitCleanup(false) {
 		t.Error("FABRIC_WORKER_EXIT_CLEANUP=1 no longer turns cleanup on")
+	}
+}
+
+// The sealed copies live where only fabd can write: a group- or
+// world-writable directory, or a symlink in its place, is refused; the copy
+// is 0555 and a delegate with the wrong sha is never sealed.
+func TestSealPinnedFakeRefusesUnsafeLayouts(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "seal")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := ownedSealDir(root); err == nil {
+		t.Error("a world-writable seal directory was accepted")
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := ownedSealDir(link); err == nil {
+		t.Error("a symlinked seal directory was accepted")
+	}
+	bin := t.TempDir()
+	copyFile(t, filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude-stdin.sh"), filepath.Join(bin, "fakeclaude-stdin"))
+	if err := os.WriteFile(filepath.Join(bin, "fakeclaude-live"), []byte("#!/bin/sh\necho not the recorded fake\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	good := filepath.Join(t.TempDir(), "seal")
+	if _, err := sealPinnedFake(filepath.Join(bin, "fakeclaude-stdin"), good); err == nil {
+		t.Error("a stdin fake with an unpinned delegate was sealed")
+	}
+	// A delegate that is a pinned fake, but not the recorded one, is refused.
+	copyFile(t, filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude-stdin.sh"), filepath.Join(bin, "fakeclaude-live"))
+	if _, err := sealPinnedFake(filepath.Join(bin, "fakeclaude-stdin"), good); err == nil {
+		t.Error("a stdin fake delegating to another stdin fake was sealed")
+	}
+	copyFile(t, filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude.sh"), filepath.Join(bin, "fakeclaude-live"))
+	sealed, err := sealPinnedFake(filepath.Join(bin, "fakeclaude-stdin"), good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{sealed, filepath.Join(filepath.Dir(sealed), "fakeclaude-live")} {
+		st, err := os.Lstat(f)
+		if err != nil || st.Mode().Perm() != 0o555 || !st.Mode().IsRegular() {
+			t.Errorf("sealed %s: %v %v; want a regular 0555 file", f, st.Mode(), err)
+		}
 	}
 }

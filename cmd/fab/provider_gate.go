@@ -1,9 +1,15 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"syscall"
 
 	"fabric/internal/dispatch"
 	"fabric/internal/host"
@@ -64,7 +70,7 @@ func gateDaemonProvider(dp *daemonProvider, noDispatch, trustProvider bool, p ho
 		return false, err
 	}
 	if fakeOnly {
-		dp.Launch.Resolve = pinnedFakeResolve(dp.Launch.Resolve)
+		dp.Launch.Resolve = pinnedFakeResolve(dp.Launch.Resolve, dp.SealRoot)
 	}
 	return !noDispatch && !fakeOnly, nil
 }
@@ -129,17 +135,161 @@ func harnessTestFake(path string) bool {
 
 // pinnedFakeResolve wraps a launch's Resolve so each launch runs only a
 // pinned fake: any other resolved file refuses that launch ("" is Resolve's
-// refusal; claude.Argv never falls back to the name).
-func pinnedFakeResolve(resolve func(string) string) func(string) string {
+// refusal; claude.Argv never falls back to the name). The launch execs a
+// sealed copy, never the resolved file: verification and execution use the
+// same bytes, so replacing the original after the check changes nothing
+// (goodqa#15976 review F1).
+func pinnedFakeResolve(resolve func(string) string, sealRoot string) func(string) string {
 	return func(name string) string {
 		p := resolve(name)
 		if p == "" {
 			return ""
 		}
-		if !providerIsPinnedFake(p) {
-			fmt.Fprintf(os.Stderr, "fab: refusing launch (goodqa#15976): provider %s is not a pinned fake and this host has not shown a worker boundary\n", p)
+		sealed, err := sealPinnedFake(p, sealRoot)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "fab: refusing launch (goodqa#15976): %v\n", err)
 			return ""
 		}
-		return p
+		return sealed
 	}
+}
+
+// sealRootFor is the sealed-copy directory beside fabd's schema file in its
+// work root; "" (no sealing possible, every fake launch refused) when the
+// schema path is not absolute.
+func sealRootFor(schemaPath string) string {
+	abs, err := filepath.Abs(schemaPath)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(abs), "pinned-providers")
+}
+
+// sealedProviderRO is the sealed-copy directory, a read root of the worker
+// sandbox profiles (set by fab daemon before it builds them).
+var sealedProviderRO []string
+
+// maxFakeBytes bounds what a seal reads; the reviewed fakes are a few KiB.
+const maxFakeBytes = 1 << 20
+
+// readPinned reads path once (no symlink at the last component) and returns
+// its bytes only when they hash to want, or to any pinned fake if want is "".
+func readPinned(path, want string) ([]byte, string, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, "", err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, "", err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, "", fmt.Errorf("%s is not a regular file", path)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxFakeBytes+1))
+	if err != nil {
+		return nil, "", err
+	}
+	if len(b) > maxFakeBytes {
+		return nil, "", fmt.Errorf("%s is larger than any pinned fake", path)
+	}
+	sum := sha256.Sum256(b)
+	sha := hex.EncodeToString(sum[:])
+	if (want != "" && sha != want) || (want == "" && !dispatch.PinnedFake(sha)) {
+		return nil, "", fmt.Errorf("provider %s has sha256 %s, not a pinned fake, and this host has not shown a worker boundary", path, sha)
+	}
+	return b, sha, nil
+}
+
+// sealPinnedFake copies the verified bytes of a pinned fake into
+// sealRoot/<sha>/<name>, in directories fabd owns and only fabd can write
+// (0755, files 0555), and returns the copy's path. The stdin fake execs the
+// recorded fake beside it, so its delegate is verified (RecordedFakeSHA256)
+// and sealed into the same directory. A worker running as another uid can
+// read and execute the copies but cannot replace them.
+func sealPinnedFake(path, sealRoot string) (string, error) {
+	if sealRoot == "" || !filepath.IsAbs(sealRoot) {
+		return "", errors.New("no sealed provider directory configured")
+	}
+	b, sha, err := readPinned(path, "")
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(sealRoot, sha)
+	for _, d := range []string{sealRoot, dir} {
+		if err := ownedSealDir(d); err != nil {
+			return "", err
+		}
+	}
+	if sha == dispatch.StdinFakeSHA256 {
+		// The stdin fake's own lookup order: fakeclaude-live, then fakeclaude.sh.
+		var del string
+		for _, c := range []string{"fakeclaude-live", "fakeclaude.sh"} {
+			if _, err := os.Lstat(filepath.Join(filepath.Dir(path), c)); err == nil {
+				del = c
+				break
+			}
+		}
+		if del == "" {
+			return "", fmt.Errorf("the stdin fake %s has no recorded fake beside it", path)
+		}
+		db, _, err := readPinned(filepath.Join(filepath.Dir(path), del), dispatch.RecordedFakeSHA256)
+		if err != nil {
+			return "", fmt.Errorf("stdin fake delegate: %w", err)
+		}
+		if err := installSealed(dir, del, db); err != nil {
+			return "", err
+		}
+	}
+	name := filepath.Base(path)
+	if err := installSealed(dir, name, b); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name), nil
+}
+
+// ownedSealDir creates d (0755) if needed and requires a real directory
+// owned by this uid and writable by nobody else.
+func ownedSealDir(d string) error {
+	if err := os.Mkdir(d, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("sealed provider directory: %w", err)
+	}
+	st, err := os.Lstat(d)
+	if err != nil {
+		return fmt.Errorf("sealed provider directory: %w", err)
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !st.IsDir() || !ok || int(sys.Uid) != os.Getuid() || st.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("sealed provider directory %s must be a directory owned by uid %d and writable only by it", d, os.Getuid())
+	}
+	return nil
+}
+
+// installSealed writes b to dir/name atomically (temp file, then rename),
+// mode 0555, replacing whatever was there.
+func installSealed(dir, name string, b []byte) error {
+	f, err := os.CreateTemp(dir, ".seal-*")
+	if err != nil {
+		return fmt.Errorf("seal %s: %w", name, err)
+	}
+	tmp := f.Name()
+	_, werr := f.Write(b)
+	if werr == nil {
+		werr = f.Chmod(0o555)
+	}
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = os.Rename(tmp, filepath.Join(dir, name))
+	}
+	if werr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("seal %s: %w", name, werr)
+	}
+	return nil
 }

@@ -169,11 +169,17 @@ func daemonMain(args []string) error {
 	if err := os.WriteFile(schemaPath, []byte(checkpointSchema), 0o644); err != nil {
 		return err
 	}
+	// goodqa#15976 F1: the directory of sealed fake copies exists before
+	// any profile is built, so both profiles can grant it read-only.
+	if err := ownedSealDir(dp.SealRoot); err != nil {
+		return err
+	}
+	sealedProviderRO = []string{dp.SealRoot}
 	// The read-allow-back and the control use the same start-time
 	// resolution; each launch resolves the name again (productionLaunch),
 	// so an update that repoints the symlink is followed (goodqa#15161
 	// reviews C and N1).
-	darwinLaunchRO = launchInputs(dp.Path, hooksDir, schemaPath)
+	darwinLaunchRO = append(launchInputs(dp.Path, hooksDir, schemaPath), dp.SealRoot)
 	darwinProvider = dp.Path
 	ln, err := launcherForThisHost()
 	if err != nil {
@@ -294,6 +300,9 @@ func resolveStartProvider(provider string) (string, error) {
 type daemonProvider struct {
 	Path   string
 	Launch claude.Launch
+	// SealRoot holds the sealed copies a fake-only start launches
+	// (goodqa#15976 F1): <work root>/pinned-providers, beside the schema.
+	SealRoot string
 }
 
 func newDaemonProvider(operator, schemaPath, hooksDir string) (daemonProvider, error) {
@@ -301,7 +310,7 @@ func newDaemonProvider(operator, schemaPath, hooksDir string) (daemonProvider, e
 	if err != nil {
 		return daemonProvider{}, err
 	}
-	return daemonProvider{Path: p, Launch: productionLaunch(operator, schemaPath, hooksDir)}, nil
+	return daemonProvider{Path: p, Launch: productionLaunch(operator, schemaPath, hooksDir), SealRoot: sealRootFor(schemaPath)}, nil
 }
 
 // productionLaunch is the launch fabd hands the scheduler. Binary keeps
