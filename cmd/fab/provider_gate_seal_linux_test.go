@@ -29,10 +29,9 @@ func TestSealedFakeIgnoresAReplacementAfterVerification(t *testing.T) {
 		name     string
 		provider string // the file fabd is started with
 		replace  string // the file swapped after verification
-		run      func(argv0 string) string
 	}{
-		{"recorded fake replaced", "fakeclaude-live", "fakeclaude-live", func(a string) string { return a }},
-		{"stdin fake's delegate replaced", "fakeclaude-stdin", "fakeclaude-live", func(a string) string { return filepath.Join(filepath.Dir(a), "fakeclaude-live") }},
+		{"recorded fake replaced", "fakeclaude-live", "fakeclaude-live"},
+		{"stdin fake's delegate replaced", "fakeclaude-stdin", "fakeclaude-live"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			bin := t.TempDir()
@@ -62,18 +61,85 @@ func TestSealedFakeIgnoresAReplacementAfterVerification(t *testing.T) {
 			if err := os.Rename(swap, filepath.Join(bin, c.replace)); err != nil {
 				t.Fatal(err)
 			}
-			// Resume: execute what the launch named.
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, c.run(argv[0]))
-			cmd.Env = []string{"PATH=/usr/bin:/bin", "FAB=/bin/false", "FAB_WORKTREE=" + t.TempDir(), "FAB_RUN_DIR=" + t.TempDir()}
-			out, _ := cmd.CombinedOutput()
+			// Resume: execute what the launch named (the wrapper itself
+			// for the stdin fake, fed one stream-json message).
+			out := runLaunched(t, argv[0], c.provider == "fakeclaude-stdin")
 			if _, err := os.Stat(marker); err == nil {
-				t.Fatalf("the replacement ran after verification (exec %s): %s", c.run(argv[0]), out)
+				t.Fatalf("the replacement ran after verification (exec %s): %s", argv[0], out)
 			}
-			if !strings.Contains(string(out), `"claude_code_version":"fake-1"`) {
+			if !strings.Contains(out, `"claude_code_version":"fake-1"`) {
 				t.Fatalf("the verified fake did not run: %s", out)
 			}
 		})
 	}
+}
+
+// goodqa#15976 delta review F2: the sealed wrapper must find the sealed
+// recorded fake whatever the input files were called, including names that
+// collide with the wrapper's own delegate lookup (fakeclaude-live, then
+// fakeclaude.sh). Each layout runs through the wrapper itself.
+func TestSealedStdinFakeFindsItsDelegateWhateverTheNames(t *testing.T) {
+	fake := filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude.sh")
+	stdinFake := filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude-stdin.sh")
+	for _, c := range []struct{ wrapper, delegate string }{
+		{"fakeclaude-live", "fakeclaude.sh"},
+		{"fakeclaude.sh", "fakeclaude-live"},
+		{"fakeclaude-stdin", "fakeclaude-live"},
+	} {
+		t.Run(c.wrapper+" with "+c.delegate, func(t *testing.T) {
+			bin := t.TempDir()
+			copyFile(t, fake, filepath.Join(bin, c.delegate))
+			copyFile(t, stdinFake, filepath.Join(bin, c.wrapper))
+			dp, err := newDaemonProvider(filepath.Join(bin, c.wrapper), filepath.Join(t.TempDir(), "checkpoint.schema.json"), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gateDaemonProvider(&dp, false, true, &host.Linux{User: "fab-worker"}); err != nil {
+				t.Fatalf("the trusted stdin fake was refused: %v", err)
+			}
+			l := dp.Launch
+			l.Prompt = "checkpoint"
+			argv, _, err := claude.Argv(launchGrant(t), l)
+			if err != nil {
+				t.Fatalf("verified launch refused: %v", err)
+			}
+			out := runLaunched(t, argv[0], true)
+			if !strings.Contains(out, `"claude_code_version":"fake-1"`) {
+				t.Fatalf("the sealed wrapper did not reach the recorded fake: %s", out)
+			}
+			// Fixed sealed names, whatever the inputs were called.
+			ents, err := os.ReadDir(filepath.Dir(argv[0]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var names []string
+			for _, e := range ents {
+				names = append(names, e.Name())
+			}
+			if filepath.Base(argv[0]) != "fakeclaude-stdin" || strings.Join(names, ",") != "fakeclaude-live,fakeclaude-stdin" {
+				t.Fatalf("sealed %s as %v; want fakeclaude-stdin beside fakeclaude-live only", argv[0], names)
+			}
+		})
+	}
+}
+
+// runLaunched executes argv0 as fabd's launch would. For the stdin fake it
+// passes --input-format stream-json, FAB_MISSION and exactly one user
+// message whose content is this mission's projection.
+func runLaunched(t *testing.T, argv0 string, stdin bool) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var cmd *exec.Cmd
+	env := []string{"PATH=/usr/bin:/bin", "FAB=/bin/false", "FAB_WORKTREE=" + t.TempDir(), "FAB_RUN_DIR=" + t.TempDir()}
+	if stdin {
+		cmd = exec.CommandContext(ctx, argv0, "--input-format", "stream-json", "--output-format", "stream-json")
+		env = append(env, "FAB_MISSION=m_seal_test")
+		cmd.Stdin = strings.NewReader(`{"type":"user","message":{"role":"user","content":"{\"checkpoint\":{\"mission\":\"m_seal_test\"}}"}}` + "\n")
+	} else {
+		cmd = exec.CommandContext(ctx, argv0)
+	}
+	cmd.Env = env
+	out, _ := cmd.CombinedOutput()
+	return string(out)
 }

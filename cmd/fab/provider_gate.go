@@ -202,8 +202,17 @@ func readPinned(path, want string) ([]byte, string, error) {
 	return b, sha, nil
 }
 
+// Sealed copies have fixed names, independent of what the inputs were
+// called: the stdin fake's own lookup (fakeclaude-live first) then always
+// finds the sealed recorded fake, and the wrapper can never overwrite its
+// delegate (goodqa#15976 delta review F2).
+const (
+	sealedStdinName    = "fakeclaude-stdin"
+	sealedRecordedName = "fakeclaude-live"
+)
+
 // sealPinnedFake copies the verified bytes of a pinned fake into
-// sealRoot/<sha>/<name>, in directories fabd owns and only fabd can write (0755,
+// sealRoot/<sha>/, in directories fabd owns and only fabd can write (0755,
 // files 0555), and returns the copy's path. The stdin fake execs the
 // recorded fake beside it, so its delegate is verified (RecordedFakeSHA256)
 // and sealed into the same directory. The returned path has no symlinks
@@ -228,10 +237,15 @@ func sealPinnedFake(path, sealRoot string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	name := sealedRecordedName
 	if sha == dispatch.StdinFakeSHA256 {
-		// The stdin fake's own lookup order: fakeclaude-live, then fakeclaude.sh.
+		name = sealedStdinName
+		// The stdin fake's own lookup order beside it, never itself.
 		var del string
 		for _, c := range []string{"fakeclaude-live", "fakeclaude.sh"} {
+			if c == filepath.Base(path) {
+				continue
+			}
 			if _, err := os.Lstat(filepath.Join(filepath.Dir(path), c)); err == nil {
 				del = c
 				break
@@ -244,11 +258,10 @@ func sealPinnedFake(path, sealRoot string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("stdin fake delegate: %w", err)
 		}
-		if err := installSealed(dir, del, db); err != nil {
+		if err := installSealed(dir, sealedRecordedName, db); err != nil {
 			return "", err
 		}
 	}
-	name := filepath.Base(path)
 	if err := installSealed(dir, name, b); err != nil {
 		return "", err
 	}
