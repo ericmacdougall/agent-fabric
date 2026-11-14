@@ -54,6 +54,20 @@ func daemonProviderGate(noDispatch, trustProvider bool, providerPath string, p h
 	return false, gateErr
 }
 
+// gateDaemonProvider applies daemonProviderGate to fabd's provider and, for
+// a fake-only start, makes its launch re-check the resolved file at every
+// launch (AC-3), so a binary swapped in after the start is refused.
+func gateDaemonProvider(dp *daemonProvider, noDispatch, trustProvider bool, p host.Profile) error {
+	fakeOnly, err := daemonProviderGate(noDispatch, trustProvider, dp.Path, p)
+	if err != nil {
+		return err
+	}
+	if fakeOnly {
+		dp.Launch.Resolve = pinnedFakeResolve(dp.Launch.Resolve)
+	}
+	return nil
+}
+
 // nativeRunnerGate (goodqa#15976 AC-2): the native anthropic-api runner
 // calls a real model, and M1 builds keep it off on every host. Only the
 // existing test-only --unconfined-fake-host mode runs.
@@ -82,6 +96,12 @@ func harnessProviderGate(adapter, claudeBin string, codexRun, unconfinedFake boo
 		}
 	}
 	return nil
+}
+
+// demoProviderGate (goodqa#15976 AC-2): `fab harness demo` always drives a
+// real native client, so M1 builds refuse it.
+func demoProviderGate(provider string) error {
+	return realProviderRefused{fmt.Sprintf("fab harness demo runs the real %s client", provider)}
 }
 
 // harnessTestPins holds the sha256 of the throwaway claude fakes the

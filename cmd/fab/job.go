@@ -155,12 +155,8 @@ func daemonMain(args []string) error {
 	if err != nil {
 		return err
 	}
-	fakeOnly, err := daemonProviderGate(*noDispatch, *trustProvider, dp.Path, gateProfile)
-	if err != nil {
+	if err := gateDaemonProvider(&dp, *noDispatch, *trustProvider, gateProfile); err != nil {
 		return err
-	}
-	if fakeOnly {
-		dp.Launch.Resolve = pinnedFakeResolve(dp.Launch.Resolve)
 	}
 	// The schema is written before the profile and the controls, so the
 	// launch_inputs_readable control sees the file a real launch reads.

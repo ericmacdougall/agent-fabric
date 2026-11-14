@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"fabric/internal/host"
+	"fabric/internal/provider/claude"
 )
 
 func copyFile(t *testing.T, src, dst string) {
@@ -194,5 +195,69 @@ func TestHarnessProviderGate(t *testing.T) {
 	wantRealProviderRefusal(t, err, "harness run claude-code real")
 	if _, statErr := os.Stat(ev); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("the event file was created before the refusal (%v)", statErr)
+	}
+}
+
+// goodqa#15976 AC-3: through fabd's own launch. A trusted start with the
+// pinned fake launches it; after the file is swapped for a real binary the
+// next launch is refused before any argv exists. Without the per-launch
+// wrap the swapped binary would launch.
+func TestTrustedLaunchRefusesASwappedBinary(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "fakeclaude-live")
+	copyFile(t, filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude.sh"), p)
+	dp, err := newDaemonProvider(p, "/srv/wr/checkpoint.schema.json", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gateDaemonProvider(&dp, false, true, &host.Linux{User: "fab-worker"}); err != nil {
+		t.Fatalf("a trusted pinned fake was refused: %v", err)
+	}
+	l := dp.Launch
+	l.Prompt = "checkpoint"
+	g := launchGrant(t)
+	if argv, _, err := claude.Argv(g, l); err != nil || argv[0] != realPathT(t, p) {
+		t.Fatalf("first launch argv=%v err=%v", argv, err)
+	}
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nexec claude \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if argv, _, err := claude.Argv(g, l); err == nil {
+		t.Fatalf("the swapped binary launched: %v", argv)
+	}
+}
+
+// With FABRIC_LINUX_WORKER_MANAGER=1, fabd builds its launcher from the
+// worker manager instead of panicking on a *host.Linux assertion: the pinned
+// stdin fake in registry mode gets past the gate and the launcher to the
+// (closed) store.
+func TestDaemonLaunchesUnderTheWorkerManager(t *testing.T) {
+	t.Setenv("FABRIC_LINUX_WORKER_MANAGER", "1")
+	t.Setenv("FABRIC_WORKER_USER", "")
+	t.Setenv("FABRIC_RUNNER_DSN_ENV", "")
+	t.Setenv("FABRIC_DSN", "postgres://fabd@127.0.0.1:1/none?connect_timeout=1")
+	t.Setenv("FABRIC_RUNNER_DSN", "postgres://runner@127.0.0.1:1/none?connect_timeout=1")
+	tiers := filepath.Join(t.TempDir(), "tiers.json")
+	if err := os.WriteFile(tiers, []byte(`{"rungs":{"r1":{"effort":"medium","models":{"claude":"m"}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := filepath.Abs(filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude-stdin.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = daemonMain([]string{"--work-root", filepath.Join(t.TempDir(), "wr"), "--provider", pinned, "--tier-table", tiers, "--rung", "r1", "--once",
+		"--dispatch-via=registry", "--trust-provider", "--worker-user", "fab-worker"})
+	if err == nil || !strings.Contains(err.Error(), "failed to connect") {
+		t.Fatalf("want the store connection error after the gate and the launcher, got %v", err)
+	}
+}
+
+// goodqa#15976 AC-2: `fab harness demo` drives a real client and is refused
+// before its workspace check or event file.
+func TestHarnessDemoRefused(t *testing.T) {
+	ev := filepath.Join(t.TempDir(), "events.jsonl")
+	err := harnessDemoMain([]string{"--provider", "claude", "--workspace", filepath.Join(t.TempDir(), "ws"), "--events", ev})
+	wantRealProviderRefusal(t, err, "harness demo")
+	if _, statErr := os.Stat(ev); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("the event file was created (%v)", statErr)
 	}
 }

@@ -43,6 +43,11 @@ func harnessDemoMain(args []string) error {
 	if fs.NArg() != 0 || (*provider != "claude" && *provider != "codex") || *dir == "" || *events == "" {
 		return usageErr("usage: fab harness demo --provider claude|codex --workspace DIR --events FILE")
 	}
+	// goodqa#15976 AC-2: the demo runs a real claude or codex client, and M1
+	// refuses real providers on macOS (and the demo runs nowhere else).
+	if err := demoProviderGate(*provider); err != nil {
+		return err
+	}
 	if runtime.GOOS != "darwin" {
 		return errors.New("demo: reviewed Darwin native clients required")
 	}
