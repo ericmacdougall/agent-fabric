@@ -25,6 +25,45 @@ type Fake struct {
 	// ignoring the context: an executor that breaks the contract.
 	Hang  bool
 	Stall time.Duration
+	// PreconditionFail makes Precondition refuse (nothing is sent).
+	PreconditionFail bool
+	// Hold keeps each request pending at the remote and returns a transport
+	// error; Release applies the held requests later (a slow GoodQA write).
+	Hold  bool
+	held  []Submission
+	sends int
+}
+
+// Release applies every held request, as a remote that finally processes
+// them would.
+func (f *Fake) Release() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, sub := range f.held {
+		if _, dup := f.applied[sub.RemoteKey]; !dup {
+			f.applied[sub.RemoteKey] = sub.Effect.Request
+			f.order = append(f.order, sub.RemoteKey)
+		}
+	}
+	f.held = nil
+}
+
+// Sends is how many requests reached the remote (applied, held or lost
+// after), whatever the remote's deduplication made of them.
+func (f *Fake) Sends() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.sends
+}
+
+// FindComment is the read-only trailer lookup (CommentFinder).
+func (f *Fake) FindComment(ctx context.Context, e Effect) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.applied[e.IdemKey]; ok {
+		return "c_" + e.IdemKey, true, nil
+	}
+	return "", false, nil
 }
 
 // wait applies Hang and Stall before a call.
@@ -58,6 +97,9 @@ func (f *Fake) Precondition(ctx context.Context, e Effect) (bool, string, error)
 	if err := f.wait(ctx); err != nil {
 		return false, "", err
 	}
+	if f.PreconditionFail {
+		return false, "issue is closed", nil
+	}
 	return true, "", nil
 }
 
@@ -72,6 +114,11 @@ func (f *Fake) Dispatch(ctx context.Context, sub Submission) (Receipt, error) {
 	}
 	if f.LoseBefor {
 		return Receipt{}, errors.New("connection dropped before the request was sent")
+	}
+	f.sends++
+	if f.Hold {
+		f.held = append(f.held, sub)
+		return Receipt{}, errors.New("request pending at the remote past the deadline")
 	}
 	if _, dup := f.applied[sub.RemoteKey]; !dup {
 		f.applied[sub.RemoteKey] = sub.Effect.Request

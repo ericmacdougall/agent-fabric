@@ -12,8 +12,14 @@ import (
 // attempt was given, the GoodQA key, each DSN password), including the AC-10
 // fragment check on the bound token, and returns a class or label only,
 // never a credential byte.
+//
+// ScanTextExcluding is the AC-10 entry point of W3's matcher: it also runs
+// the literal and entropy rules, with the exclusions applying only to the
+// entropy rule. Scan below repeats the literal and entropy rules itself, so
+// the composition holds even if an implementation omits them.
 type BoundCredentials interface {
 	ScanText(text string) (hit bool, class string)
+	ScanTextExcluding(text string, exclusions []string) (hit bool, class string)
 }
 
 // Allow lists the only strings exempt from the entropy rule (AC-10): runs
@@ -36,6 +42,18 @@ func (a Allow) exempt(run string) bool {
 		}
 	}
 	return false
+}
+
+// list is the exclusion list for ScanTextExcluding: only fabd-supplied
+// strings (the extract listing and the ids), never model output.
+func (a Allow) list() []string {
+	var out []string
+	for _, s := range append([]string{a.Mission, a.Attempt}, a.Paths...) {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // Scan classes. Each is a fixed code for a delivery_blocked record.
@@ -63,7 +81,7 @@ func Scan(modelText string, creds BoundCredentials, allow Allow) (blocked bool, 
 	if creds == nil {
 		return true, ClassNoCreds
 	}
-	if hit, c := creds.ScanText(modelText); hit {
+	if hit, c := creds.ScanTextExcluding(modelText, allow.list()); hit {
 		if c == "" || !classRE.MatchString(c) {
 			c = ClassCredential
 		}

@@ -57,6 +57,10 @@ func (c synthCreds) ScanText(text string) (bool, string) {
 	return false, ""
 }
 
+func (c synthCreds) ScanTextExcluding(text string, _ []string) (bool, string) {
+	return c.ScanText(text)
+}
+
 func synthToken(seed int64) string {
 	r := rand.New(rand.NewSource(seed))
 	const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
