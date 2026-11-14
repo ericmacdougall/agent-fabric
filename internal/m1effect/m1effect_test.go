@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -325,13 +326,7 @@ func TestStepForeignRowBlocks(t *testing.T) {
 	e := newEnv(t)
 	a, _ := e.start()
 	e.st.Pool().Exec(e.ctx, `DELETE FROM fabric_settings WHERE key = 'comment_policy'`) //nolint:errcheck
-	req := []byte(`{"ticket":"goodqa#1","body":"foreign"}`)
-	legacy := effects.New(e.st) // a non-M1 broker, also in an M1 test build
-	legacy.TestAsNonM1()
-	if _, err := legacy.Submit(e.ctx, e.fake, effects.IntentSpec{Mission: mission, Attempt: a.Attempt, Fence: a.Fence, Kind: "ticket_comment",
-		Subject: "ticket:goodqa#1", IdemKey: "k-foreign", Request: req}); err != nil {
-		t.Fatal(err)
-	}
+	foreignIntent(t, e, a, "k-foreign")
 	e.st.Pool().Exec(e.ctx, `INSERT INTO fabric_settings (key, value) VALUES ('comment_policy', 'm1')`) //nolint:errcheck
 	if r := e.step.Run(e.ctx, a, nil); r.Kind != Blocked || r.Class != effects.CodeSecondEffect {
 		t.Fatalf("%+v", r)
@@ -585,14 +580,7 @@ func TestLoopPredicate(t *testing.T) {
 	e := newEnv(t)
 	e.st.Pool().Exec(e.ctx, `DELETE FROM fabric_settings WHERE key = 'comment_policy'`) //nolint:errcheck
 	a, _ := e.start()
-	req := []byte(`{"ticket":"goodqa#1","body":"x"}`)
-	legacy := effects.New(e.st) // a non-M1 broker, also in an M1 test build
-	legacy.TestAsNonM1()
-	x, err := legacy.Submit(e.ctx, e.fake, effects.IntentSpec{Mission: mission, Attempt: a.Attempt, Fence: a.Fence, Kind: "ticket_comment",
-		Subject: "ticket:goodqa#1", IdemKey: "k-legacy", Request: req})
-	if err != nil {
-		t.Fatal(err)
-	}
+	x := effects.Effect{ID: foreignIntent(t, e, a, "k-legacy")}
 	e.crashEnd(a)
 	if ps, err := e.loop.Pass(e.ctx); err != nil || ps != (PassStats{}) {
 		t.Fatalf("unmarked: %+v %v", ps, err)
@@ -631,8 +619,8 @@ func TestLoopOldTerminalRowsDoNotStarve(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, err := tx.Exec(e.ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state, dispatches, updated_at)
-				VALUES ($1, $2, 'r_gone', 1, 'ticket_comment', $1, $3, '{}', 'x', $4, 1, now() - interval '1 hour')`,
-				"e_old_"+string(m), string(m), effects.M1Key(m), st); err != nil {
+				VALUES ($1, $2, $5, 1, 'ticket_comment', $1, $3, '{}', 'x', $4, 1, now() - interval '1 hour')`,
+				oldID(st[:1], i), string(m), effects.M1Key(m), st, "r_gone_"+string(m)); err != nil {
 				t.Fatal(err)
 			}
 			if err := tx.Commit(e.ctx); err != nil {
@@ -652,20 +640,79 @@ func TestLoopOldTerminalRowsDoNotStarve(t *testing.T) {
 	if x, _ := e.effect(); x.State != effects.NotApplied {
 		t.Fatalf("intent %s", x.State)
 	}
-	first := reads
-	ps, err = e.loop.Pass(e.ctx)
-	if err != nil {
+	// Later passes finish the backlog Limit rows at a time and then do
+	// nothing: every terminal row has a durable record, and each late-write
+	// row was read once (Recheck is 5 min).
+	quiet := false
+	for i := 0; i < 6 && !quiet; i++ {
+		ps, err = e.loop.Pass(e.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		quiet = ps == (PassStats{})
+	}
+	if !quiet {
+		t.Fatal("the loop never went quiet")
+	}
+	if reads != 3 {
+		t.Fatalf("late-write readbacks %d, want 3 (one per NOT_APPLIED row)", reads)
+	}
+	got := map[string]bool{}
+	rs, _ := records.List(e.dir, records.DeliveryBlocked)
+	for _, r := range rs {
+		got[r.Effect] = true
+	}
+	for i := 0; i < 3; i++ {
+		for _, p := range []string{"F", "N"} {
+			if id := oldID(p, i); !got[id] {
+				t.Errorf("no delivery_blocked record for %s", id)
+			}
+		}
+	}
+}
+
+// A record that cannot be written is retried by the next pass, not lost.
+func TestLoopRetriesUnwrittenRecord(t *testing.T) {
+	e := newEnv(t)
+	e.step.afterSubmit = func(effects.Effect) { crashAt() }
+	a, _ := e.start()
+	runCrashing(func() { e.step.Run(e.ctx, a, nil) })
+	e.crashEnd(a)
+	good := e.loop.RecordsDir
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// 3 rows of each kind, 2 done in the first pass: the third record-only
-	// row, and one late-write read of the third NOT_APPLIED row (which also
-	// writes its delivery_blocked).
-	if ps.Blocked != 2 || reads != first+1 {
-		t.Fatalf("second pass %+v reads %d->%d: done rows were not skipped", ps, first, reads)
+	e.loop.RecordsDir = filepath.Join(blocker, "records") // Append fails: a file is in the way
+	if ps, err := e.loop.Pass(e.ctx); err != nil || ps.Abandoned != 1 || ps.Blocked != 0 {
+		t.Fatalf("unwritable pass %+v %v", ps, err)
 	}
-	if ps, err = e.loop.Pass(e.ctx); err != nil || ps != (PassStats{}) || reads != first+1 {
-		t.Fatalf("third pass %+v %v reads %d: nothing is left to do", ps, err, reads)
+	e.loop.RecordsDir = good
+	if ps, err := e.loop.Pass(e.ctx); err != nil || ps.Blocked != 1 {
+		t.Fatalf("retry pass %+v %v: the record was lost", ps, err)
 	}
+	if rs, _ := records.Read(good, a.Attempt); len(rs) != 1 || rs[0].Class != "effect_not_applied" && rs[0].Class != "superseded" {
+		t.Fatalf("records %+v", rs)
+	}
+}
+
+// foreignIntent writes a ticket_comment INTENT with a non-canonical key the
+// way a legacy (non-M1) broker would, in either build: a plain INSERT in the
+// initial state, which the born-as-intent trigger allows.
+func foreignIntent(t *testing.T, e *env, a Attempt, key string) string {
+	t.Helper()
+	id := fmt.Sprintf("e_%024x", len(key)*7919)
+	if _, err := e.st.Pool().Exec(e.ctx, `INSERT INTO effects (id, mission_id, attempt_id, fence, kind, subject, idem_key, request, request_sha, state)
+		VALUES ($1, $2, $3, $4, 'ticket_comment', 'ticket:goodqa#1', $5, '{"ticket":"goodqa#1","body":"foreign"}', 'x', 'INTENT')`,
+		id, string(mission), string(a.Attempt), a.Fence, key); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// oldID is a fixture effect id in the broker's grammar (e_ + 24 hex).
+func oldID(state string, i int) string {
+	return fmt.Sprintf("e_%022x%02x", state[0], i)
 }
 
 type countingExec struct {
@@ -693,5 +740,18 @@ func TestLoopPassDeadline(t *testing.T) {
 	e.loop.Pass(e.ctx) //nolint:errcheck
 	if d := time.Since(t0); d > 3*time.Second {
 		t.Fatalf("pass took %v with a 300 ms deadline", d)
+	}
+	// The cut-off readback left nothing stuck: the next pass settles it.
+	if x, _ := e.effect(); x.State != effects.Reconciling && x.State != effects.Unknown {
+		t.Fatalf("cut-off readback left %s", x.State)
+	}
+	e.fake.Hang = false
+	e.loop.Timeout = 0
+	time.Sleep(1200 * time.Millisecond) // past the 1 s transport deadline (quiet window 0)
+	if _, err := e.loop.Pass(e.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if x, _ := e.effect(); x.State != effects.NotApplied {
+		t.Fatalf("after the hang: %s", x.State)
 	}
 }

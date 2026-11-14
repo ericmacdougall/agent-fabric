@@ -3,6 +3,7 @@ package m1comment
 import (
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -108,7 +109,16 @@ func scanOne(modelText string, creds BoundCredentials, allow Allow) (blocked boo
 	if pgRE.MatchString(modelText) {
 		return true, ClassPostgresURL
 	}
-	for _, run := range entropyRE.FindAllString(modelText, -1) {
+	// The entropy rule first blanks every allowed string, longest first, so
+	// an allowed id glued to model text (for example by Neutralise removing
+	// brackets) is not counted, while the model bytes around it still are.
+	ent := modelText
+	al := allow.list()
+	sort.Slice(al, func(i, j int) bool { return len(al[i]) > len(al[j]) })
+	for _, s := range al {
+		ent = strings.ReplaceAll(ent, s, " ")
+	}
+	for _, run := range entropyRE.FindAllString(ent, -1) {
 		if allow.exempt(run) {
 			continue
 		}

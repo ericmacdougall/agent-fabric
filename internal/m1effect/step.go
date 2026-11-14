@@ -214,15 +214,19 @@ func (s *Step) block(a Attempt, class, effect string) Result {
 	return Result{Kind: Blocked, Class: class, Effect: effect}
 }
 
-func (s *Step) record(r records.Record) { writeRecord(s.RecordsDir, r) }
+func (s *Step) record(r records.Record) { writeRecord(s.RecordsDir, r) } //nolint:errcheck // logged; the FINISH prefix carries the class
 
-func writeRecord(dir string, r records.Record) {
+// writeRecord appends r and reports whether it is durable. A failure is
+// logged by kind and attempt only.
+func writeRecord(dir string, r records.Record) error {
 	if dir == "" {
-		return
+		return nil
 	}
 	if err := records.Append(dir, r); err != nil {
 		fmt.Fprintf(os.Stderr, "fabd: m1 record %s for %s not written: %v\n", r.Kind, r.Attempt, err)
+		return err
 	}
+	return nil
 }
 
 // cleanClass maps a class onto the records grammar (lower case, at most 80

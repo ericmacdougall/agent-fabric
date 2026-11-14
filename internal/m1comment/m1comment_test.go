@@ -314,3 +314,26 @@ func TestBodyProperty(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The neutralised scan must not turn an allowed path or id into a false
+// positive: Markdown links, bracketed and angle-bracketed paths and the
+// attempt id glued to punctuation still pass.
+func TestScanNeutralisedKeepsAllowedPaths(t *testing.T) {
+	wt := "/srv/fabric/runs/r_01JD8XK2Q7M4N6P8R0S2T4V6W8Y0Z1A3/wt/"
+	texts := []string{
+		"Root cause: [lib.sh](" + wt + "lib.sh) sum_to uses -lt, an off-by-one; see <" + wt + "test.sh>.",
+		"attempt [r_01JD8XK2Q7M4N6P8R0S2T4V6W8Y0Z1A3] ran ./test.sh, exit 1 in [" + wt + "lib.sh]",
+		"![trace](" + wt + "test.sh) mission [m_canary-m1] <r_01JD8XK2Q7M4N6P8R0S2T4V6W8Y0Z1A3>",
+		"exit1[r_01JD8XK2Q7M4N6P8R0S2T4V6W8Y0Z1A3]failed and run<r_01JD8XK2Q7M4N6P8R0S2T4V6W8Y0Z1A3>ended",
+	}
+	for _, text := range texts {
+		if blocked, class := Scan(text, credsA, allow); blocked {
+			t.Errorf("blocked %q (class %s)", text, class)
+		}
+	}
+	// Model bytes glued to an allowed id are still scanned on their own.
+	glued := "[r_01JD8XK2Q7M4N6P8R0S2T4V6W8Y0Z1A3]Zx9Qw2Lk8Vb3Np7Rt5Ym1Hc4Jd6Fg0SaUeIoPyTrEwQ"
+	if blocked, class := Scan(glued, credsA, allow); !blocked || class != ClassEntropy {
+		t.Errorf("glued high-entropy run: blocked=%v class=%q", blocked, class)
+	}
+}

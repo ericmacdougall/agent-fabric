@@ -411,3 +411,31 @@ func TestEventsShowsEffects(t *testing.T) {
 		t.Fatal("the effect wrote mission events")
 	}
 }
+
+// NEG-23 at the daemon entry point: an M1 fabd on an unmarked database is
+// refused exit 3 after the configuration checks (which open no store) and
+// before the containment controls start any probe (no controls dir).
+func TestDaemonMarkerRefusedBeforeControls(t *testing.T) {
+	if !m1build.Enabled {
+		t.Skip("M1 build only: a non-M1 fabd does not check the marker at start")
+	}
+	newM1Env(t, false)
+	t.Setenv("FABRIC_DSN", storetest.DSN)
+	t.Setenv("FABRIC_RUNNER_DSN", "postgres://runner@127.0.0.1:1/none?connect_timeout=1") // never dialled before the refusal
+	tiers := filepath.Join(t.TempDir(), "tiers.json")
+	if err := os.WriteFile(tiers, []byte(`{"rungs":{"r1":{"effort":"medium","models":{"claude":"m"}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake, err := filepath.Abs(filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wr := filepath.Join(t.TempDir(), "wr")
+	err = daemonMain([]string{"--work-root", wr, "--provider", fake, "--tier-table", tiers, "--rung", "r1", "--once", "--worker-user", ""})
+	if !effects.IsPolicyRefusal(err, effects.CodeMarkerMissing) || exitCode(err) != 3 {
+		t.Fatalf("want m1_policy_marker_missing (exit 3), got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wr, "controls")); !os.IsNotExist(err) {
+		t.Fatalf("the containment controls ran before the marker refusal (controls dir: %v)", err)
+	}
+}

@@ -28,9 +28,13 @@ import (
 //
 // A pass runs three bounded queries, each of at most Limit rows, so rows
 // that never change state cannot starve the ones that need action:
-// actionable rows (reconcile or abandon), record-only terminal rows (one
-// delivery_blocked record each, skipped once written by this process), and
-// late-write checks (each rechecked at most every LateWriteRecheck).
+// actionable rows (reconcile or abandon), terminal non-CONFIRMED rows (one
+// delivery_blocked record each, retried every pass until it is durable,
+// then skipped by this process), and late-write checks (each rechecked at
+// most every LateWriteRecheck). Terminal rows are selected for
+// LateWriteWindow after they settle; a fabd that stays down longer than
+// that writes no delivery_blocked record for them (fab effect unresolved
+// still lists the effect).
 type Loop struct {
 	Store      *store.Store
 	Broker     *effects.Broker
@@ -75,7 +79,7 @@ const (
 	actionableSQL = `(state IN ('UNKNOWN', 'RECONCILING')
 		OR (state = 'DISPATCHED' AND NOT ` + liveSQL + `)
 		OR (state IN ('INTENT', 'APPROVAL_REQUIRED', 'APPROVED') AND dispatches = 0 AND NOT ` + liveSQL + `))`
-	recordOnlySQL = `state IN ('FAILED_DEFINITE', 'QUARANTINED', 'RESOLVED_NOT_APPLIED') AND NOT ` + liveSQL + `
+	recordOnlySQL = `state IN ('FAILED_DEFINITE', 'QUARANTINED', 'RESOLVED_NOT_APPLIED', 'NOT_APPLIED') AND NOT ` + liveSQL + `
 		AND updated_at > now() - $2::interval AND NOT (id = ANY(coalesce($3::text[], ARRAY[]::text[])))`
 	lateWriteSQL = `state = 'NOT_APPLIED' AND dispatches > 0
 		AND updated_at > now() - $2::interval AND NOT (id = ANY(coalesce($3::text[], ARRAY[]::text[])))`
@@ -149,7 +153,9 @@ func (l *Loop) Pass(ctx context.Context) (PassStats, error) {
 		return ps, err
 	}
 	for _, r := range rec {
-		l.blocked(r, stateClass(effects.State(r.state)), &ps)
+		if l.blocked(r, stateClass(effects.State(r.state)), &ps) != nil {
+			continue // not durable: the next pass writes it again
+		}
 		l.mu.Lock()
 		l.recorded[r.id] = time.Now()
 		l.mu.Unlock()
@@ -226,9 +232,12 @@ func (l *Loop) query(ctx context.Context, where string, args ...any) ([]row, err
 	return page, rows.Err()
 }
 
-func (l *Loop) blocked(r row, class string, ps *PassStats) {
-	writeRecord(l.RecordsDir, records.Record{Mission: r.mission, Attempt: r.attempt, Kind: records.DeliveryBlocked, Class: cleanClass(class), Effect: r.id})
+func (l *Loop) blocked(r row, class string, ps *PassStats) error {
+	if err := writeRecord(l.RecordsDir, records.Record{Mission: r.mission, Attempt: r.attempt, Kind: records.DeliveryBlocked, Class: cleanClass(class), Effect: r.id}); err != nil {
+		return err
+	}
 	ps.Blocked++
+	return nil
 }
 
 func (l *Loop) one(ctx context.Context, r row, ps *PassStats) {
@@ -263,9 +272,7 @@ func (l *Loop) one(ctx context.Context, r row, ps *PassStats) {
 	case effects.FailedDefinite, effects.Quarantined, effects.ResolvedNotApplied:
 		l.blocked(r, stateClass(effects.State(r.state)), ps)
 	case effects.NotApplied:
-		if !r.live {
-			l.blocked(r, stateClass(effects.NotApplied), ps)
-		}
+		// Its delivery_blocked record is the record-only phase's job.
 		f, ok := l.Exec.(effects.CommentFinder)
 		if !ok {
 			return
@@ -285,7 +292,12 @@ func (l *Loop) one(ctx context.Context, r row, ps *PassStats) {
 		if err != nil || !found {
 			return
 		}
-		writeRecord(l.RecordsDir, records.Record{Mission: r.mission, Attempt: r.attempt, Kind: records.LateWrite, CommentID: cleanRemote(id), Effect: r.id})
+		if writeRecord(l.RecordsDir, records.Record{Mission: r.mission, Attempt: r.attempt, Kind: records.LateWrite, CommentID: cleanRemote(id), Effect: r.id}) != nil {
+			l.mu.Lock()
+			delete(l.checked, r.id) // not durable: check again next pass
+			l.mu.Unlock()
+			return
+		}
 		l.mu.Lock()
 		l.checked[r.id] = time.Now().Add(LateWriteWindow)
 		l.mu.Unlock()
