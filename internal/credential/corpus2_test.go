@@ -114,8 +114,11 @@ func TestRedactionFalsePositiveCorpus2(t *testing.T) {
 	}
 	start := time.Now()
 	c := propertyRun(t, streams, n, false)
-	t.Logf("goodqa#16040 corpus2: bytes=%d streams=%d n=%d k_block=%d k_rewrite_clean=%d seeded_rewritten=%d wilson95_upper(k_block)=%.6g elapsed=%s",
-		size, len(streams), c.n, c.kBlock, c.kRewriteClean, c.seededRewritten, WilsonUpper(c.kBlock, c.n, 1.96), time.Since(start).Round(time.Millisecond))
+	t.Logf("goodqa#16040 corpus2: bytes=%d streams=%d n=%d k_block=%d k_rewrite_clean=%d k_exposed_clean=%d seeded_rewritten=%d wilson95_upper(k_block)=%.6g elapsed=%s",
+		size, len(streams), c.n, c.kBlock, c.kRewriteClean, c.kExposedClean, c.seededRewritten, WilsonUpper(c.kBlock, c.n, 1.96), time.Since(start).Round(time.Millisecond))
+	if c.kExposedClean > 0 {
+		t.Fatalf("corpus2: %d of %d runs raised credential_exposure on clean streams", c.kExposedClean, c.n)
+	}
 	if c.kBlock > 0 && WilsonUpper(c.kBlock, c.n, 1.96) > 1e-3 {
 		t.Fatalf("corpus2 blocking hits: k_block=%d of %d", c.kBlock, c.n)
 	}

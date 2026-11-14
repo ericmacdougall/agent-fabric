@@ -58,7 +58,7 @@ func capturedStreams(t *testing.T) [][]byte {
 }
 
 type propCounts struct {
-	n, kBlock, kRewrite, kRewriteClean, seededRewritten int
+	n, kBlock, kRewrite, kRewriteClean, kExposedClean, seededRewritten int
 }
 
 // propertyRun is the goodqa#16040 property: blocking hits and 'X' rewrites
@@ -74,9 +74,12 @@ func propertyRun(t *testing.T, streams [][]byte, n int, rewritesAsBlocks bool) p
 		if err != nil {
 			t.Fatal(err)
 		}
-		blocked, rewrote := false, false
+		blocked, rewrote, exposed := false, false, false
 		for _, s := range streams {
 			r := b.Redact(s, nil)
+			if r.Exposed() {
+				exposed = true
+			}
 			if r.Blocking > 0 || r.Blocked != "" {
 				blocked = true
 			}
@@ -86,6 +89,9 @@ func propertyRun(t *testing.T, streams [][]byte, n int, rewritesAsBlocks bool) p
 		}
 		if rewrote {
 			c.kRewriteClean++
+		}
+		if exposed {
+			c.kExposedClean++ // clean text raising credential_exposure (G5 fails on it)
 		}
 		// NEG: a seeded real token fragment is always redacted, never
 		// treated as benign and never a block.
@@ -119,8 +125,11 @@ func TestRedactionFalsePositiveProperty(t *testing.T) {
 	streams := capturedStreams(t)
 	c := propertyRun(t, streams, n, false)
 	ub := WilsonUpper(c.kBlock, c.n, 1.96)
-	t.Logf("goodqa#16040: streams=%d n=%d k_block=%d k_rewrite=%d k_rewrite_clean=%d seeded_rewritten=%d wilson95_upper(k_block)=%.6g threshold=1e-3",
-		len(streams), c.n, c.kBlock, c.kRewrite, c.kRewriteClean, c.seededRewritten, ub)
+	t.Logf("goodqa#16040: streams=%d n=%d k_block=%d k_rewrite=%d k_rewrite_clean=%d k_exposed_clean=%d seeded_rewritten=%d wilson95_upper(k_block)=%.6g threshold=1e-3",
+		len(streams), c.n, c.kBlock, c.kRewrite, c.kRewriteClean, c.kExposedClean, c.seededRewritten, ub)
+	if c.kExposedClean > 0 {
+		t.Fatalf("%d of %d runs raised credential_exposure on clean streams", c.kExposedClean, c.n)
+	}
 	if n >= 3000 && ub > 1e-3 {
 		t.Fatalf("blocking false-positive rate fails the pre-registered bound: %.6g > 1e-3", ub)
 	}

@@ -75,6 +75,24 @@ func TestScanTextDiagnosisPasses(t *testing.T) {
 	}
 }
 
+// AC-10 must-pass after 76ba99d widened the scan to raw windows of every
+// token form: W2's AC-9 canary diagnosis, with the fabd exclusions, passes
+// against 500 random bound token sets.
+func TestScanTextAC9DiagnosisManyTokens(t *testing.T) {
+	const att = "r_01JD8XK2Q7M4N6P8R0S2T4V6W8Y0Z1A3"
+	excl := []string{"/srv/fabric/runs/" + att + "/wt/lib.sh", "/srv/fabric/runs/" + att + "/wt/test.sh", "m_canary-m1", att}
+	for i := 0; i < 500; i++ {
+		b, err := NewBound(NewSecret(KindToken, "v1", synthToken(t, 80+i%120)),
+			NewSecret(KindGoodQA, "g", synthSecret(t, 40)), NewSecret(KindDSN, "d", synthSecret(t, 24)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hit, class := b.ScanTextExcluding(ac9Diagnosis, excl); hit {
+			t.Fatalf("token set %d: AC-9 diagnosis blocked: %s", i, class)
+		}
+	}
+}
+
 // Owner ruling conditions (3) and (4) on the entropy exclusion.
 func TestScanTextExclusionNegatives(t *testing.T) {
 	tok := synthToken(t, 108)
