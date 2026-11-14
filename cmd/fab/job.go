@@ -110,6 +110,7 @@ func daemonMain(args []string) error {
 	once := fs.Bool("once", false, "run ticks until idle, then exit (tests)")
 	hostID := fs.String("host", "h_"+hostname(), "host id")
 	trustProvider := fs.Bool("trust-provider", false, "the provider is a trusted recorded fake; skip the containment gate")
+	providerSHA := fs.String("provider-sha256", "", "sha256 of the native claude binary; required for a real provider (goodqa#15966 AC-21)")
 	noDispatch := fs.Bool("no-dispatch", false, "consume the outbox and run the other sweeps but never start an attempt (the live fabd install, goodqa#15587)")
 	workerUser := fs.String("worker-user", os.Getenv("FABRIC_WORKER_USER"), "dedicated worker account (Linux); empty means same-UID shadow mode")
 	var holds holdFlags
@@ -158,6 +159,9 @@ func daemonMain(args []string) error {
 	}
 	realProvider, err := gateDaemonProvider(&dp, *noDispatch, *trustProvider, gateProfile)
 	if err != nil {
+		return err
+	}
+	if err := pinRealProvider(&dp, realProvider, *providerSHA); err != nil {
 		return err
 	}
 	// The schema is written before the profile and the controls, so the

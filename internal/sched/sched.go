@@ -882,6 +882,20 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		}
 	}
 	errf, _ := os.Create(filepath.Join(runDir, "stderr.log"))
+	if pre := s.cfg.Launch.PreExec; pre != nil {
+		// goodqa#15966 AC-21: the last check, immediately before the host
+		// execs argv[0]. Nothing has started, so the refusal is definite.
+		if err := pre(argv[0]); err != nil {
+			out.Close()
+			if errf != nil {
+				errf.Close()
+			}
+			if stdin != nil {
+				stdin.Close()
+			}
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
+		}
+	}
 	var h host.Handle
 	s.startAttempts++ // AC-10: every physical start call counts, ambiguous ones too
 	if stdin != nil {
