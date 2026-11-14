@@ -20,6 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"fabric/internal/credential"
 	"fabric/internal/dispatch"
 	"fabric/internal/domain"
 	"fabric/internal/envelope"
@@ -113,6 +114,36 @@ type Config struct {
 	LaunchLimit int
 	// OnlyMission, when set, restricts dispatch to that one mission.
 	OnlyMission domain.MissionID
+	// StreamRoot (goodqa#15966 AC-15) is a fabd-only directory the worker
+	// cannot open, list or replace by path. When set, an attempt's raw
+	// stdout and stderr live in {StreamRoot}/{attempt}/, which no worker
+	// variable names; "" keeps them in the run directory.
+	StreamRoot string
+	// Credential (goodqa#15966 AC-14, AC-18) turns on the subscription-token
+	// launch: a durable binding record before the start, the claude-code
+	// environment from credential.ClaudeEnv, and FABRIC_DSN and FABRIC_HOME
+	// removed. nil launches as before; credential.CheckManifest still refuses
+	// any launch whose environment carries the token or ANTHROPIC_API_KEY.
+	Credential *CredentialLaunch
+}
+
+// CredentialLaunch configures the subscription-token launch.
+type CredentialLaunch struct {
+	Policy      credential.Policy
+	BindingsDir string
+	IDKey       []byte
+	PinnedSHA   string // the pinned real claude sha256
+	// Others returns the GoodQA key and DSN passwords fabd holds now; their
+	// version ids go in the binding record.
+	Others func() []credential.OtherCredential
+}
+
+// streamDir is where an attempt's raw streams live (AC-15).
+func (s *Scheduler) streamDir(runDir string, attempt domain.AttemptID) string {
+	if s.cfg.StreamRoot == "" {
+		return runDir
+	}
+	return filepath.Join(s.cfg.StreamRoot, string(attempt))
 }
 
 // Dispatch paths.
@@ -832,6 +863,37 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	if dsn := s.runnerDSN(); dsn != "" {
 		env = append(env, "FABRIC_DSN="+dsn)
 	}
+	// goodqa#15966 AC-14, AC-18: the binding record is durable before the
+	// start, and only the pinned real claude gets the token.
+	var bound *credential.Durable
+	if c := s.cfg.Credential; c != nil && len(argv) > 0 {
+		var others []credential.OtherCredential
+		if c.Others != nil {
+			others = c.Others()
+		}
+		d, err := c.Policy.PrepareLaunch(c.BindingsDir, c.IDKey, string(mission), string(attempt), others)
+		if err != nil {
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
+		}
+		home := filepath.Join(runDir, "home")
+		if err := os.MkdirAll(home, 0o775); err != nil {
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "run home not prepared: "+err.Error())
+		}
+		os.Chmod(home, 0o775|os.ModeSetgid) //nolint:errcheck // group-shared with the worker account
+		if env, _, err = credential.ClaudeEnv(string(domain.ProviderClaudeCode), argv[0], c.PinnedSHA, env, home, d.Token()); err != nil {
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
+		}
+		bound = d
+	}
+	pin := ""
+	if s.cfg.Credential != nil {
+		pin = s.cfg.Credential.PinnedSHA
+	}
+	if len(argv) > 0 {
+		if err := credential.CheckManifest(string(domain.ProviderClaudeCode), argv[0], pin, env); err != nil {
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
+		}
+	}
 	// S2: ACK_START commits before any runner bytes, so the pre-launch
 	// ownership boundary is durable first. A failed ACK launches nothing.
 	if _, err := s.st.Execute(ctx, "fabd", domain.CommandID("ack:"+string(attempt)), domain.Command{Kind: domain.CmdAckStart, Mission: mission, Attempt: attempt, Fence: fence}); err != nil {
@@ -868,7 +930,15 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 			return s.abandonPrelaunch(ctx, mission, attempt, fence, "dispatch denied: "+gr.Reason)
 		}
 	}
-	out, err := os.Create(filepath.Join(runDir, "stream.jsonl"))
+	// AC-15: fabd opens the worker's stream descriptors O_EXCL, 0600, in a
+	// directory only fabd can reach when StreamRoot is set.
+	sdir := s.streamDir(runDir, attempt)
+	if sdir != runDir {
+		if err := os.MkdirAll(sdir, 0o700); err != nil {
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "stream directory not prepared: "+err.Error())
+		}
+	}
+	out, err := credential.OpenStream(filepath.Join(sdir, "stream.jsonl"))
 	if err != nil {
 		return s.abandonPrelaunch(ctx, mission, attempt, fence, "stream file not created: "+err.Error())
 	}
@@ -881,13 +951,37 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 			return s.abandonPrelaunch(ctx, mission, attempt, fence, "prompt file not opened: "+err.Error())
 		}
 	}
-	errf, _ := os.Create(filepath.Join(runDir, "stderr.log"))
+	errf, err := credential.OpenStream(filepath.Join(sdir, "stderr.log"))
+	if err != nil {
+		out.Close()
+		if stdin != nil {
+			stdin.Close()
+		}
+		return s.abandonPrelaunch(ctx, mission, attempt, fence, "stderr file not created: "+err.Error())
+	}
 	var h host.Handle
-	s.startAttempts++ // AC-10: every physical start call counts, ambiguous ones too
-	if stdin != nil {
-		h, err = s.ln.(host.StdinStarter).StartIO(g, argv, env, stdin, out, errf)
+	start := func() error {
+		s.startAttempts++ // AC-10: every physical start call counts, ambiguous ones too
+		var serr error
+		if stdin != nil {
+			h, serr = s.ln.(host.StdinStarter).StartIO(g, argv, env, stdin, out, errf)
+		} else {
+			h, serr = s.ln.Start(g, argv, env, out, errf)
+		}
+		return serr
+	}
+	if bound != nil {
+		err = credential.Launch(bound, start) // AC-18: no start without the durable record
+		if errors.Is(err, credential.ErrNoBinding) {
+			out.Close()
+			errf.Close()
+			if stdin != nil {
+				stdin.Close()
+			}
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
+		}
 	} else {
-		h, err = s.ln.Start(g, argv, env, out, errf)
+		err = start()
 	}
 	if err != nil {
 		// S4: a start error is ambiguous (the unit may exist). Never a
@@ -931,7 +1025,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		}
 		// T6: with an observed exit the heartbeat keeps the lease while the
 		// settle (and its retries) persist it.
-		if err := s.afterWait(context.Background(), mission, attempt, fence, runDir, code, werr); err != nil {
+		if err := s.afterWait(context.Background(), mission, attempt, fence, sdir, code, werr); err != nil {
 			fmt.Fprintln(os.Stderr, "fabd: settle:", err)
 		}
 		if s.afterWaitDone != nil {
