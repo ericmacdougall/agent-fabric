@@ -27,8 +27,8 @@ shift
 deployed_version() {
 	local fab=$1 want=$2 out rc
 	out=$("$fab" version 2>/dev/null); rc=$?
-	out=$(printf '%s' "$out" | head -1 | tr -d '[:space:]')
-	ev "version command exit $rc, output '${out:0:40}'; expected commit $want"
+	# $(...) drops only trailing newlines; the whole remaining output must be hex.
+	ev "version command exit $rc, output '$(printf '%s' "${out:0:40}" | tr -c '0-9A-Za-z' '?')'; expected commit $want"
 	[ "$rc" = 0 ] || fail "version command exited $rc"
 	[[ "$out" =~ ^[0-9a-f]{12,40}$ ]] || fail "version output is not 12-40 hex"
 	case "$want" in "$out"*) ;; *) fail "deployed version $out is not a prefix of $want" ;; esac

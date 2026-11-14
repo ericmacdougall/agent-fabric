@@ -18,6 +18,9 @@ mk fabrc 'echo 96bc0ada559d; exit 3'
 mk fabshort 'echo 9'
 mk fabjunk 'echo dev-build'
 mk fabempty 'true'
+mk fabmulti 'echo 96bc0ada559d; echo extra'
+mk fabspace 'echo 96bc0ada 559d'
+mk fablead 'echo " 96bc0ada559d"'
 printf 'Reviewed HEAD: %s\nbody\nVERDICT: PASS\n\n' "$S" >"$tmp/pass.md"
 printf 'Reviewed HEAD: %s\nVERDICT: BLOCK\n' "$S" >"$tmp/block.md"
 printf 'Reviewed HEAD: %s\nbackground mentions %s\nVERDICT: PASS\n' "$O" "$S" >"$tmp/mixed.md"
@@ -55,6 +58,10 @@ expect 1 g1-version "$tmp/fabrc" "$S"
 expect 1 g1-version "$tmp/fabshort" "$S"
 expect 1 g1-version "$tmp/fabjunk" "$S"
 expect 1 g1-version "$tmp/fabempty" "$S"
+expect 1 g1-version "$tmp/fabmulti" "$S"
+expect 1 g1-version "$tmp/fabspace" "$S"
+expect 1 g1-version "$tmp/fablead" "$S"
+expect 1 g0-review "$tmp/pass.md" "$tmp/fabmulti" "$S"
 expect 2 g1-version "$tmp/fab" 96bc0ada559d
 expect 2 g1-version "$tmp/fab" not-a-sha
 for g in g2 g2b g3 g3-chaos g3b g4 g5 g6 g7 bogus; do
