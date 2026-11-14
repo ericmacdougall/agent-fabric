@@ -28,6 +28,11 @@ import (
 )
 
 func main() {
+	// goodqa#15966 AC-24: the Bash PreToolUse gate is this binary run by
+	// the name fab-bash-gate (FABRIC_HOOKS_DIR holds a hard link or copy).
+	if filepath.Base(os.Args[0]) == "fab-bash-gate" {
+		os.Exit(bashGateMain())
+	}
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)

@@ -118,6 +118,8 @@ func daemonMain(args []string) error {
 	dispatchVia := fs.String("dispatch-via", "", "launch path: argv (default) or registry (prompt on stdin; the pinned stdin fake only, goodqa#15373)")
 	launchLimit := fs.Int("launch-limit", 0, "stop physical starts after this many in this process (0: no limit)")
 	onlyMission := fs.String("only-mission", "", "dispatch only this mission id")
+	missionsRoot := fs.String("missions-root", "/srv/fabric/missions", "M1 builds: directory of {mission}/mission.json (goodqa#15966 AC-22)")
+	fabSecretGroup := fs.String("fab-secret-group", "fab-secret", "M1 builds: the group that owns mission.json")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -232,6 +234,11 @@ func daemonMain(args []string) error {
 	cfg.WorkerUser = *workerUser
 	cfg.LaunchLimit = *launchLimit
 	cfg.OnlyMission = domain.MissionID(*onlyMission)
+	// goodqa#15966 W5: only an M1 build reads mission.json.
+	if cfg.Mission, err = m1MissionPreparer(m1MissionOptions{enabled: m1Enabled, workRoot: *workRoot, missionsRoot: *missionsRoot,
+		fabSecretGroup: *fabSecretGroup, workerUser: *workerUser, profile: *profile, hooksDir: hooksDir, self: selfPath()}); err != nil {
+		return err
+	}
 	if cfg.DispatchVia == sched.DispatchRegistry {
 		// NEG-11: registry mode runs only the pinned stdin fake. --trust-provider
 		// alone is never enough: the resolved file must hash to the pin here,
