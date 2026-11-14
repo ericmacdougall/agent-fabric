@@ -9,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-
 )
 
 // goodqa#15966 AC-21 tests. A non-root test run cannot create root-owned
