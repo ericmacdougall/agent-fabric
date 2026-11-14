@@ -63,10 +63,21 @@ is to find out why and explain it; nothing here needs to change.
 EOF
 chmod 0755 lib.sh test.sh
 
+# Isolate from inherited Git configuration, templates and hooks (review
+# spec-m1-v2 F4): no system or global config, an empty template directory,
+# SHA-1 objects, no line-ending conversion or filters, no signing.
+emptytpl=$(mktemp -d)
+trap 'rmdir "$emptytpl" 2>/dev/null || true' EXIT
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TEMPLATE_DIR="$emptytpl"
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
 export GIT_AUTHOR_NAME="fabric-m1" GIT_AUTHOR_EMAIL="m1-canary@invalid"
 export GIT_COMMITTER_NAME="fabric-m1" GIT_COMMITTER_EMAIL="m1-canary@invalid"
 export GIT_AUTHOR_DATE="2026-11-14T00:00:00Z" GIT_COMMITTER_DATE="2026-11-14T00:00:00Z"
-git init -q -b main .
-git -c core.fileMode=true add lib.sh test.sh README.md
-git -c commit.gpgsign=false commit -q -m "m1 canary fixture"
+git init -q --template="$emptytpl" --object-format=sha1 -b main .
+gitc() {
+	git -c core.autocrlf=false -c core.eol=lf -c core.safecrlf=false -c core.fileMode=true \
+		-c core.hooksPath=/dev/null -c commit.gpgsign=false -c core.attributesFile=/dev/null "$@"
+}
+gitc add lib.sh test.sh README.md
+gitc commit -q --no-verify -m "m1 canary fixture"
 git rev-parse HEAD
