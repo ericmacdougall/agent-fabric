@@ -177,7 +177,7 @@ func TestHarnessProviderGate(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name, adapter, bin   string
-		codexRun, fake, want bool
+		codexRun, fake, want bool // codexRun: --codex-run rather than --codex-preflight
 	}{
 		{"native real", "native", "claude", false, false, false},
 		{"native unconfined fake host", "native", "claude", false, true, true},
@@ -186,9 +186,9 @@ func TestHarnessProviderGate(t *testing.T) {
 		{"claude-code pinned fake", "claude-code", stdinFake, false, false, true},
 		{"claude-code stdin fake without its delegate", "claude-code", loneStdin, false, false, false},
 		{"codex run", "codex", "claude", true, false, false},
-		{"codex preflight", "codex", "claude", false, false, true},
+		{"codex preflight", "codex", "claude", false, false, false},
 	} {
-		_, cleanup, err := harnessProviderGate(c.adapter, c.bin, c.codexRun, c.fake)
+		_, cleanup, err := harnessProviderGate(c.adapter, c.bin, c.fake)
 		cleanup()
 		if c.want {
 			if err != nil {
@@ -197,6 +197,15 @@ func TestHarnessProviderGate(t *testing.T) {
 			continue
 		}
 		wantRealProviderRefusal(t, err, c.name)
+	}
+	// goodqa#15976: the codex preflight execs the codex binary after a
+	// hash-then-exec check it cannot seal (a signed app-bundle binary), so
+	// it is refused like --codex-run, before the event file exists.
+	pev := filepath.Join(dir, "preflight-events.jsonl")
+	perr := harnessMain([]string{"run", "--events", pev, "--adapter", "codex", "--codex-preflight", "--codex-dir", filepath.Join(dir, "codex-ws"), "--wait", "1s"})
+	wantRealProviderRefusal(t, perr, "harness run codex preflight")
+	if _, statErr := os.Stat(pev); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("the preflight event file was created before the refusal (%v)", statErr)
 	}
 	// Through the command: the refusal comes before the event file exists.
 	ev := filepath.Join(dir, "events.jsonl")

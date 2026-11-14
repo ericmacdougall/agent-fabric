@@ -93,8 +93,10 @@ func nativeRunnerGate() error {
 
 // harnessProviderGate (goodqa#15976 AC-2) covers `fab harness run`: the
 // claude-code adapter runs its binary unconfined, so only a pinned fake
-// runs; a codex model turn (--codex-run) is a real provider and is refused;
-// the codex preflight runs no model turn; native is nativeRunnerGate.
+// runs; the codex adapter is refused for both modes: --codex-run is a real
+// model turn, and --codex-preflight execs the codex app-bundle binary after
+// a hash-then-exec check that cannot be sealed (a signed bundle binary);
+// native is nativeRunnerGate.
 //
 // For claude-code it returns the absolute path of a sealed copy of the
 // verified bytes (and the stdin fake's verified delegate) in a fresh
@@ -102,7 +104,7 @@ func nativeRunnerGate() error {
 // copy and never resolves the name again, so replacing the original file
 // or repointing its symlink after the check changes nothing (PR #57
 // review F1).
-func harnessProviderGate(adapter, claudeBin string, codexRun, unconfinedFake bool) (string, func(), error) {
+func harnessProviderGate(adapter, claudeBin string, unconfinedFake bool) (string, func(), error) {
 	none := func() {}
 	switch adapter {
 	case "native":
@@ -135,9 +137,7 @@ func harnessProviderGate(adapter, claudeBin string, codexRun, unconfinedFake boo
 		}
 		return sealed, cleanup, nil
 	case "codex":
-		if codexRun {
-			return "", none, realProviderRefused{"a codex model turn (--codex-run) is a real provider"}
-		}
+		return "", none, realProviderRefused{"the codex adapter runs the real codex binary (a --codex-run model turn, or a --codex-preflight exec that cannot run a sealed copy)"}
 	}
 	return "", none, nil
 }

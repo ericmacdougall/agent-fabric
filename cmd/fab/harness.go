@@ -157,7 +157,7 @@ func harnessRunMain(args []string) error {
 	}
 	// goodqa#15976 AC-2: refused before the event file or any process. The
 	// claude-code run executes only the sealed copy the gate returns.
-	sealedClaude, sealCleanup, err := harnessProviderGate(*adapter, *claudeBin, *codexRun, *fake)
+	sealedClaude, sealCleanup, err := harnessProviderGate(*adapter, *claudeBin, *fake)
 	if err != nil {
 		return err
 	}

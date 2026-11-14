@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -193,7 +194,10 @@ func daemonMain(args []string) error {
 	// so an update that repoints the symlink is followed (goodqa#15161
 	// reviews C and N1).
 	darwinLaunchRO = append(launchInputs(dp.Path, hooksDir, schemaPath), dp.SealRoot)
-	darwinProvider = dp.Path
+	darwinProvider, err = startupControlProvider(&dp, realProvider, runtime.GOOS)
+	if err != nil {
+		return err
+	}
 	ln, err := launcherForThisHost()
 	if err != nil {
 		return err
@@ -324,6 +328,22 @@ func newDaemonProvider(operator, schemaPath, hooksDir string) (daemonProvider, e
 		return daemonProvider{}, err
 	}
 	return daemonProvider{Path: p, Launch: productionLaunch(operator, schemaPath, hooksDir), SealRoot: sealRootFor(schemaPath)}, nil
+}
+
+// startupControlProvider is the binary the Darwin profile's startup control
+// runs with --version. For a fake-only start on Darwin it is the sealed copy
+// that launches will exec (the same Resolve path), so the control never runs
+// unverified bytes (goodqa#15976 PR #57). A real provider never starts on
+// Darwin; elsewhere the value is unused and stays the resolved path.
+func startupControlProvider(dp *daemonProvider, real bool, goos string) (string, error) {
+	if real || goos != "darwin" {
+		return dp.Path, nil
+	}
+	sealed := dp.Launch.Resolve(dp.Launch.Binary)
+	if sealed == "" {
+		return "", realProviderRefused{fmt.Sprintf("the provider %s could not be sealed for the startup control", dp.Path)}
+	}
+	return sealed, nil
 }
 
 // productionLaunch is the launch fabd hands the scheduler. Binary keeps
