@@ -67,7 +67,7 @@ func propertyRun(t *testing.T, streams [][]byte, n int, rewritesAsBlocks bool) p
 	t.Helper()
 	c := propCounts{n: n}
 	for i := 0; i < n; i++ {
-		l, _ := rand.Int(rand.Reader, big.NewInt(121))
+		l, _ := rand.Int(synthRand, big.NewInt(121))
 		tok := synthToken(t, 80+int(l.Int64()))
 		b, err := NewBound(NewSecret(KindToken, "v1", tok),
 			NewSecret(KindGoodQA, "g", synthSecret(t, 40)), NewSecret(KindDSN, "d", synthSecret(t, 24)))

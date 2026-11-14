@@ -4,12 +4,31 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
+	mrand "math/rand/v2"
+	"os"
 	"strings"
 	"testing"
 )
+
+// synthRand is the source of synthetic credential bytes: crypto/rand,
+// or a ChaCha8 stream when FAB_PROP_SEED pre-registers a seed (goodqa#16040
+// property runs), so a counted run is reproducible from its recorded seed.
+var synthRand io.Reader = rand.Reader
+
+func init() {
+	if v := os.Getenv("FAB_PROP_SEED"); v != "" {
+		seed, err := hex.DecodeString(v)
+		if err != nil || len(seed) != 32 {
+			panic("FAB_PROP_SEED must be 64 hex characters")
+		}
+		synthRand = mrand.NewChaCha8([32]byte(seed))
+	}
+}
 
 // synthToken generates a synthetic token at test time (never a literal):
 // the sk-ant- shape plus n random base64url characters.
@@ -18,7 +37,7 @@ func synthToken(t testing.TB, n int) []byte {
 	const alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 	out := []byte("sk-" + "ant-oat01-")
 	for len(out) < n {
-		v, err := rand.Int(rand.Reader, big.NewInt(int64(len(alpha))))
+		v, err := rand.Int(synthRand, big.NewInt(int64(len(alpha))))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -30,7 +49,9 @@ func synthToken(t testing.TB, n int) []byte {
 func synthSecret(t testing.TB, n int) []byte {
 	t.Helper()
 	b := make([]byte, n)
-	rand.Read(b)
+	if _, err := io.ReadFull(synthRand, b); err != nil {
+		t.Fatal(err)
+	}
 	const alpha = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	for i := range b {
 		b[i] = alpha[int(b[i])%len(alpha)]
