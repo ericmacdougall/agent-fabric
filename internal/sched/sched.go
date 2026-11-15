@@ -21,10 +21,12 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"fabric/internal/credential"
+	"fabric/internal/credential/sweep"
 	"fabric/internal/dispatch"
 	"fabric/internal/domain"
 	"fabric/internal/envelope"
 	"fabric/internal/host"
+	"fabric/internal/m1comment"
 	missioncfg "fabric/internal/mission"
 	"fabric/internal/projection"
 	"fabric/internal/provider/claude"
@@ -138,6 +140,10 @@ type Config struct {
 	// settle writes the credential_exposure, sweep_incomplete and
 	// delivery_blocked records there. "" writes none.
 	RecordsDir string
+	// Sweep (goodqa#15966 AC-16) runs `fab __sweep` as the worker through
+	// the worker manager at settle. nil: every sweep is incomplete
+	// (sweep_incomplete, never clean).
+	Sweep sweep.Launcher
 	// Mission is the M1 mission path (goodqa#15966 W5), set only by an M1
 	// build; nil keeps today's behaviour and never reads mission.json.
 	Mission *missioncfg.Preparer
@@ -150,6 +156,9 @@ type EffectAttempt struct {
 	Fence   int64
 	RunDir  string
 	Outcome string
+	// Creds is the attempt's bound credential matcher (AC-10, AC-18) on the
+	// token launch, nil otherwise. RunDir is then the redacted copy.
+	Creds m1comment.BoundCredentials
 }
 
 // CredentialLaunch configures the subscription-token launch.
@@ -223,6 +232,8 @@ type Scheduler struct {
 	// afterWaitDone is a test barrier after a finished worker's settlement
 	// attempt; nil in production.
 	afterWaitDone func()
+	// settleFault is the M1 settle sequence's fault-injection seam (tests).
+	settleFault func(step string) error
 	// stopBackoff and stopSleep drive the bounded cleanup retries in tests.
 	stopBackoff time.Duration
 	stopSleep   func(context.Context, time.Duration) error
@@ -932,6 +943,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	// goodqa#15966 AC-14, AC-18: the binding record is durable before the
 	// start, and only the pinned real claude gets the token.
 	var bound *credential.Durable
+	startCalled := false
 	if c := s.cfg.Credential; c != nil && len(argv) > 0 {
 		var others []credential.OtherCredential
 		if c.Others != nil {
@@ -950,6 +962,15 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
 		}
 		bound = d
+		// goodqa#15966 AC-18: a binding whose worker never starts is
+		// settled at once (nothing ran, so nothing to redact or sweep), so
+		// GC never keeps its token version. Once start is called the
+		// outcome is the settle sequence's (or recovery's) to decide.
+		defer func() {
+			if !startCalled {
+				s.settleUnstarted(attempt)
+			}
+		}()
 	}
 	pin := ""
 	if s.cfg.Credential != nil {
@@ -1041,6 +1062,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	}
 	var h host.Handle
 	start := func() error {
+		startCalled = true
 		s.startAttempts++ // AC-10: every physical start call counts, ambiguous ones too
 		var serr error
 		if stdin != nil {
@@ -1087,6 +1109,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	go s.heartbeat(ctx, attempt, fence, done)
 	go func() {
 		code, werr := s.ln.Wait(h)
+		var rc *host.StopReceipt
 		out.Close()
 		if errf != nil {
 			errf.Close()
@@ -1098,14 +1121,16 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 			// Leader exit does not reap descendants. A Wait error does not end
 			// ownership either, so cleanup runs either way, detached from the
 			// scheduler context; a failure makes completion unverified.
-			werr = errors.Join(werr, s.cleanupHandle(context.Background(), h, "leader exited; verify descendant cleanup"))
+			var cerr error
+			rc, cerr = s.cleanupHandleReceipt(context.Background(), h, "leader exited; verify descendant cleanup")
+			werr = errors.Join(werr, cerr)
 		}
 		if werr != nil {
 			close(done) // the exit is unknown: stop beating so the lease expires
 		}
 		// T6: with an observed exit the heartbeat keeps the lease while the
 		// settle (and its retries) persist it.
-		if err := s.afterWait(context.Background(), mission, attempt, fence, sdir, code, werr); err != nil {
+		if err := s.afterWaitRun(context.Background(), mission, attempt, fence, sdir, runDir, code, werr, rc); err != nil {
 			fmt.Fprintln(os.Stderr, "fabd: settle:", err)
 		}
 		if s.afterWaitDone != nil {
@@ -1122,9 +1147,17 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 // cleanupHandle requires a verified Stop receipt with no survivors and no
 // escaped processes, retrying a bounded three times with a doubling pause.
 func (s *Scheduler) cleanupHandle(ctx context.Context, h host.Handle, reason string) error {
+	_, err := s.cleanupHandleReceipt(ctx, h, reason)
+	return err
+}
+
+// cleanupHandleReceipt is cleanupHandle that also returns the verified stop
+// receipt (nil unless the stop was Verified with no survivors and no
+// escaped processes), which the M1 sweep requires (AC-16).
+func (s *Scheduler) cleanupHandleReceipt(ctx context.Context, h host.Handle, reason string) (*host.StopReceipt, error) {
 	stopper, ok := s.ln.(Stopper)
 	if !ok {
-		return fmt.Errorf("descendant cleanup for %s: launcher cannot Stop", h.Run)
+		return nil, fmt.Errorf("descendant cleanup for %s: launcher cannot Stop", h.Run)
 	}
 	const tries = 3
 	wait := s.stopBackoff
@@ -1148,17 +1181,17 @@ func (s *Scheduler) cleanupHandle(ctx context.Context, h host.Handle, reason str
 		case len(rc.Escaped) > 0:
 			lastErr = fmt.Errorf("descendant cleanup for %s found %d escaped processes after %d attempt(s)", h.Run, len(rc.Escaped), try)
 		default:
-			return nil
+			return &rc, nil
 		}
 		if try < tries {
 			fmt.Fprintf(os.Stderr, "fabd: cleanup %s try %d failed, retrying: %v\n", h.Run, try, lastErr)
 			if err := sleep(ctx, wait); err != nil {
-				return fmt.Errorf("descendant cleanup for %s retry interrupted: %w", h.Run, err)
+				return nil, fmt.Errorf("descendant cleanup for %s retry interrupted: %w", h.Run, err)
 			}
 			wait *= 2
 		}
 	}
-	return lastErr
+	return nil, lastErr
 }
 
 // afterWait settles a finished worker. A failed Wait (or, with ExitCleanup,
@@ -1166,9 +1199,21 @@ func (s *Scheduler) cleanupHandle(ctx context.Context, h host.Handle, reason str
 // T1): nothing is settled, the heartbeat has stopped, and the lease expires
 // into UNKNOWN for the prober to reconcile.
 func (s *Scheduler) afterWait(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, runDir string, code int, werr error) error {
+	return s.afterWaitRun(ctx, mission, attempt, fence, runDir, runDir, code, werr, nil)
+}
+
+// afterWaitRun is afterWait with the attempt's run directory and the stop
+// receipt of the exited worker; sdir holds its streams. A token launch
+// settles through the M1 sequence (settleM1), never from the raw stream.
+func (s *Scheduler) afterWaitRun(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, sdir, runDir string, code int, werr error, rc *host.StopReceipt) error {
 	if werr != nil {
 		return fmt.Errorf("wait for %s failed, left to lease expiry: %w", attempt, werr)
 	}
+	if s.cfg.Credential != nil {
+		return s.finishM1(ctx, mission, s.settleM1(mission, attempt, fence, sdir, runDir, code, rc,
+			func(cmd *domain.Command, red string, b *credential.Bound) { s.effectStepCreds(ctx, cmd, red, b) }))
+	}
+	runDir = sdir
 	// goodqa#15082 T6, goodqa#15087 AC-7: the exit is observed; a transient
 	// store error must not drop it. The finish command is decided once from
 	// the stream (T1: an unreadable stream settles nothing and the lease
@@ -1198,11 +1243,16 @@ func (s *Scheduler) afterWait(ctx context.Context, mission domain.MissionID, att
 // effectStep runs the configured EffectStep once, before the finish
 // command, and puts its prefix on the finish reason (AC-29).
 func (s *Scheduler) effectStep(ctx context.Context, cmd *domain.Command, runDir string) {
+	s.effectStepCreds(ctx, cmd, runDir, nil)
+}
+
+// effectStepCreds is effectStep with the attempt's bound credentials.
+func (s *Scheduler) effectStepCreds(ctx context.Context, cmd *domain.Command, runDir string, creds m1comment.BoundCredentials) {
 	if s.cfg.EffectStep == nil {
 		return
 	}
 	hb := func(hctx context.Context) error { return s.st.Heartbeat(hctx, cmd.Attempt, cmd.Fence) }
-	prefix := s.cfg.EffectStep(ctx, EffectAttempt{Mission: cmd.Mission, Attempt: cmd.Attempt, Fence: cmd.Fence, RunDir: runDir, Outcome: cmd.Outcome}, hb)
+	prefix := s.cfg.EffectStep(ctx, EffectAttempt{Mission: cmd.Mission, Attempt: cmd.Attempt, Fence: cmd.Fence, RunDir: runDir, Outcome: cmd.Outcome, Creds: creds}, hb)
 	if prefix == "" {
 		return
 	}
