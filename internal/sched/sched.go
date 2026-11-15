@@ -827,6 +827,12 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		if err := s.checkPriorSettled(ctx, mission); err != nil {
 			return err
 		}
+		// goodqa#15966 AC-17 (seam 5): the current token passes admission
+		// before START. A refusal starts nothing and writes no event; the
+		// detail (a shape or link class, never a token byte) goes to the log.
+		if err := s.cfg.Credential.Policy.CheckAdmission(); err != nil {
+			return fmt.Errorf("%s refused before START, nothing started (%s): %w", mission, classAdmission, err)
+		}
 	}
 	// goodqa#15966 AC-22, AC-25: the M1 config is checked before START; a
 	// refusal parks the mission with a log line naming the field, writes no
@@ -1658,6 +1664,10 @@ type Querier interface {
 // classPriorUnsettled is the pre-START refusal class of a mission whose
 // earlier attempt is bound and not yet settled (spec v16).
 const classPriorUnsettled = "prior_attempt_unsettled"
+
+// classAdmission is the pre-START refusal class of a token the AC-17
+// admission rule refuses (seam 5).
+const classAdmission = "credential_admission"
 
 func (s *Scheduler) checkPriorSettled(ctx context.Context, mission domain.MissionID) error {
 	rows, err := s.st.Pool().Query(ctx, `SELECT id FROM attempts WHERE mission_id = $1`, string(mission))
