@@ -411,11 +411,11 @@ func traced(stderr string) []string {
 // logs KNOWN instead of failing. FABRIC_CRASH_STRICT=1 fails them too (the
 // failing-first evidence), and an entry that no longer fails is an error.
 var crashKnown = map[string]string{
-	"material-unavailable/hold.operator:before:1":    "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
-	"material-unavailable/settle.record:after:1":     "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
-	"material-unavailable/settle.record:after:2":     "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
-	"material-unavailable/settle.record:before:1":    "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
-	"material-unavailable/settle.record:before:2":    "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
+	"material-unavailable/hold.operator:before:1": "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
+	"material-unavailable/settle.record:after:1":  "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
+	"material-unavailable/settle.record:after:2":  "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
+	"material-unavailable/settle.record:before:1": "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
+	"material-unavailable/settle.record:before:2": "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
 }
 
 func (w *crashWorld) attempts(t *testing.T) []domain.AttemptID {
