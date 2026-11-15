@@ -25,6 +25,7 @@ import (
 	"fabric/internal/domain"
 	"fabric/internal/envelope"
 	"fabric/internal/host"
+	missioncfg "fabric/internal/mission"
 	"fabric/internal/projection"
 	"fabric/internal/provider/claude"
 	"fabric/internal/settle"
@@ -133,6 +134,9 @@ type Config struct {
 	// removed. nil launches as before; credential.CheckManifest still refuses
 	// any launch whose environment carries the token or ANTHROPIC_API_KEY.
 	Credential *CredentialLaunch
+	// Mission is the M1 mission path (goodqa#15966 W5), set only by an M1
+	// build; nil keeps today's behaviour and never reads mission.json.
+	Mission *missioncfg.Preparer
 }
 
 // EffectAttempt is the settled attempt the EffectStep sees.
@@ -785,6 +789,18 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		return err
 	}
 	attempt := domain.AttemptID(fmt.Sprintf("r_%s_%d", strings.TrimPrefix(string(mission), "m_"), m.Version.AttemptFence+1))
+	// goodqa#15966 AC-22, AC-25: the M1 config is checked before START; a
+	// refusal parks the mission with a log line naming the field, writes no
+	// event and starts nothing.
+	var mc *missioncfg.Config
+	if s.cfg.Mission != nil {
+		if s.cfg.Profile != "P0" {
+			return fmt.Errorf("M1 path runs only profile P0, not %q; nothing started", s.cfg.Profile)
+		}
+		if mc, err = s.cfg.Mission.Load(mission); err != nil {
+			return fmt.Errorf("mission config refused before START, nothing started (%s): %w", missioncfg.Class(err), err)
+		}
+	}
 	if s.afterRead != nil {
 		s.afterRead()
 	}
@@ -815,7 +831,24 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 
 	worktree := filepath.Join(s.cfg.WorkRoot, "wt", string(mission))
 	runDir := filepath.Join(s.cfg.WorkRoot, "run", string(attempt))
-	for _, d := range []string{worktree, runDir, filepath.Join(runDir, "jobs"), filepath.Join(runDir, "claude-config"), filepath.Join(runDir, "cache"), filepath.Join(runDir, "config")} {
+	dirs := []string{worktree, runDir, filepath.Join(runDir, "jobs"), filepath.Join(runDir, "claude-config"), filepath.Join(runDir, "cache"), filepath.Join(runDir, "config")}
+	launch := s.cfg.Launch
+	if mc != nil {
+		// goodqa#15966 AC-23, AC-24: a fresh operator-owned read-only tree
+		// per attempt, outside the group-shared run dir, never the shared
+		// per-mission directory below.
+		dirs = dirs[1:]
+		prep, err := s.cfg.Mission.Prepare(ctx, mc, attempt)
+		if err != nil {
+			// AC-22: the event carries a fixed class; the detail (paths,
+			// the sha) goes to fabd's log only.
+			fmt.Fprintf(os.Stderr, "fabd: %s: M1 worktree not prepared: %v\n", attempt, err)
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "M1 worktree not prepared: "+missioncfg.Class(err))
+		}
+		worktree = prep.Worktree
+		launch = mc.ApplyLaunch(launch, prep.Settings, prep.Brief, s.cfg.Mission.HooksDir)
+	}
+	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o775); err != nil {
 			// Red-team N1: nothing launched yet; abandon so the holds go now.
 			return s.abandonPrelaunch(ctx, mission, attempt, fence, "run directory not prepared: "+err.Error())
@@ -853,6 +886,11 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	g := host.Grant{Run: attempt, Mission: mission, Fence: fence, Model: s.cfg.Model, Effort: s.cfg.Effort, Rung: s.cfg.Rung,
 		TierTableSHA: s.cfg.TierTableSHA, ConfigSHA: "n/a", Profile: s.cfg.Profile, MaxTurns: s.cfg.MaxTurns, MaxBudgetUSD: s.cfg.MaxBudgetUSD,
 		Wall: s.cfg.Wall, Worktree: worktree, RunDir: runDir, Token: fmt.Sprintf("%s-%d-%s", attempt, fence, randomToken())}
+	if mc != nil {
+		if err := mc.ApplyGrant(&g, worktree); err != nil {
+			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
+		}
+	}
 	var argv, env []string
 	promptPath := ""
 	if s.registry() {
@@ -863,7 +901,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		if !ok {
 			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: no claude-code dispatcher")
 		}
-		pl, err := d.Plan(g, dispatch.Input{Launch: s.cfg.Launch, Prompt: string(prompt)})
+		pl, err := d.Plan(g, dispatch.Input{Launch: launch, Prompt: string(prompt)})
 		if err != nil {
 			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
 		}
@@ -876,7 +914,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 			return s.abandonPrelaunch(ctx, mission, attempt, fence, "dispatch marker not written: "+err.Error())
 		}
 	} else {
-		l := s.cfg.Launch
+		l := launch
 		l.Prompt = string(prompt)
 		argv, env, err = claude.Argv(g, l)
 		if err != nil {

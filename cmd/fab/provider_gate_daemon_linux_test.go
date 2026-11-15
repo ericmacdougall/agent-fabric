@@ -83,6 +83,9 @@ func TestDaemonRefusesRealProviderOnLegacyLinux(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := run(filepath.Join(t.TempDir(), "wr"), c.provider, c.extra...)
+			if !hasArg(c.extra, "--no-dispatch") && m1RefusesP1Dispatch(t, err) {
+				return
+			}
 			if err == nil || !strings.Contains(err.Error(), "failed to connect") || strings.Contains(err.Error(), "goodqa#15976") {
 				t.Fatalf("want the store connection error after the gate, got %v", err)
 			}

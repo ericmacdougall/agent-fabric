@@ -262,6 +262,9 @@ func TestDaemonLaunchesUnderTheWorkerManager(t *testing.T) {
 	}
 	err = daemonMain([]string{"--work-root", filepath.Join(t.TempDir(), "wr"), "--provider", pinned, "--tier-table", tiers, "--rung", "r1", "--once",
 		"--dispatch-via=registry", "--trust-provider", "--worker-user", "fab-worker"})
+	if m1RefusesP1Dispatch(t, err) {
+		return
+	}
 	if err == nil || !strings.Contains(err.Error(), "failed to connect") {
 		t.Fatalf("want the store connection error after the gate and the launcher, got %v", err)
 	}

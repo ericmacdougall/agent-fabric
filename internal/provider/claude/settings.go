@@ -46,7 +46,7 @@ var settingsKeys = map[string]bool{"permissions": true, "hooks": true, "model": 
 // so hooks are parsed as exact-key maps (inspection 6355639 F2).
 var (
 	groupKeys = map[string]bool{"matcher": true, "hooks": true}
-	entryKeys = map[string]bool{"type": true, "command": true, "timeout": true}
+	entryKeys = map[string]bool{"type": true, "command": true, "timeout": true, "onFailure": true}
 )
 
 // hookCommand is a single absolute path: no argument, no shell syntax.
@@ -311,6 +311,14 @@ func hookCommands(path string, raw json.RawMessage) ([]hookCmd, error) {
 				}
 				if json.Unmarshal(h["command"], &cmd) != nil {
 					return nil, refuse("%s: %s command is not a string", path, label)
+				}
+				// goodqa#15966: onFailure may only make a failure block
+				// (code.claude.com/docs/en/hooks, read 2026-11-14).
+				if fr, ok := h["onFailure"]; ok {
+					var f string
+					if json.Unmarshal(fr, &f) != nil || f != "block" {
+						return nil, refuse("%s: %s onFailure is not \"block\"", path, label)
+					}
 				}
 				if tr, ok := h["timeout"]; ok {
 					var n float64

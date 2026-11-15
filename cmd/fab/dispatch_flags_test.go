@@ -60,6 +60,9 @@ func TestDaemonRegistryConfigFailsFast(t *testing.T) {
 			t.Fatal("the daemon ran against a closed port")
 		}
 		t.Logf("past the configuration checks: %v", err)
+		if m1RefusesP1Dispatch(t, err) {
+			return
+		}
 		if !strings.Contains(err.Error(), "failed to connect") {
 			t.Fatalf("want the store connection error after the checks, got %v", err)
 		}

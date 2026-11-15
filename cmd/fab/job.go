@@ -122,6 +122,8 @@ func daemonMain(args []string) error {
 	dispatchVia := fs.String("dispatch-via", "", "launch path: argv (default) or registry (prompt on stdin; the pinned stdin fake only, goodqa#15373)")
 	launchLimit := fs.Int("launch-limit", 0, "stop physical starts after this many in this process (0: no limit)")
 	onlyMission := fs.String("only-mission", "", "dispatch only this mission id")
+	missionsRoot := fs.String("missions-root", "/srv/fabric/missions", "M1 builds: directory of {mission}/mission.json (goodqa#15966 AC-22)")
+	fabSecretGroup := fs.String("fab-secret-group", "fab-secret", "M1 builds: the group that owns mission.json")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -196,6 +198,11 @@ func daemonMain(args []string) error {
 		}
 	}
 	sealedProviderRO = []string{dp.SealRoot}
+	// goodqa#15966 W5: the worker reads its attempt directory (settings,
+	// brief copy, worktree) and runs the Bash gate from the hooks dir.
+	if m1Enabled && !*noDispatch {
+		m1ExtraRO = m1ReadRoots(*workRoot, hooksDir)
+	}
 	// The read-allow-back and the control use the same start-time
 	// resolution; each launch resolves the name again (productionLaunch),
 	// so an update that repoints the symlink is followed (goodqa#15161
@@ -254,6 +261,11 @@ func daemonMain(args []string) error {
 	// goodqa#15373 AC-2: every configuration refusal before the store opens,
 	// so a bad flag exits once and never crash-loops the unit.
 	if err := sched.CheckConfig(cfg, ln); err != nil {
+		return err
+	}
+	// goodqa#15966 W5: only an M1 build that dispatches reads mission.json.
+	if cfg.Mission, err = m1MissionPreparer(m1MissionOptions{enabled: m1Enabled && !*noDispatch, workRoot: *workRoot, missionsRoot: *missionsRoot,
+		fabSecretGroup: *fabSecretGroup, workerUser: *workerUser, profile: *profile, hooksDir: hooksDir, self: selfPath()}); err != nil {
 		return err
 	}
 	// goodqa#15966 M1 comment policy (NEG-23): an M1 fabd refuses to start
