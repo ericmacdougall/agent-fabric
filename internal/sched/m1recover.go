@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"fabric/internal/crashpoint"
 	"fabric/internal/credential"
 	"fabric/internal/domain"
 	"fabric/internal/host"
-	"fabric/internal/provider/claude"
 	"fabric/internal/records"
 )
 
@@ -98,13 +96,8 @@ func (s *Scheduler) recoverOne(ctx context.Context, mission domain.MissionID, at
 		// prior_attempt_unsettled keeps blocking START meanwhile.
 		held := false
 		s.settleM1Mark(mission, attempt, fence, sdir, runDir, -1, rc, nil, func(out m1Settled) error {
-			class := ""
-			switch {
-			case out.Cmd != nil && out.Cmd.Outcome == "abandoned" && strings.Contains(out.Cmd.Reason, claude.ReasonCredentialRejected):
-				class = "credential_rejected"
-			case out.Hold:
-				class = out.Blocked
-			default:
+			class := owedHold(out)
+			if class == "" {
 				return nil
 			}
 			if err := s.holdRecovered(ctx, mission, attempt, class); err != nil {

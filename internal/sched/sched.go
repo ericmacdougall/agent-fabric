@@ -1266,8 +1266,14 @@ func (s *Scheduler) afterWaitRun(ctx context.Context, mission domain.MissionID, 
 		return fmt.Errorf("wait for %s failed, left to lease expiry: %w", attempt, werr)
 	}
 	if s.cfg.Credential != nil {
-		return s.finishM1(ctx, mission, s.settleM1(mission, attempt, fence, sdir, runDir, code, rc,
-			func(cmd *domain.Command, red string, b *credential.Bound) { s.effectStepCreds(ctx, cmd, red, b) }))
+		var holdErr error
+		out := s.settleM1Mark(mission, attempt, fence, sdir, runDir, code, rc,
+			func(cmd *domain.Command, red string, b *credential.Bound) { s.effectStepCreds(ctx, cmd, red, b) },
+			func(o m1Settled) error { holdErr = s.placeM1Hold(ctx, mission, o); return holdErr })
+		if holdErr != nil {
+			return holdErr // unsettled and unfinished: lease expiry and recovery
+		}
+		return s.finishM1(ctx, mission, out)
 	}
 	runDir = sdir
 	// goodqa#15082 T6, goodqa#15087 AC-7: the exit is observed; a transient

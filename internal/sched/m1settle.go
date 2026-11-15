@@ -369,46 +369,58 @@ func writeFileAtomic(path string, data []byte) error {
 	return os.Rename(tmp, path)
 }
 
-// finishM1 sends the settle's finish, if any, and then holds the mission
-// when the settle failed closed for an operator look (owner ruling C) or the
-// token was refused (AC-19). A held mission admits no further attempt
-// until the operator releases it.
-func (s *Scheduler) finishM1(ctx context.Context, mission domain.MissionID, out m1Settled) error {
-	if out.Cmd == nil {
-		// Nothing finished: the attempt is still leased, and a hold would
-		// exempt it from lease expiry and reconcile (review M2).
+// owedHold is the AC-34 hold class a settle owes: a fail-closed class
+// (owner ruling C), or credential_rejected for a refused token (AC-19);
+// "" when none is owed.
+func owedHold(out m1Settled) string {
+	switch {
+	case out.Cmd != nil && out.Cmd.Outcome == "abandoned" && strings.Contains(out.Cmd.Reason, claude.ReasonCredentialRejected):
+		return "credential_rejected"
+	case out.Hold:
+		return out.Blocked
+	}
+	return ""
+}
+
+// placeM1Hold is the live settle's beforeMark (red-team H-1, crash-point
+// finding F1): the AC-34 operator hold and its mission_hold record commit
+// before MarkSettled and before FINISH. A failed hold write is returned, so
+// the binding stays unsettled and the attempt unfinished: its lease lapses
+// into UNKNOWN and reconcile, and restart recovery settles it and places
+// the hold. Nothing finished (no command) owes no hold: a hold would exempt
+// the leased attempt from lease expiry and reconcile (review M2).
+func (s *Scheduler) placeM1Hold(ctx context.Context, mission domain.MissionID, out m1Settled) error {
+	class := owedHold(out)
+	if out.Cmd == nil || class == "" {
 		return nil
 	}
-	refused := out.Cmd.Outcome == "abandoned" && strings.Contains(out.Cmd.Reason, claude.ReasonCredentialRejected)
-	hold := out.Hold || refused
-	class := out.Blocked
-	why := "settle failed closed (" + class + ")"
-	if refused {
-		class, why = "credential_rejected", "the subscription token was refused"
+	err := s.settleFail(stepOpHold)
+	if err == nil {
+		err = crashpoint.Around("hold.operator", func() error { return s.st.OperatorHold(ctx, mission) })
 	}
-	if hold {
-		// AC-34 (owner ruling R1, red-team H-1): the durable operator hold
-		// is written before FINISH, so no crash or failed write can leave a
-		// fail-closed mission finished and dispatchable without it. If it
-		// cannot be written the attempt is not finished: it stays leased,
-		// its lease lapses into UNKNOWN and reconcile (the operator hold
-		// never exempts a leased attempt from either), and the mission
-		// cannot start while that attempt is live.
-		err := s.settleFail(stepOpHold)
-		if err == nil {
-			err = crashpoint.Around("hold.operator", func() error { return s.st.OperatorHold(ctx, mission) })
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fabd: operator hold for %s (%s) not written; %s left unsettled to lease expiry: %v\n", mission, class, out.Cmd.Attempt, err)
+		return fmt.Errorf("operator hold after %s: %w", class, err)
+	}
+	if s.cfg.RecordsDir != "" {
+		if err := crashpoint.Around("hold.record", func() error {
+			return records.Append(s.cfg.RecordsDir, records.Record{Mission: mission, Attempt: out.Cmd.Attempt, Kind: records.MissionHold, Class: class})
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "fabd: hold record for %s not written\n", mission)
 		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "fabd: operator hold for %s (%s) not written; %s left to lease expiry: %v\n", mission, class, out.Cmd.Attempt, err)
-			return fmt.Errorf("operator hold after %s: %w", class, err)
-		}
-		if s.cfg.RecordsDir != "" {
-			if err := crashpoint.Around("hold.record", func() error {
-				return records.Append(s.cfg.RecordsDir, records.Record{Mission: mission, Attempt: out.Cmd.Attempt, Kind: records.MissionHold, Class: class})
-			}); err != nil {
-				fmt.Fprintf(os.Stderr, "fabd: hold record for %s not written\n", mission)
-			}
-		}
+	}
+	return nil
+}
+
+// finishM1 sends the settle's FINISH. The hold the settle owes is already
+// committed (placeM1Hold, before MarkSettled); after FINISH W3's hold is
+// added as well.
+func (s *Scheduler) finishM1(ctx context.Context, mission domain.MissionID, out m1Settled) error {
+	if out.Cmd == nil {
+		return nil // nothing finished: the attempt stays leased (review M2)
+	}
+	class := owedHold(out)
+	if class != "" {
 		if err := s.settleFail(stepFinish); err != nil {
 			return err // the crash seam between the hold and FINISH (tests)
 		}
@@ -416,7 +428,7 @@ func (s *Scheduler) finishM1(ctx context.Context, mission domain.MissionID, out 
 	if err := crashpoint.Around("finish.m1", func() error { return s.finishRetry(ctx, *out.Cmd) }); err != nil {
 		return err
 	}
-	if !hold {
+	if class == "" {
 		return nil
 	}
 	// W3's undecodable-log hold as well, after FINISH only: it exempts a
@@ -425,7 +437,7 @@ func (s *Scheduler) finishM1(ctx context.Context, mission domain.MissionID, out 
 	if err := crashpoint.Around("finish.hold.w3", func() error { return s.st.HoldMission(ctx, s.st.Pool(), mission) }); err != nil {
 		return fmt.Errorf("hold after a fail-closed settle: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "fabd: held %s: %s\n", mission, why)
+	fmt.Fprintf(os.Stderr, "fabd: held %s: %s\n", mission, class)
 	return nil
 }
 
