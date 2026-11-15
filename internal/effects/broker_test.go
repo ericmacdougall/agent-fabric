@@ -108,6 +108,7 @@ func spec(key, body string) IntentSpec {
 
 func TestHappyPathOneRemoteWrite(t *testing.T) {
 	ctx, _, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	e, err := b.Submit(ctx, fake, spec("k1", "hello"))
 	if err != nil || e.State != Intent || e.Replayed {
 		t.Fatalf("submit: %+v %v", e, err)
@@ -133,6 +134,7 @@ func TestHappyPathOneRemoteWrite(t *testing.T) {
 // is UNKNOWN, a retry is refused, readback finds the write, one remote entry.
 func TestPostCommitLossReconcilesToConfirmed(t *testing.T) {
 	ctx, _, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	fake.LoseAfter = true
 	e, _ := b.Submit(ctx, fake, spec("k2", "once"))
 	e, err := b.Dispatch(ctx, fake, e.ID)
@@ -156,6 +158,7 @@ func TestPostCommitLossReconcilesToConfirmed(t *testing.T) {
 // the same key is retried, one remote entry.
 func TestPreCommitLossRetriesSameKey(t *testing.T) {
 	ctx, _, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	fake.LoseBefor = true
 	e, _ := b.Submit(ctx, fake, spec("k3", "once"))
 	e, _ = b.Dispatch(ctx, fake, e.ID)
@@ -179,6 +182,7 @@ func TestPreCommitLossRetriesSameKey(t *testing.T) {
 
 func TestSameKeyDifferentBodyConflicts(t *testing.T) {
 	ctx, _, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	if _, err := b.Submit(ctx, fake, spec("k4", "a")); err != nil {
 		t.Fatal(err)
 	}
@@ -194,6 +198,7 @@ func TestSameKeyDifferentBodyConflicts(t *testing.T) {
 
 func TestStaleFenceAndSubjectBusy(t *testing.T) {
 	ctx, _, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	s := spec("k5", "x")
 	s.Fence = 0
 	if _, err := b.Submit(ctx, fake, s); !errors.Is(err, domain.ErrStaleFence) {
@@ -219,6 +224,7 @@ func TestStaleFenceAndSubjectBusy(t *testing.T) {
 // unapproved effect cannot dispatch.
 func TestApprovalBindsRequestHash(t *testing.T) {
 	ctx, _, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	s := spec("k8", "publish")
 	s.NeedsApproval = true
 	e, err := b.Submit(ctx, fake, s)
@@ -247,6 +253,7 @@ func TestApprovalBindsRequestHash(t *testing.T) {
 // is the same. Neither path dispatches twice.
 func TestBrokerCutpoints(t *testing.T) {
 	ctx, _, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	cut := errors.New("process died")
 	b.afterDispatchCommit = func(Effect) { panic(cut) }
 	e, _ := b.Submit(ctx, fake, spec("k9", "cut-before-transport"))
@@ -297,6 +304,7 @@ func TestBrokerCutpoints(t *testing.T) {
 
 func TestDefiniteRejectRetriesWithSameKey(t *testing.T) {
 	ctx, _, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	fake.Reject = true
 	e, _ := b.Submit(ctx, fake, spec("k11", "x"))
 	e, _ = b.Dispatch(ctx, fake, e.ID)

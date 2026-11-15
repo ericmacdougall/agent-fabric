@@ -15,6 +15,7 @@ import (
 // named, and the operator exit must then work.
 func TestGoodQAOverBudgetReadbackQuarantinesAndResolves(t *testing.T) {
 	ctx, _, b, _ := setup(t)
+	legacyTicketComment(t, ctx)
 	f, g := fakeServer(t)
 	f.set(func() { f.loseAfter = true })
 	e, err := b.Submit(ctx, g, gqSpec("gq-budget", "checkpoint: long thread"))
@@ -57,6 +58,7 @@ func TestGoodQAOverBudgetReadbackQuarantinesAndResolves(t *testing.T) {
 // A transient readback failure still stays UNKNOWN for a later pass.
 func TestGoodQAMalformedReadbackStaysUnknownInBroker(t *testing.T) {
 	ctx, _, b, _ := setup(t)
+	legacyTicketComment(t, ctx)
 	f, g := fakeServer(t)
 	f.set(func() { f.loseAfter = true })
 	e, err := b.Submit(ctx, g, gqSpec("gq-transient", "checkpoint: transient"))

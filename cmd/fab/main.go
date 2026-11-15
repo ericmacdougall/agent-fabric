@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"fabric/internal/domain"
+	"fabric/internal/effects"
 	"fabric/internal/host"
 	"fabric/internal/importer"
 	"fabric/internal/store"
@@ -86,6 +87,10 @@ func main() {
 		err = controlMain(os.Args[2:])
 	case "version":
 		err = versionMain(os.Args[2:])
+	case "policy":
+		err = policyMain(os.Args[2:])
+	case "events":
+		err = eventsMain(os.Args[2:])
 	case "migrate":
 		err = withStore(func(ctx context.Context, st *store.Store) error { return st.Migrate(ctx) })
 	default:
@@ -112,7 +117,9 @@ func exitCode(err error) int {
 	var ue usageError
 	var rr reconcileRefused
 	var rp realProviderRefused
-	if errors.As(err, &ref) || errors.As(err, &ue) || errors.As(err, &rr) || errors.As(err, &rp) {
+	var pr2 *effects.PolicyRefusal
+	var pn policyNotM1
+	if errors.As(err, &ref) || errors.As(err, &ue) || errors.As(err, &rr) || errors.As(err, &rp) || errors.As(err, &pr2) || errors.As(err, &pn) {
 		return 3
 	}
 	return 1
@@ -127,7 +134,7 @@ func (e usageError) Unwrap() error { return e.error }
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: fab <command> [flags]
   migrate                              apply migrations
-  db roles [--prefix P --app-password-file F --runner-password-file F]   least-privilege roles (after migrate)
+  db roles [--prefix P --app-password-file F --runner-password-file F] [--comment-policy m1]   least-privilege roles (after migrate); --comment-policy m1 (M1 builds only) writes the M1 marker
   db check-runner [--dsn-env E]        verify the runner role cannot act as the scheduler
   db capacity --resource R --unit U --capacity N   set a dispatch-gate resource
   mission new|list                     register / list missions
@@ -145,6 +152,8 @@ func usage() {
   control export [--since CURSOR]      mc.event/1 lines + cursor for Mission Control (read-only)
   control ingest --source NAME         validate mc.event/1 lines on stdin, store in control.ingested_events
   version                              build revision
+  events --mission M [--json]          mission events with effect rows joined at read time (effect:{state})
+  policy build|marker                  M1 build and comment_policy marker (read-only; exit 0 only for m1)
   harness run --adapter native --grant F --events F   run a native mission through the harness seam; record and check its event trace
   harness run --adapter codex --codex-preflight --codex-dir D --events F   check Codex feature and profile metadata without starting a thread (refused in M1, goodqa#15976)
   ladder status --state F --policy F [--json]   model ladder from an escalation.py state file (read-only)

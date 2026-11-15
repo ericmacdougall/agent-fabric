@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"fabric/internal/domain"
 	"fabric/internal/effects"
+	"fabric/internal/records"
 	"fabric/internal/store"
 )
 
@@ -86,6 +88,17 @@ func goodqaExecutor() (*effects.GoodQA, error) {
 	return &effects.GoodQA{Endpoint: endpoint, KeyFile: keyFile}, nil
 }
 
+// mutatingBroker is the broker of a mutating `fab effect` subcommand: an M1
+// build refuses (exit 3) before any change when the database's comment
+// policy marker is missing or unknown.
+func mutatingBroker(ctx context.Context, st *store.Store) (*effects.Broker, error) {
+	b := effects.New(st)
+	if err := checkEffectPolicy(ctx, b); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
 // effectMain:
 //
 //	fab effect comment --mission M --attempt R --fence F --issue-id UUID --ticket goodqa#N --body TEXT --key K [--approve]
@@ -102,6 +115,7 @@ func effectMain(args []string) error {
 	case "unresolved":
 		fs := flag.NewFlagSet("effect unresolved", flag.ContinueOnError)
 		age := fs.Duration("age", 0, "only effects unchanged for at least this long")
+		recordsDir := fs.String("records", os.Getenv("FABRIC_RECORDS_DIR"), "fabd's records directory ({run area}/records): also list delivery_blocked records (AC-29)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -112,6 +126,16 @@ func effectMain(args []string) error {
 			}
 			for _, id := range ids {
 				fmt.Println(id)
+			}
+			if *recordsDir == "" {
+				return nil
+			}
+			rs, err := records.List(*recordsDir, records.DeliveryBlocked)
+			if err != nil {
+				return err
+			}
+			for _, r := range rs {
+				fmt.Printf("delivery_blocked mission=%s attempt=%s class=%s at=%s\n", r.Mission, r.Attempt, r.Class, r.Time.Format(time.RFC3339))
 			}
 			return nil
 		})
@@ -124,7 +148,11 @@ func effectMain(args []string) error {
 			return err
 		}
 		return withStore(func(ctx context.Context, st *store.Store) error {
-			e, err := effects.New(st).Abandon(ctx, *id, *reason, *evidence, actor())
+			b, err := mutatingBroker(ctx, st)
+			if err != nil {
+				return err
+			}
+			e, err := b.Abandon(ctx, *id, *reason, *evidence, actor())
 			if err != nil {
 				return err
 			}
@@ -145,7 +173,11 @@ func effectMain(args []string) error {
 			return errors.New("--outcome must be applied or not_applied")
 		}
 		return withStore(func(ctx context.Context, st *store.Store) error {
-			e, err := effects.New(st).ResolveQuarantined(ctx, *id, to, *reason, *evidence, actor())
+			b, err := mutatingBroker(ctx, st)
+			if err != nil {
+				return err
+			}
+			e, err := b.ResolveQuarantined(ctx, *id, to, *reason, *evidence, actor())
 			if err != nil {
 				return err
 			}
@@ -171,7 +203,10 @@ func effectMain(args []string) error {
 		}
 		req, _ := json.Marshal(map[string]string{"issue_id": *issueID, "ticket": *ticket, "body": *body})
 		return withStore(func(ctx context.Context, st *store.Store) error {
-			b := effects.New(st)
+			b, err := mutatingBroker(ctx, st)
+			if err != nil {
+				return err
+			}
 			e, err := b.Submit(ctx, g, effects.IntentSpec{Mission: domain.MissionID(*mission), Attempt: domain.AttemptID(*attempt), Fence: *fence,
 				Kind: "ticket_comment", Subject: "ticket:" + *ticket, IdemKey: *key, Request: req, NeedsApproval: *approve})
 			if err != nil {
@@ -211,6 +246,11 @@ func effectMain(args []string) error {
 			b := effects.New(st)
 			var e effects.Effect
 			var err error
+			if args[0] != "show" {
+				if err := checkEffectPolicy(ctx, b); err != nil {
+					return err
+				}
+			}
 			if args[0] == "show" {
 				e, err = b.Load(ctx, *id)
 			} else {

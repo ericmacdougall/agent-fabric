@@ -76,6 +76,7 @@ func TestExecutorsHonourDeadline(t *testing.T) {
 // contract breach is visible.
 func TestExecutorOverrunCounted(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	b.SetTransportTimeout(100 * time.Millisecond)
 	e, err := b.Submit(ctx, fake, uspec("overrun"))
@@ -95,6 +96,7 @@ func TestExecutorOverrunCounted(t *testing.T) {
 // lost is recognised on retry, not reported as lost.
 func TestSettleRecognisesItsOwnCommit(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	e, err := b.Submit(ctx, fake, uspec("lostreply"))
 	if err != nil {
@@ -130,6 +132,7 @@ func TestSettleRecognisesItsOwnCommit(t *testing.T) {
 // fresh one, so an otherwise full pool does not hang it.
 func TestResettleWithFullPool(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	e, err := b.Submit(ctx, fake, uspec("fullpool"))
 	if err != nil {
@@ -186,6 +189,7 @@ func TestResettleWithFullPool(t *testing.T) {
 // every broker on it.
 func TestDispatchCapSharedAcrossBrokers(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	b2 := New(st)
 	n := b.DispatchLimit()
@@ -220,6 +224,7 @@ func TestDispatchCapSharedAcrossBrokers(t *testing.T) {
 // dispatched, not the reconciler's own timeout setting.
 func TestStaleFollowsStampedDeadline(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)
@@ -261,6 +266,7 @@ func TestStaleFollowsStampedDeadline(t *testing.T) {
 // committed, within a bounded window, and never rewritten.
 func TestDispatchDeadlineRowGuarded(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	e, err := b.Submit(ctx, fake, uspec("dl"))
 	if err != nil {
@@ -324,6 +330,7 @@ func (s slowPrecondition) Precondition(ctx context.Context, e Effect) (bool, str
 // the effect stale before its transport deadline.
 func TestStampAfterSlowPrecondition(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)

@@ -51,6 +51,22 @@ var applyRolesFault func(stmt string) error
 // that role NOLOGIN (tests reach it through SET ROLE). Passwords are never
 // logged or returned.
 func (s *Store) ApplyRoles(ctx context.Context, r Roles, appPassword, runnerPassword string) (err error) {
+	return s.ApplyRolesPolicy(ctx, r, appPassword, runnerPassword, "")
+}
+
+// CommentPolicyM1 is the only comment_policy value ApplyRolesPolicy writes.
+const CommentPolicyM1 = "m1"
+
+// ApplyRolesPolicy is ApplyRoles that also upserts the fabric_settings
+// ('comment_policy', policy) marker inside the same all-or-nothing
+// transaction (goodqa#15966, M1 comment policy). policy "" leaves the row
+// untouched; the only other accepted value is "m1". Nothing here deletes
+// or changes the row otherwise. `fab db roles --comment-policy m1` is the
+// only caller that passes "m1", and only an M1 build accepts that flag.
+func (s *Store) ApplyRolesPolicy(ctx context.Context, r Roles, appPassword, runnerPassword, policy string) (err error) {
+	if policy != "" && policy != CommentPolicyM1 {
+		return errors.New("invalid comment policy: only m1 is accepted")
+	}
 	if !rolePrefix.MatchString(r.Prefix) {
 		return errors.New("invalid role prefix")
 	}
@@ -155,6 +171,9 @@ func (s *Store) ApplyRoles(ctx context.Context, r Roles, appPassword, runnerPass
 		fmt.Sprintf("GRANT %s TO %s", sched, app),
 		"INSERT INTO fabric_settings (key, value) VALUES ('scheduler_role', "+schedRole+") ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
 	)
+	if policy == CommentPolicyM1 {
+		stmts = append(stmts, "INSERT INTO fabric_settings (key, value) VALUES ('comment_policy', 'm1') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value")
+	}
 	// goodqa#15159: all or nothing, one run at a time. A run that stopped
 	// part way used to leave, for example, the app granted every table but
 	// not yet revoked from fabric_settings. Role DDL and grants are

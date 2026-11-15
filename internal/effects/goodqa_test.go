@@ -161,6 +161,7 @@ func gqSpec(key, body string) IntentSpec {
 
 func TestGoodQAExecutorThroughBroker(t *testing.T) {
 	ctx, _, b, _ := setup(t)
+	legacyTicketComment(t, ctx)
 	f, g := fakeServer(t)
 	e, err := b.Submit(ctx, g, gqSpec("gq1", "checkpoint: reducer green"))
 	if err != nil {
@@ -186,6 +187,7 @@ func TestGoodQAExecutorThroughBroker(t *testing.T) {
 // the comment. UNKNOWN, then readback by trailer -> CONFIRMED, one comment.
 func TestGoodQALostResponseReconciles(t *testing.T) {
 	ctx, _, b, _ := setup(t)
+	legacyTicketComment(t, ctx)
 	f, g := fakeServer(t)
 	f.set(func() { f.loseAfter = true })
 	e, _ := b.Submit(ctx, g, gqSpec("gq2", "posted once"))
@@ -210,6 +212,7 @@ func TestGoodQALostResponseReconciles(t *testing.T) {
 
 func TestGoodQAPreconditionAndRefusals(t *testing.T) {
 	ctx, _, b, _ := setup(t)
+	legacyTicketComment(t, ctx)
 	f, g := fakeServer(t)
 	f.set(func() { f.closed = true })
 	e, _ := b.Submit(ctx, g, gqSpec("gq3", "x"))

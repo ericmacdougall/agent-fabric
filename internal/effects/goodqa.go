@@ -163,10 +163,38 @@ func commentID(data map[string]any) string {
 // effect's key: exactly one is COMMITTED, none is NOT_APPLIED, more than one
 // is CONFLICT (quarantine: something posted twice).
 func (g *GoodQA) Reconcile(ctx context.Context, e Effect) (Observation, string, error) {
+	obs, detail, _, err := g.readback(ctx, e)
+	return obs, detail, err
+}
+
+// FindComment is the read-only trailer lookup the AC-31 late-write observer
+// uses (CommentFinder): it reports the id of the comment that carries this
+// effect's key, when exactly one does. It never writes.
+func (g *GoodQA) FindComment(ctx context.Context, e Effect) (string, bool, error) {
+	obs, detail, ids, err := g.readback(ctx, e)
+	if err != nil {
+		return "", false, err
+	}
+	switch obs {
+	case ObsCommitted, ObsConflict:
+		if len(ids) > 0 && ids[0] != "" {
+			return ids[0], true, nil
+		}
+		return "unknown", true, nil
+	case ObsNotApplied:
+		return "", false, nil
+	}
+	return "", false, errors.New(detail)
+}
+
+// readback pages the issue's comments and counts trailers for e's key,
+// collecting each matching comment's id.
+func (g *GoodQA) readback(ctx context.Context, e Effect) (Observation, string, []string, error) {
 	var r commentRequest
 	if err := json.Unmarshal(e.Request, &r); err != nil {
-		return ObsUnknown, "", err
+		return ObsUnknown, "", nil, err
 	}
+	var ids []string
 	pages := g.MaxPages
 	if pages <= 0 {
 		pages = 5
@@ -185,45 +213,47 @@ func (g *GoodQA) Reconcile(ctx context.Context, e Effect) (Observation, string, 
 		}
 		data, err := g.call(ctx, "get_issue_comments", args)
 		if err != nil {
-			return ObsUnknown, "readback transport: " + err.Error(), nil
+			return ObsUnknown, "readback transport: " + err.Error(), ids, nil
 		}
 		if code, ok := data["__error__"]; ok {
-			return ObsUnknown, fmt.Sprintf("readback refused: %v", code), nil
+			return ObsUnknown, fmt.Sprintf("readback refused: %v", code), ids, nil
 		}
 		// goodqa#15165: only a well-formed page can prove absence. A missing
 		// or malformed list, item or paging field is UNKNOWN, never NOT_APPLIED.
 		list, ok := data["comments"].([]any)
 		if !ok {
-			return ObsUnknown, "readback page has no comments list", nil
+			return ObsUnknown, "readback page has no comments list", ids, nil
 		}
 		for _, item := range list {
 			c, ok := item.(map[string]any)
 			if !ok {
-				return ObsUnknown, "readback page has a malformed comment", nil
+				return ObsUnknown, "readback page has a malformed comment", ids, nil
 			}
 			// Archived comments are still historical evidence of a write.
 			// Ignoring one could turn an applied effect into NOT_APPLIED.
 			body, ok := c["body"].(string)
 			if !ok {
-				return ObsUnknown, "readback page has a comment without a body", nil
+				return ObsUnknown, "readback page has a comment without a body", ids, nil
 			}
 			for _, m := range trailerRE.FindAllStringSubmatch(body, -1) {
 				if m[1] == e.IdemKey {
 					matches++
+					id, _ := c["id"].(string)
+					ids = append(ids, id)
 				}
 			}
 		}
 		more, ok := data["hasMore"].(bool)
 		if !ok {
-			return ObsUnknown, "readback malformed: hasMore must be a boolean", nil
+			return ObsUnknown, "readback malformed: hasMore must be a boolean", ids, nil
 		}
 		if more {
 			next, ok := data["nextCursor"].(string)
 			if !ok || strings.TrimSpace(next) == "" {
-				return ObsUnknown, "readback page says more comments follow but gives no cursor", nil
+				return ObsUnknown, "readback page says more comments follow but gives no cursor", ids, nil
 			}
 			if seenCursors[next] {
-				return ObsUnknown, "readback malformed: continuation cursor did not advance", nil
+				return ObsUnknown, "readback malformed: continuation cursor did not advance", ids, nil
 			}
 			seenCursors[next] = true
 			cursor = next
@@ -231,15 +261,15 @@ func (g *GoodQA) Reconcile(ctx context.Context, e Effect) (Observation, string, 
 		if !more {
 			switch matches {
 			case 0:
-				return ObsNotApplied, "no comment carries the trailer", nil
+				return ObsNotApplied, "no comment carries the trailer", ids, nil
 			case 1:
-				return ObsCommitted, "one comment carries the trailer", nil
+				return ObsCommitted, "one comment carries the trailer", ids, nil
 			default:
-				return ObsConflict, fmt.Sprintf("%d comments carry the trailer", matches), nil
+				return ObsConflict, fmt.Sprintf("%d comments carry the trailer", matches), ids, nil
 			}
 		}
 	}
-	return ObsExhausted, "comment history exceeded the page budget", nil
+	return ObsExhausted, "comment history exceeded the page budget", ids, nil
 }
 
 // checkEndpoint (goodqa#15168, Kimi K12): the bearer goes only to an https

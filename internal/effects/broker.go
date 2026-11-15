@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"fabric/internal/domain"
+	"fabric/internal/m1build"
 	"fabric/internal/store"
 )
 
@@ -180,13 +181,26 @@ type Broker struct {
 	// transport, and after transport but before the receipt commits.
 	afterDispatchCommit func(Effect)
 	afterTransport      func(Effect, Receipt)
+	// beforeRearm runs inside Retry's transaction, after the row is read
+	// FOR UPDATE and checked, before it is re-armed (AC-32 seam).
+	beforeRearm func(Effect)
+
+	// m1 is the build's M1 marker (m1build.Enabled). It is unexported and
+	// has no setter: an M1 build enforces the comment policy from its build
+	// constant alone. In-package tests flip it to cover every table row.
+	m1 bool
+	// quietWindow is the AC-7 early-readback quiet window (QuietWindow()).
+	// No flag or environment value changes it, so no caller can shorten the
+	// guard; only in-package tests do.
+	quietWindow time.Duration
 }
 
 func New(st *store.Store) *Broker {
 	// A dispatch holds one connection for its transport (the effect lock);
 	// the store caps that at half its pool across every broker on it.
 	return &Broker{st: st, pool: st.Pool(), slots: st.DispatchSlots(),
-		transportTimeout: DefaultTransportTimeout, staleAfter: 2 * DefaultTransportTimeout}
+		transportTimeout: DefaultTransportTimeout, staleAfter: 2 * DefaultTransportTimeout,
+		m1: m1build.Enabled, quietWindow: QuietWindow()}
 }
 
 // effectID derives a stable row id from the business key.
@@ -232,6 +246,11 @@ func (b *Broker) Submit(ctx context.Context, exec Executor, spec IntentSpec) (Ef
 		return existing, tx.Commit(ctx)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
+		return Effect{}, err
+	}
+	// M1 comment policy (AC-7): a new governed intent must carry its
+	// mission's canonical key and be the mission's only ticket_comment row.
+	if err := b.checkSubmit(ctx, tx, spec); err != nil {
 		return Effect{}, err
 	}
 	if err := liveFence(ctx, tx, spec.Mission, spec.Attempt, spec.Fence); err != nil {
@@ -410,6 +429,11 @@ func (b *Broker) dispatchOn(ctx context.Context, c *pgxpool.Conn, exec Executor,
 	}
 	if e.Kind != exec.Kind() {
 		return fmt.Errorf("%w: executor %s for effect kind %s", domain.ErrInvalidTransition, exec.Kind(), e.Kind)
+	}
+	// AC-32: on the row locked FOR UPDATE, a governed effect is dispatched
+	// at most once and only under its canonical key.
+	if err := b.checkGoverned(ctx, tx, e); err != nil {
+		return err
 	}
 	// What is sent is what was hashed and approved: recompute before transport.
 	if sha, err := domain.EffectBase(e.Kind, e.Request); err != nil || sha != e.RequestSHA {
@@ -610,6 +634,15 @@ func (b *Broker) Reconcile(ctx context.Context, exec Executor, id string) (Effec
 	if err != nil {
 		return Effect{}, err
 	}
+	// AC-7 early-readback guard: the quiet window is judged when the
+	// readback begins, not when it returns. A readback that starts inside the
+	// window can miss a write still in flight even if it returns after it.
+	quietBefore := true
+	if e.Kind == GovernedKind {
+		if quietBefore, err = b.quietPassedNow(ctx, e); err != nil {
+			return Effect{}, err
+		}
+	}
 	obs, detail, oerr := exec.Reconcile(ctx, e)
 	if oerr != nil {
 		obs, detail = ObsUnknown, "readback: "+oerr.Error()
@@ -625,9 +658,30 @@ func (b *Broker) Reconcile(ctx context.Context, exec Executor, id string) (Effec
 	default:
 		state = Unknown // still unresolved; a later sweep tries again
 	}
+	tx, err := b.pool.Begin(ctx)
+	if err != nil {
+		return Effect{}, err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck
+	if state == NotApplied && e.Kind == GovernedKind {
+		// AC-7 early-readback guard: an empty readback of a governed effect
+		// is UNKNOWN until the quiet window after its last transport
+		// deadline has passed (a write still in flight at GoodQA may land).
+		on, err := b.guardOn(ctx, tx)
+		if err != nil {
+			return Effect{}, err
+		}
+		if on && !quietBefore {
+			state, obs = Unknown, ObsUnknown
+			detail = "readback empty inside the M1 quiet window; " + detail
+		}
+	}
 	rc, _ := json.Marshal(Receipt{Outcome: Outcome(obs), Detail: detail})
-	if _, err := b.pool.Exec(ctx, `UPDATE effects SET state = $2, receipt = $3, last_error = $4, updated_at = now() WHERE id = $1 AND state = $5`,
+	if _, err := tx.Exec(ctx, `UPDATE effects SET state = $2, receipt = $3, last_error = $4, updated_at = now() WHERE id = $1 AND state = $5`,
 		id, string(state), rc, detail, string(Reconciling)); err != nil {
+		return Effect{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return Effect{}, err
 	}
 	return b.Load(ctx, id)
@@ -665,10 +719,25 @@ func (b *Broker) markStaleDispatched(ctx context.Context, id string) error {
 }
 
 // Retry re-arms a FAILED_DEFINITE or NOT_APPLIED effect under the same key.
-// UNKNOWN is refused: reconcile first.
+// UNKNOWN is refused: reconcile first. The row is read FOR UPDATE inside the
+// transaction that re-arms it (AC-32), so concurrent callers cannot both
+// pass the checks.
 func (b *Broker) Retry(ctx context.Context, id string) (Effect, error) {
-	e, err := b.Load(ctx, id)
+	tx, err := b.pool.Begin(ctx)
 	if err != nil {
+		return Effect{}, err
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck
+	e, err := b.loadTx(ctx, tx, "id", id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Effect{}, fmt.Errorf("%w: effect %s", domain.ErrNotFound, id)
+	}
+	if err != nil {
+		return Effect{}, err
+	}
+	// AC-32: a governed effect that was ever dispatched is never re-armed,
+	// from any state; checked on the row locked FOR UPDATE.
+	if err := b.checkGoverned(ctx, tx, e); err != nil {
 		return Effect{}, err
 	}
 	switch e.State {
@@ -679,7 +748,7 @@ func (b *Broker) Retry(ctx context.Context, id string) (Effect, error) {
 		return Effect{}, fmt.Errorf("%w: retry while %s", domain.ErrInvalidTransition, e.State)
 	}
 	var abandoned bool
-	if err := b.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM effect_resolutions WHERE effect_id = $1 AND to_state = $2)`,
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM effect_resolutions WHERE effect_id = $1 AND to_state = $2)`,
 		id, string(NotApplied)).Scan(&abandoned); err != nil {
 		return Effect{}, err
 	}
@@ -695,16 +764,12 @@ func (b *Broker) Retry(ctx context.Context, id string) (Effect, error) {
 	// once it is INTENT with dispatches > 0 neither abandon nor retry can move
 	// it. Re-arming it after that attempt ended would strand it and block the
 	// mission's admission for good, so retry needs the attempt live at the
-	// effect's fence, read in the transaction that re-arms it. (A concurrent
-	// end of the attempt between the read and the commit is the residual
-	// crash variant; its audited exit is the follow-up ticket.)
-	tx, err := b.pool.Begin(ctx)
-	if err != nil {
-		return Effect{}, err
-	}
-	defer tx.Rollback(context.Background()) //nolint:errcheck
+	// effect's fence, read in the transaction that re-arms it.
 	if err := liveFence(ctx, tx, e.Mission, e.Attempt, e.Fence); err != nil {
 		return Effect{}, fmt.Errorf("retry refused: %w; the effect stays %s (a new attempt must submit it under a new key)", err, e.State)
+	}
+	if b.beforeRearm != nil {
+		b.beforeRearm(e)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE effects SET state = $2, updated_at = now() WHERE id = $1 AND state = $3`, id, string(next), string(e.State)); err != nil {
 		return Effect{}, err

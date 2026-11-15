@@ -1078,6 +1078,12 @@ func (s *Store) Truncate(ctx context.Context) error {
 		`TRUNCATE commands, events, outbox, outbox_cursors, attempts, stale_observations, missions,
 		dispatch_grants, usage_receipts, reservation_events, reservations, hold_commands, resource_capacities RESTART IDENTITY CASCADE`,
 		"UPDATE slots SET cap = 4 WHERE id = 1",
+		// The M1 comment policy marker (goodqa#15966) is a per-database
+		// setting a test may write; a reset removes it. Truncate is
+		// test-only: its only callers are storetest and _test files, and no
+		// fab or fabd command reaches it (removing the marker there would
+		// drop M1 enforcement on non-M1 builds).
+		"DELETE FROM fabric_settings WHERE key = 'comment_policy'",
 		// The Control Room schema (fab control bootstrap, goodqa#15586) exists
 		// only where it was bootstrapped. Its append-only source tables have no
 		// truncate exemption, so the owner's reset disarms their triggers for

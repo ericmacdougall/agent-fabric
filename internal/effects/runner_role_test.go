@@ -63,6 +63,7 @@ func ackRun(t *testing.T, ctx context.Context, st *store.Store) {
 // the runner; reconcile is the app role's.
 func TestRunnerRoleBrokerFlows(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	_, rb := runnerBroker(t, ctx, st)
 
