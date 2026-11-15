@@ -11,6 +11,7 @@ import (
 // default listing would read NOT_APPLIED and let a retry post twice.
 func TestGoodQALostReplyThenArchivedIsCommitted(t *testing.T) {
 	ctx, _, b, _ := setup(t)
+	legacyTicketComment(t, ctx)
 	f, g := fakeServer(t)
 	f.set(func() { f.loseAfter = true })
 	e, err := b.Submit(ctx, g, gqSpec("gq-archived", "checkpoint: archived later"))

@@ -24,6 +24,7 @@ func endAttempt(t *testing.T, ctx context.Context, b *Broker) {
 
 func TestTerminalReplayAfterAttemptEnds(t *testing.T) {
 	ctx, _, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	e, _ := b.Submit(ctx, fake, spec("ki1", "hello"))
 	if e, err := b.Dispatch(ctx, fake, e.ID); err != nil || e.State != Confirmed {
 		t.Fatalf("dispatch: %s %v", e.State, err)
@@ -44,6 +45,7 @@ func TestTerminalReplayAfterAttemptEnds(t *testing.T) {
 
 func TestReplayBindsWholeIntent(t *testing.T) {
 	ctx, _, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	if _, err := b.Submit(ctx, fake, spec("ki2", "hello")); err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +68,7 @@ func TestReplayBindsWholeIntent(t *testing.T) {
 
 func TestDispatchRefusesRequestThatNoLongerMatchesItsHash(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	e, _ := b.Submit(ctx, fake, spec("ki3", "approved text"))
 	swap := `UPDATE effects SET request = '{"ticket": "goodqa#0", "body": "swapped"}' WHERE id = $1`
 	// Review Q1 on 3f38cc3: the database refuses the swap for every role.
@@ -104,6 +107,7 @@ func TestDispatchRefusesRequestThatNoLongerMatchesItsHash(t *testing.T) {
 // does not overwrite it, and the broker reports it.
 func TestStaleReceiptDoesNotSettleLaterDispatch(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	e, _ := b.Submit(ctx, fake, spec("ki4", "hello"))
 	b.afterTransport = func(e Effect, rc Receipt) {
 		// The row is recovered, read back NOT_APPLIED, retried and dispatched again.
@@ -137,6 +141,7 @@ func TestStaleReceiptDoesNotSettleLaterDispatch(t *testing.T) {
 // refused at intake, before anything is stored; the canonical form works.
 func TestNonCanonicalNumberRefusedAtIntake(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	s := spec("ki5", "n")
 	for _, lit := range []string{"1e2", "1E2", "-0", "-0.0", "2.5e-1"} {
 		s.Request = json.RawMessage(`{"ticket": "goodqa#0", "body": "n", "n": ` + lit + `}`)

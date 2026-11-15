@@ -3,6 +3,7 @@ package effects
 import (
 	"context"
 	"errors"
+	"fabric/internal/m1build"
 	"regexp"
 	"strings"
 	"sync"
@@ -206,7 +207,7 @@ func (k *kindFake) Kind() string { return k.kind }
 // something that did not enforce the policy (a pre-marker row).
 func TestSecondEffectRefused(t *testing.T) {
 	ctx, st, b, fake := setup(t)
-	if _, err := b.Submit(ctx, fake, spec("k-foreign", "foreign")); err != nil {
+	if _, err := nonM1Broker(st).Submit(ctx, fake, spec("k-foreign", "foreign")); err != nil {
 		t.Fatal(err)
 	}
 	setMarker(t, ctx, st, "m1")
@@ -250,12 +251,13 @@ func TestConcurrentCanonicalSubmitsOneRow(t *testing.T) {
 // non-canonical key.
 func TestRetryDispatchRefuseNonCanonicalRow(t *testing.T) {
 	ctx, st, b, fake := setup(t)
-	e, err := b.Submit(ctx, fake, spec("k-raw", "raw"))
+	lb := nonM1Broker(st) // writes the pre-marker rows
+	e, err := lb.Submit(ctx, fake, spec("k-raw", "raw"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	fake.PreconditionFail = true
-	if e, err = b.Dispatch(ctx, fake, e.ID); err != nil || e.State != FailedDefinite || e.Dispatches != 0 {
+	if e, err = lb.Dispatch(ctx, fake, e.ID); err != nil || e.State != FailedDefinite || e.Dispatches != 0 {
 		t.Fatalf("setup: %s %v d=%d", e.State, err, e.Dispatches)
 	}
 	setMarker(t, ctx, st, "m1")
@@ -270,7 +272,7 @@ func TestRetryDispatchRefuseNonCanonicalRow(t *testing.T) {
 	if _, err := st.Pool().Exec(ctx, `DELETE FROM fabric_settings WHERE key = 'comment_policy'`); err != nil {
 		t.Fatal(err)
 	}
-	e3, err := b.Submit(ctx, fake, spec("k-raw3", "raw3"))
+	e3, err := lb.Submit(ctx, fake, spec("k-raw3", "raw3"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,9 +396,16 @@ func TestReadbackGuardWindow(t *testing.T) {
 		t.Fatalf("after: %s %v", e.State, err)
 	}
 
-	// Unmarked non-M1: today's behaviour, NOT_APPLIED at once.
+	// Unmarked non-M1: today's behaviour, NOT_APPLIED at once. An M1 build
+	// has no unmarked behaviour: its Submit is refused.
 	ctx, _, b, fake = setup(t)
 	b.SetTransportTimeout(time.Second)
+	if m1build.Enabled {
+		if _, err := b.Submit(ctx, fake, spec("k-u", "u")); !IsPolicyRefusal(err, CodeMarkerMissing) {
+			t.Fatalf("M1 build, unmarked: %v", err)
+		}
+		return
+	}
 	e, _ = b.Submit(ctx, fake, spec("k-u", "u"))
 	fake.LoseBefor = true
 	e, _ = b.Dispatch(ctx, fake, e.ID)
@@ -432,11 +441,12 @@ func TestReadbackGuardJudgedAtStart(t *testing.T) {
 
 // The guard also holds on an M1 build whose marker is missing.
 func TestReadbackGuardOnM1BuildWithoutMarker(t *testing.T) {
-	ctx, _, b, fake := setup(t)
-	b.SetTransportTimeout(time.Second)
-	e, _ := b.Submit(ctx, fake, spec("k-u", "u"))
+	ctx, st, b, fake := setup(t)
+	lb := nonM1Broker(st)
+	lb.SetTransportTimeout(time.Second)
+	e, _ := lb.Submit(ctx, fake, spec("k-u", "u"))
 	fake.LoseBefor = true
-	e, _ = b.Dispatch(ctx, fake, e.ID)
+	e, _ = lb.Dispatch(ctx, fake, e.ID)
 	b.m1 = true
 	if e, err := b.Reconcile(ctx, fake, e.ID); err != nil || e.State != Unknown {
 		t.Fatalf("%s %v", e.State, err)
@@ -550,6 +560,7 @@ func TestRetryInterleavedDispatch(t *testing.T) {
 // NOT_APPLIED and FAILED_DEFINITE effects re-arm and dispatch again.
 func TestNoRegressionUnmarked(t *testing.T) {
 	ctx, _, b, fake := setup(t)
+	legacyTicketComment(t, ctx) // non-M1 builds only
 	b.SetTransportTimeout(time.Second)
 	fd, _ := b.Submit(ctx, fake, spec("k-fd", "fd"))
 	fake.Reject = true
@@ -591,7 +602,13 @@ func TestPrefixKeyIsNotCanonical(t *testing.T) {
 // its next decision (it reads the marker in every deciding transaction).
 func TestBrokerStartedBeforeMarker(t *testing.T) {
 	ctx, st, b, fake := setup(t)
-	if _, err := b.Submit(ctx, fake, spec("k-before", "b")); err != nil {
+	if m1build.Enabled {
+		// b is an M1 broker built before the marker: refused until it exists.
+		if _, err := b.Submit(ctx, fake, spec("k-before", "b")); !IsPolicyRefusal(err, CodeMarkerMissing) {
+			t.Fatalf("M1 build, before the marker: %v", err)
+		}
+	}
+	if _, err := nonM1Broker(st).Submit(ctx, fake, spec("k-before", "b")); err != nil {
 		t.Fatal(err)
 	}
 	setMarker(t, ctx, st, "m1")

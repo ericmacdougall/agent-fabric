@@ -38,6 +38,7 @@ func appBroker(t *testing.T, ctx context.Context, st *store.Store) *Broker {
 // a reason and an evidence ref required, audited, never the runner.
 func TestResolveQuarantinedEffect(t *testing.T) {
 	ctx, st, _, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	_, rb := runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)
@@ -134,6 +135,7 @@ func TestSubmitRefusedOnTerminalMission(t *testing.T) {
 // Review O1 on 717bb09: the audit binds every role, not only the runner.
 func TestAppRoleCannotBypassEffectOutcomes(t *testing.T) {
 	ctx, st, _, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st) // creates the roles
 	ab := appBroker(t, ctx, st)
@@ -209,6 +211,7 @@ func (b blockingExec) Precondition(ctx context.Context, e Effect) (bool, string,
 // the remote after its attempt ended.
 func TestDispatchAfterAttemptEndNoRemoteWrite(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	e, err := b.Submit(ctx, fake, spec("o3", "late"))
 	if err != nil {
@@ -241,6 +244,7 @@ func TestDispatchAfterAttemptEndNoRemoteWrite(t *testing.T) {
 // attempt waits for it, and done then sees the DISPATCHED row.
 func TestDispatchedHoldsAttempt(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	e, err := b.Submit(ctx, fake, spec("o3b", "held"))
 	if err != nil {
@@ -281,6 +285,7 @@ func TestDispatchedHoldsAttempt(t *testing.T) {
 // reason, evidence and actor, audited; dispatched effects go through resolve.
 func TestAbandonStrandedIntent(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	_, rb := runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)
@@ -389,6 +394,7 @@ func uspec(key string) IntentSpec {
 // receipt while unsettled, the approval on approve, last_error, updated_at).
 func TestEffectColumnsImmutable(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)
@@ -478,6 +484,7 @@ func TestEffectInsertOnlyInitial(t *testing.T) {
 // that mission is not terminal.
 func TestFenceBelongsToMission(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)
@@ -514,6 +521,7 @@ func TestFenceBelongsToMission(t *testing.T) {
 // broker, so a pair it does not name is refused for every role.
 func TestEffectTransitionsAllowListed(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)
@@ -584,6 +592,7 @@ func TestEffectTransitionsAllowListed(t *testing.T) {
 // is not APPROVED (the second layer, exercised with the guard off).
 func TestDispatchRefusesUnapprovedIntentWithApproval(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	e, _ := b.Submit(ctx, fake, uspec("s2g"))
 	tx, err := st.Pool().Begin(ctx)
 	if err != nil {
@@ -614,6 +623,7 @@ func TestDispatchRefusesUnapprovedIntentWithApproval(t *testing.T) {
 // again.
 func TestStaleDispatchedRecovers(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	b.SetTransportTimeout(100 * time.Millisecond)
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
@@ -723,6 +733,7 @@ func (p parkedSend) Dispatch(ctx context.Context, sub Submission) (Receipt, erro
 // A settle that finds the row moved on is reported, not dropped.
 func TestInFlightDispatchNotReconciled(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	b.SetTransportTimeout(50 * time.Millisecond)
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
@@ -797,6 +808,7 @@ func (s slowSend) Dispatch(ctx context.Context, sub Submission) (Receipt, error)
 // the reconcile and command paths free.
 func TestSlowDispatchesDoNotStarvePool(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	n := b.DispatchLimit()
 	if n < 1 || n >= int(st.Pool().Config().MaxConns) {
@@ -848,6 +860,7 @@ func TestSlowDispatchesDoNotStarvePool(t *testing.T) {
 // hung remote settles UNKNOWN for readback instead of holding the lock.
 func TestTransportTimeoutSettlesUnknown(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	b.SetTransportTimeout(200 * time.Millisecond)
 	ss := slowSend{Fake: fake, entered: make(chan string, 1), release: make(chan struct{})}
@@ -867,6 +880,7 @@ func TestTransportTimeoutSettlesUnknown(t *testing.T) {
 // and the outcome is recorded on a fresh connection.
 func TestDispatcherSessionLossKeepsOutcome(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	ackRun(t, ctx, st)
 	runnerBroker(t, ctx, st)
 	ab := appBroker(t, ctx, st)

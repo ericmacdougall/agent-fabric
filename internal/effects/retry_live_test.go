@@ -16,6 +16,7 @@ import (
 // stays FAILED_DEFINITE (settled). While the attempt is live, retry works.
 func TestRetryNeedsLiveAttempt(t *testing.T) {
 	ctx, st, b, fake := setup(t)
+	legacyTicketComment(t, ctx)
 	if _, err := st.Execute(ctx, "fabd", "ack-r1", domain.Command{Kind: domain.CmdAckStart, Mission: "m_1", Attempt: "r_1", Fence: 1}); err != nil {
 		t.Fatal(err)
 	}
