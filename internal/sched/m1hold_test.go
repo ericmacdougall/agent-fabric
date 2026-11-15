@@ -37,7 +37,7 @@ func TestM1FailClosedHoldsMission(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Remove(filepath.Join(f.bindings, string(a)+".json"))
-	cfg.Credential, cfg.RecordsDir, cfg.Sweep = f.s.cfg.Credential, f.recDir, f.s.cfg.Sweep
+	cfg.Credential, cfg.RecordsDir, cfg.SweepFor = f.s.cfg.Credential, f.recDir, f.s.cfg.SweepFor
 	s := New(st, cfg, ln)
 	if err := s.afterWaitRun(ctx, m, a, fence, f.sdir, f.run, 0, nil, verified); err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func heldAttempt(t *testing.T, m domain.MissionID, a domain.AttemptID) (*store.S
 		t.Fatal(err)
 	}
 	os.Remove(filepath.Join(f.bindings, string(a)+".json"))
-	cfg.Credential, cfg.RecordsDir, cfg.Sweep = f.s.cfg.Credential, f.recDir, f.s.cfg.Sweep
+	cfg.Credential, cfg.RecordsDir, cfg.SweepFor = f.s.cfg.Credential, f.recDir, f.s.cfg.SweepFor
 	return st, ln, cfg, f, fence
 }
 

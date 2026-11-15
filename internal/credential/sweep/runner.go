@@ -3,6 +3,7 @@ package sweep
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 
 	"fabric/internal/host"
 )
@@ -10,6 +11,17 @@ import (
 // Unit properties for the sweep unit (AC-16 (8)); the worker unit adds
 // LimitFSIZE=256M.
 var UnitProperties = []string{"RuntimeMaxSec=125", "MemoryMax=256M", "LimitCORE=0"}
+
+// UnitPropertyMap is UnitProperties as the map the worker manager's
+// StartIOWithProperties takes; host.UnitPropertyArgs allowlists it.
+func UnitPropertyMap() map[string]string {
+	m := map[string]string{}
+	for _, p := range UnitProperties {
+		k, v, _ := strings.Cut(p, "=")
+		m[k] = v
+	}
+	return m
+}
 
 // Env is the sweep's fixed environment. It never carries
 // CLAUDE_CODE_OAUTH_TOKEN, FABRIC_DSN or the GoodQA key.

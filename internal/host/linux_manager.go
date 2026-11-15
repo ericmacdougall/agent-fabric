@@ -113,7 +113,7 @@ func linuxReadyFile(g Grant, unit string) string {
 }
 
 func (l *LinuxManager) startArgsWithPolicy(g Grant, unit string, argv, env []string, policy *egress.PolicyDescriptor) ([]string, error) {
-	args, _, err := l.startArgsEnvWithPolicy(g, unit, mgrEnvFile(g), argv, env, policy)
+	args, _, err := l.startArgsEnvWithPolicy(g, unit, mgrEnvFile(g), argv, env, policy, nil)
 	return args, err
 }
 
@@ -124,10 +124,12 @@ func (l *LinuxManager) startArgsWithPolicy(g Grant, unit string, argv, env []str
 // and `fab __sandbox --env-keep NAMES --env-file FILE` execs the worker
 // with exactly the pairs in the file. No value appears in any argument.
 func (l *LinuxManager) startArgsEnv(g Grant, unit, ef string, argv, env []string) ([]string, []string, error) {
-	return l.startArgsEnvWithPolicy(g, unit, ef, argv, env, nil)
+	return l.startArgsEnvWithPolicy(g, unit, ef, argv, env, nil, nil)
 }
 
-func (l *LinuxManager) startArgsEnvWithPolicy(g Grant, unit, ef string, argv, env []string, policy *egress.PolicyDescriptor) ([]string, []string, error) {
+// props are validated NAME=VALUE unit properties (UnitPropertyArgs); each
+// replaces the manager default of the same name, so none appears twice.
+func (l *LinuxManager) startArgsEnvWithPolicy(g Grant, unit, ef string, argv, env []string, policy *egress.PolicyDescriptor, props []string) ([]string, []string, error) {
 	uid, err := l.workerUID()
 	if err != nil {
 		return nil, nil, err
@@ -151,9 +153,18 @@ func (l *LinuxManager) startArgsEnvWithPolicy(g Grant, unit, ef string, argv, en
 	for _, property := range network.properties {
 		args = append(args, "-p", property)
 	}
+	over := map[string]bool{}
+	for _, p := range props {
+		over[strings.SplitN(p, "=", 2)[0]] = true
+	}
 	for _, p := range []struct{ k, v string }{{"MemoryMax", l.MemoryMax}, {"CPUQuota", l.CPUQuota}, {"TasksMax", l.TasksMax}} {
-		if p.v != "" {
+		if p.v != "" && !over[p.k] {
 			args = append(args, "-p", p.k+"="+p.v)
+		}
+	}
+	for _, p := range props {
+		if p != workerNoCoreProperty { // LimitCORE may only be 0, already set
+			args = append(args, "-p", p)
 		}
 	}
 	// Explicit environment only (DESIGN 3.7): never the host's. Caller pairs
@@ -331,6 +342,23 @@ var _ StdinStarter = (*LinuxManager)(nil)
 // StartIO is Start with the worker's stdin connected (goodqa#15373 D1). A
 // nil stdin is Start.
 func (l *LinuxManager) StartIO(g Grant, argv []string, env []string, stdin, stdout, stderr *os.File) (Handle, error) {
+	return l.startIO(g, argv, env, nil, l.EgressConfig != nil, stdin, stdout, stderr)
+}
+
+// StartIOWithProperties is StartIO for fabd's own unit, the AC-16 sweep
+// (goodqa#15966 AC-35(h)), with allowlisted per-unit properties. A key
+// outside the allowlist, or a malformed value, is refused before anything
+// starts. The unit gets no egress mediator: it has no network (loopback
+// only, no TCP port) and writes no AC-20 counts over the worker's.
+func (l *LinuxManager) StartIOWithProperties(g Grant, argv, env []string, props map[string]string, stdin, stdout, stderr *os.File) (Handle, error) {
+	args, err := UnitPropertyArgs(props)
+	if err != nil {
+		return Handle{}, err
+	}
+	return l.startIO(g, argv, env, args, false, stdin, stdout, stderr)
+}
+
+func (l *LinuxManager) startIO(g Grant, argv, env, props []string, mediated bool, stdin, stdout, stderr *os.File) (Handle, error) {
 	if err := g.Validate(); err != nil {
 		return Handle{}, err
 	}
@@ -381,7 +409,7 @@ func (l *LinuxManager) StartIO(g Grant, argv []string, env []string, stdin, stdo
 		return Handle{}, err
 	}
 	var policy *egress.PolicyDescriptor
-	if l.EgressConfig != nil {
+	if mediated {
 		mediator, err = egress.Start(context.Background(), *l.EgressConfig)
 		if err != nil {
 			return Handle{}, fmt.Errorf("start per-run egress mediator: %w", err)
@@ -389,7 +417,7 @@ func (l *LinuxManager) StartIO(g Grant, argv []string, env []string, stdin, stdo
 		p := mediator.Policy()
 		policy = &p
 	}
-	args, pairs, err := l.startArgsEnvWithPolicy(g, unit, ef, argv, env, policy)
+	args, pairs, err := l.startArgsEnvWithPolicy(g, unit, ef, argv, env, policy, props)
 	if err != nil {
 		return Handle{}, err
 	}

@@ -140,10 +140,11 @@ type Config struct {
 	// settle writes the credential_exposure, sweep_incomplete and
 	// delivery_blocked records there. "" writes none.
 	RecordsDir string
-	// Sweep (goodqa#15966 AC-16) runs `fab __sweep` as the worker through
-	// the worker manager at settle. nil: every sweep is incomplete
-	// (sweep_incomplete, never clean).
-	Sweep sweep.Launcher
+	// SweepFor (goodqa#15966 AC-16, AC-35(h)) builds, once per settle, the
+	// launcher that runs `fab __sweep` as the worker through the worker
+	// manager for that attempt. nil, or an error, makes the sweep
+	// incomplete (sweep_incomplete, never clean).
+	SweepFor func(mission domain.MissionID, attempt domain.AttemptID, runDir string) (sweep.Launcher, error)
 	// Mission is the M1 mission path (goodqa#15966 W5), set only by an M1
 	// build; nil keeps today's behaviour and never reads mission.json.
 	Mission *missioncfg.Preparer

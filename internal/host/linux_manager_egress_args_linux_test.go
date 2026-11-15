@@ -11,7 +11,7 @@ import (
 func TestLinuxStartArgsInjectProxyWithoutDirectEgress(t *testing.T) {
 	policy := validLinuxEgressPolicy()
 	l := &LinuxManager{Self: "/srv/fabric/bin/fab"}
-	args, pairs, err := l.startArgsEnvWithPolicy(controlGrant(t.TempDir()), "fab-proxy.service", "/run/ef", []string{"env"}, nil, &policy)
+	args, pairs, err := l.startArgsEnvWithPolicy(controlGrant(t.TempDir()), "fab-proxy.service", "/run/ef", []string{"env"}, nil, &policy, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

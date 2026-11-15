@@ -177,7 +177,7 @@ func TestParseUnitList(t *testing.T) {
 func TestManagerRunTmpAndNoCore(t *testing.T) {
 	g := mgrControlGrant(t.TempDir())
 	l := &LinuxManager{Self: "/x/fab"}
-	args, pairs, err := l.startArgsEnvWithPolicy(g, "fab-u.service", filepath.Join(g.RunDir, "jobs", "env"), []string{"true"}, []string{"TMPDIR=/tmp"}, nil)
+	args, pairs, err := l.startArgsEnvWithPolicy(g, "fab-u.service", filepath.Join(g.RunDir, "jobs", "env"), []string{"true"}, []string{"TMPDIR=/tmp"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

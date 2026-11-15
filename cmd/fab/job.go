@@ -340,6 +340,17 @@ func daemonMain(args []string) error {
 			loop = &m1effect.Loop{Store: st, Broker: effects.New(st), Exec: m1g, RecordsDir: recordsDir}
 			cfg.EffectPass = loop.MaybePass
 		}
+		// goodqa#15966 AC-16, AC-35(h): the sweep runs as the worker through
+		// the worker manager. Without one (the shadow host.Linux) SweepFor
+		// stays nil and every sweep is sweep_incomplete.
+		if mgr, ok := ln.(sweepManager); ok && cfg.Credential != nil {
+			cfg.SweepFor = m1SweepFor(m1SweepOptions{mgr: mgr, streams: cfg.StreamRoot, attemptRoot: filepath.Join(*workRoot, "attempts"),
+				base: host.Grant{Model: cfg.Model, Effort: cfg.Effort, Rung: cfg.Rung, TierTableSHA: cfg.TierTableSHA, Profile: cfg.Profile,
+					MaxTurns: cfg.MaxTurns, MaxBudgetUSD: cfg.MaxBudgetUSD, Wall: cfg.Wall, ConfigSHA: "n/a"},
+				fence: m1SweepFence(func(m domain.MissionID) (domain.Mission, error) { return st.Mission(ctx, m) })})
+		} else if cfg.Credential != nil {
+			fmt.Fprintln(os.Stderr, "fabd: no worker manager for the M1 sweep; every settle records sweep_incomplete")
+		}
 		s := sched.New(st, cfg, ln)
 		if loop != nil {
 			loop.Bump = s.Bump

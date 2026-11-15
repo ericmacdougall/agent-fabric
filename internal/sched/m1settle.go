@@ -215,14 +215,25 @@ func (s *Scheduler) settleM1(mission domain.MissionID, attempt domain.AttemptID,
 		out.Sweep = incompleteReport(reasonInputError)
 	case s.settleFail(stepSweep) != nil:
 		out.Sweep = incompleteReport(sweep.ReasonLaunch)
-	case s.cfg.Sweep == nil:
+	case s.cfg.SweepFor == nil:
 		out.Sweep = incompleteReport(reasonNoLauncher)
 	default:
 		var stop host.StopReceipt
 		if rc != nil {
 			stop = *rc
 		}
-		out.Sweep = sweep.Fabd(stop, s.cfg.FabBin, sweepRoots(runDir), input, s.cfg.Sweep)
+		// The launcher is built only when a launch can follow: an unverified
+		// stop is incomplete inside sweep.Fabd, which then launches nothing.
+		var launch sweep.Launcher
+		if stop.Verified && len(stop.Survivors) == 0 && len(stop.Escaped) == 0 {
+			var err error
+			if launch, err = s.cfg.SweepFor(mission, attempt, runDir); err != nil || launch == nil {
+				fmt.Fprintf(os.Stderr, "fabd: no sweep launcher for %s: %v\n", attempt, err)
+				out.Sweep = incompleteReport(reasonNoLauncher)
+				break
+			}
+		}
+		out.Sweep = sweep.Fabd(stop, s.cfg.FabBin, sweepRoots(runDir), input, launch)
 	}
 	if out.Sweep.Exposed() {
 		out.Exposed = true

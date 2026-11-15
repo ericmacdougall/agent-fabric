@@ -42,6 +42,11 @@ func inProcessSweep(argv, env []string, stdin []byte) ([]byte, int, error) {
 	return out, 0, err
 }
 
+// sweepVia is a SweepFor factory that hands every settle launch.
+func sweepVia(launch sweep.Launcher) func(domain.MissionID, domain.AttemptID, string) (sweep.Launcher, error) {
+	return func(domain.MissionID, domain.AttemptID, string) (sweep.Launcher, error) { return launch, nil }
+}
+
 func newM1Fixture(t *testing.T, withSweep bool) *m1Fixture {
 	return newM1FixtureFor(t, withSweep, "m_settle", "r_settle_1")
 }
@@ -92,7 +97,7 @@ func newM1FixtureFor(t *testing.T, withSweep bool, m domain.MissionID, a domain.
 	cfg := Config{RecordsDir: f.recDir, FabBin: "/usr/local/bin/fab",
 		Credential: &CredentialLaunch{Policy: f.pol, BindingsDir: f.bindings, IDKey: idKey, Others: others}}
 	if withSweep {
-		cfg.Sweep = inProcessSweep
+		cfg.SweepFor = sweepVia(inProcessSweep)
 	}
 	f.s = &Scheduler{cfg: cfg}
 	return f
@@ -349,17 +354,21 @@ func TestM1SettleLoadFailureRecordsUnswept(t *testing.T) {
 		t.Run(class, func(t *testing.T) {
 			f := newM1Fixture(t, true)
 			launched := 0
-			f.s.cfg.Sweep = func(argv, env []string, stdin []byte) ([]byte, int, error) {
-				launched++
-				return inProcessSweep(argv, env, stdin)
+			built := 0
+			f.s.cfg.SweepFor = func(domain.MissionID, domain.AttemptID, string) (sweep.Launcher, error) {
+				built++
+				return func(argv, env []string, stdin []byte) ([]byte, int, error) {
+					launched++
+					return inProcessSweep(argv, env, stdin)
+				}, nil
 			}
 			breakIt(f)
 			out, redacted := f.settle(verified)
 			if out.Blocked != class || !out.Hold || redacted != "" {
 				t.Fatalf("settle: %+v", out)
 			}
-			if launched != 0 {
-				t.Fatal("a sweep ran without bound values")
+			if launched != 0 || built != 0 {
+				t.Fatalf("a sweep launcher was built (%d) or ran (%d) without bound values", built, launched)
 			}
 			for _, p := range []string{filepath.Join(f.sdir, redactedDirName), filepath.Join(f.sdir, sweepRecordName)} {
 				if _, err := os.Lstat(p); err == nil {
@@ -391,7 +400,7 @@ func TestM1SettleLoadFailureRecordsUnswept(t *testing.T) {
 // is kept for a later re-sweep.
 func TestM1SettleNoLauncherIsIncomplete(t *testing.T) {
 	f := newM1Fixture(t, false)
-	if f.s.cfg.Sweep != nil {
+	if f.s.cfg.SweepFor != nil {
 		t.Fatal("fixture: a launcher is configured")
 	}
 	out, _ := f.settle(verified)
@@ -413,5 +422,79 @@ func TestM1SettleNoLauncherIsIncomplete(t *testing.T) {
 	}
 	if !f.settled() || f.versionKept(t) {
 		t.Fatalf("settled=%v version kept=%v", f.settled(), f.versionKept(t))
+	}
+}
+
+// AC-35(h): a SweepFor error is sweep_incomplete with the no-launcher
+// reason, never clean, and the sweep material is kept.
+func TestM1SettleSweepFactoryErrorIsIncomplete(t *testing.T) {
+	f := newM1Fixture(t, false)
+	f.s.cfg.SweepFor = func(domain.MissionID, domain.AttemptID, string) (sweep.Launcher, error) {
+		return nil, errors.New("no run record")
+	}
+	out, _ := f.settle(verified)
+	if out.Sweep.Complete || len(out.Sweep.Reasons) != 1 || out.Sweep.Reasons[0] != reasonNoLauncher {
+		t.Fatalf("factory error gave sweep %+v; want incomplete, %s", out.Sweep, reasonNoLauncher)
+	}
+	if _, ok := f.kinds(t)[records.SweepIncomplete]; !ok {
+		t.Fatal("no sweep_incomplete record")
+	}
+	if _, err := os.Lstat(filepath.Join(f.bindings, string(f.attempt)+".material")); err != nil {
+		t.Fatal("no sweep material kept")
+	}
+	if !f.settled() || f.versionKept(t) {
+		t.Fatalf("settled=%v version kept=%v", f.settled(), f.versionKept(t))
+	}
+}
+
+// AC-16, AC-35(h): the worker-manager sweep launcher is built and run only
+// after a Verified stop with no survivors and no escapees, for this
+// attempt's run directory, with the fixed argv and environment. Any other
+// stop launches nothing and reads stop_unverified.
+func TestM1SettleSweepOnlyAfterVerifiedStop(t *testing.T) {
+	for name, rc := range map[string]*host.StopReceipt{
+		"no receipt": nil,
+		"unverified": {Verified: false},
+		"survivor":   {Verified: true, Survivors: []host.Process{{PID: 7}}},
+		"escaped":    {Verified: true, Escaped: []host.Process{{PID: 8, Escaped: true}}},
+		"verified":   verified,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newM1Fixture(t, false)
+			type built struct {
+				m      domain.MissionID
+				a      domain.AttemptID
+				runDir string
+			}
+			var got []built
+			var argv, env []string
+			f.s.cfg.SweepFor = func(m domain.MissionID, a domain.AttemptID, runDir string) (sweep.Launcher, error) {
+				got = append(got, built{m, a, runDir})
+				return func(av, ev []string, stdin []byte) ([]byte, int, error) {
+					argv, env = av, ev
+					return inProcessSweep(av, ev, stdin)
+				}, nil
+			}
+			out, _ := f.settle(rc)
+			if name != "verified" {
+				if len(got) != 0 || argv != nil {
+					t.Fatalf("launcher built %d times, ran=%v on a %s stop", len(got), argv != nil, name)
+				}
+				if out.Sweep.Complete || len(out.Sweep.Reasons) != 1 || out.Sweep.Reasons[0] != sweep.ReasonStopUnverified {
+					t.Fatalf("sweep %+v; want incomplete, %s", out.Sweep, sweep.ReasonStopUnverified)
+				}
+				return
+			}
+			if len(got) != 1 || got[0] != (built{f.mission, f.attempt, f.run}) {
+				t.Fatalf("factory calls %+v; want one for %s/%s/%s", got, f.mission, f.attempt, f.run)
+			}
+			wantArgv := append([]string{"/usr/local/bin/fab", "__sweep", "--"}, sweepRoots(f.run)...)
+			if strings.Join(argv, " ") != strings.Join(wantArgv, " ") || strings.Join(env, " ") != strings.Join(sweep.Env, " ") {
+				t.Fatalf("argv %v env %v", argv, env)
+			}
+			if !out.Sweep.Complete {
+				t.Fatalf("verified sweep incomplete: %+v", out.Sweep)
+			}
+		})
 	}
 }
