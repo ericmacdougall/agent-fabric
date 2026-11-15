@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"fabric/internal/crashpoint"
 	"fabric/internal/credential"
 	"fabric/internal/credential/sweep"
 	"fabric/internal/domain"
@@ -127,7 +128,9 @@ func (s *Scheduler) settleM1Mark(mission domain.MissionID, attempt domain.Attemp
 			return
 		}
 		if err := s.settleFail(stepRecords); err == nil {
-			err = records.Append(s.cfg.RecordsDir, records.Record{Mission: mission, Attempt: attempt, Kind: k, Class: class})
+			err = crashpoint.Around("settle.record", func() error {
+				return records.Append(s.cfg.RecordsDir, records.Record{Mission: mission, Attempt: attempt, Kind: k, Class: class})
+			})
 			if err == nil {
 				return
 			}
@@ -158,7 +161,7 @@ func (s *Scheduler) settleM1Mark(mission domain.MissionID, attempt domain.Attemp
 			}
 		}
 		if err := s.settleFail(stepMark); err == nil {
-			err = credential.MarkSettled(c.BindingsDir, string(attempt))
+			err = crashpoint.Around("settle.mark", func() error { return credential.MarkSettled(c.BindingsDir, string(attempt)) })
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "fabd: mark %s settled: %v\n", attempt, err)
 			}
@@ -166,7 +169,7 @@ func (s *Scheduler) settleM1Mark(mission domain.MissionID, attempt domain.Attemp
 			fmt.Fprintf(os.Stderr, "fabd: mark %s settled: %v\n", attempt, err)
 		}
 		if err := s.settleFail(stepGC); err == nil {
-			if _, err := c.Policy.GC(c.BindingsDir); err != nil {
+			if err := crashpoint.Around("settle.gc", func() error { _, err := c.Policy.GC(c.BindingsDir); return err }); err != nil {
 				fmt.Fprintf(os.Stderr, "fabd: credential gc after %s: %v\n", attempt, err)
 			}
 		}
@@ -256,7 +259,7 @@ func (s *Scheduler) settleM1Mark(mission domain.MissionID, attempt domain.Attemp
 	// 3. The sweep record: counts only.
 	if err := s.settleFail(stepSweepRec); err == nil {
 		data, _ := json.Marshal(out.Sweep)
-		err = writeFileAtomic(filepath.Join(sdir, sweepRecordName), data)
+		err = crashpoint.Around("settle.sweep.record", func() error { return writeFileAtomic(filepath.Join(sdir, sweepRecordName), data) })
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "fabd: sweep record for %s not written\n", attempt)
 		}
@@ -272,7 +275,7 @@ func (s *Scheduler) settleM1Mark(mission domain.MissionID, attempt domain.Attemp
 		if input != nil {
 			err := s.settleFail(stepMaterial)
 			if err == nil {
-				err = credential.SaveMaterial(c.BindingsDir, string(attempt), input)
+				err = crashpoint.Around("settle.material", func() error { return credential.SaveMaterial(c.BindingsDir, string(attempt), input) })
 			}
 			if err != nil && !errors.Is(err, os.ErrExist) {
 				fmt.Fprintf(os.Stderr, "fabd: sweep material for %s not saved: %v\n", attempt, err)
@@ -286,7 +289,7 @@ func (s *Scheduler) settleM1Mark(mission domain.MissionID, attempt domain.Attemp
 	if clean {
 		if err := s.settleFail(stepRawRemove); err == nil {
 			for _, f := range []string{"stream.jsonl", "stderr.log"} {
-				if err := os.Remove(filepath.Join(sdir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				if err := crashpoint.Around("settle.raw.remove", func() error { return os.Remove(filepath.Join(sdir, f)) }); err != nil && !errors.Is(err, os.ErrNotExist) {
 					fmt.Fprintf(os.Stderr, "fabd: raw %s of %s not removed: %v\n", f, attempt, err)
 				}
 			}
@@ -318,7 +321,7 @@ func (s *Scheduler) redactOnce(b *credential.Bound, sdir, red string) (redactSum
 		return sum, err
 	}
 	for _, f := range []string{"stream.jsonl", "stderr.log"} {
-		if err := os.Remove(filepath.Join(red, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := crashpoint.Around("settle.redact.clear", func() error { return os.Remove(filepath.Join(red, f)) }); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return sum, err
 		}
 	}
@@ -328,7 +331,7 @@ func (s *Scheduler) redactOnce(b *credential.Bound, sdir, red string) (redactSum
 	}
 	sum = redactSummary{Counts: res.Counts, Blocked: res.Blocked}
 	data, _ := json.Marshal(sum)
-	if err := writeFileAtomic(filepath.Join(sdir, redactedDone), data); err != nil {
+	if err := crashpoint.Around("settle.redact.done", func() error { return writeFileAtomic(filepath.Join(sdir, redactedDone), data) }); err != nil {
 		return sum, err
 	}
 	return sum, nil
@@ -393,14 +396,16 @@ func (s *Scheduler) finishM1(ctx context.Context, mission domain.MissionID, out 
 		// cannot start while that attempt is live.
 		err := s.settleFail(stepOpHold)
 		if err == nil {
-			err = s.st.OperatorHold(ctx, mission)
+			err = crashpoint.Around("hold.operator", func() error { return s.st.OperatorHold(ctx, mission) })
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "fabd: operator hold for %s (%s) not written; %s left to lease expiry: %v\n", mission, class, out.Cmd.Attempt, err)
 			return fmt.Errorf("operator hold after %s: %w", class, err)
 		}
 		if s.cfg.RecordsDir != "" {
-			if err := records.Append(s.cfg.RecordsDir, records.Record{Mission: mission, Attempt: out.Cmd.Attempt, Kind: records.MissionHold, Class: class}); err != nil {
+			if err := crashpoint.Around("hold.record", func() error {
+				return records.Append(s.cfg.RecordsDir, records.Record{Mission: mission, Attempt: out.Cmd.Attempt, Kind: records.MissionHold, Class: class})
+			}); err != nil {
 				fmt.Fprintf(os.Stderr, "fabd: hold record for %s not written\n", mission)
 			}
 		}
@@ -408,7 +413,7 @@ func (s *Scheduler) finishM1(ctx context.Context, mission domain.MissionID, out 
 			return err // the crash seam between the hold and FINISH (tests)
 		}
 	}
-	if err := s.finishRetry(ctx, *out.Cmd); err != nil {
+	if err := crashpoint.Around("finish.m1", func() error { return s.finishRetry(ctx, *out.Cmd) }); err != nil {
 		return err
 	}
 	if !hold {
@@ -417,7 +422,7 @@ func (s *Scheduler) finishM1(ctx context.Context, mission domain.MissionID, out 
 	// W3's undecodable-log hold as well, after FINISH only: it exempts a
 	// leased attempt from lease expiry (review M2). The prior binary honours
 	// it; it is drained on the next tick.
-	if err := s.st.HoldMission(ctx, s.st.Pool(), mission); err != nil {
+	if err := crashpoint.Around("finish.hold.w3", func() error { return s.st.HoldMission(ctx, s.st.Pool(), mission) }); err != nil {
 		return fmt.Errorf("hold after a fail-closed settle: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "fabd: held %s: %s\n", mission, why)
@@ -429,11 +434,11 @@ func (s *Scheduler) finishM1(ctx context.Context, mission domain.MissionID, out 
 // drop its token version at once.
 func (s *Scheduler) settleUnstarted(attempt domain.AttemptID) {
 	c := s.cfg.Credential
-	if err := credential.MarkSettled(c.BindingsDir, string(attempt)); err != nil {
+	if err := crashpoint.Around("settle.unstarted.mark", func() error { return credential.MarkSettled(c.BindingsDir, string(attempt)) }); err != nil {
 		fmt.Fprintf(os.Stderr, "fabd: mark unstarted %s settled: %v\n", attempt, err)
 		return
 	}
-	if _, err := c.Policy.GC(c.BindingsDir); err != nil {
+	if err := crashpoint.Around("settle.unstarted.gc", func() error { _, err := c.Policy.GC(c.BindingsDir); return err }); err != nil {
 		fmt.Fprintf(os.Stderr, "fabd: credential gc after unstarted %s: %v\n", attempt, err)
 	}
 }

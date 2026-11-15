@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"fabric/internal/crashpoint"
 	"fabric/internal/domain"
 	"fabric/internal/envelope"
 	"fabric/internal/reducer"
@@ -873,7 +874,7 @@ func (s *Store) expireLeases(ctx context.Context, host domain.HostID, limit int)
 		// scopes it to the mission; the observed lease makes a renewed lease
 		// a new sweep attempt instead of a replayed refusal.
 		id := domain.CommandID(fmt.Sprintf("expire:f%d:%d", e.Fence, e.leaseMillis))
-		if _, err := s.Execute(ctx, "fabd", id, cmd); err != nil {
+		if err := crashpoint.Around("recovery.expire", func() error { _, err := s.Execute(ctx, "fabd", id, cmd); return err }); err != nil {
 			var ref *Refusal
 			if errors.As(err, &ref) {
 				continue // moved by a concurrent sweep, renewed, or finished meanwhile

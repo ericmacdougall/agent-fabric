@@ -20,6 +20,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"fabric/internal/crashpoint"
 	"fabric/internal/credential"
 	"fabric/internal/credential/sweep"
 	"fabric/internal/dispatch"
@@ -863,8 +864,13 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	}
 	// fabd launches the Claude Code binary only: its path is claude-code,
 	// from its own identity, never read from the mission (goodqa#15087 F1).
-	resp, err := s.st.Execute(ctx, "fabd", domain.CommandID("start:"+string(attempt)), domain.Command{Kind: domain.CmdStartAttempt, Mission: mission, Attempt: attempt, Host: s.cfg.Host, Role: "writer",
-		Path: domain.ProviderClaudeCode})
+	var resp store.Response
+	err = crashpoint.Around("launch.start", func() error {
+		var err error
+		resp, err = s.st.Execute(ctx, "fabd", domain.CommandID("start:"+string(attempt)), domain.Command{Kind: domain.CmdStartAttempt, Mission: mission, Attempt: attempt, Host: s.cfg.Host, Role: "writer",
+			Path: domain.ProviderClaudeCode})
+		return err
+	})
 	if err != nil {
 		var ref *store.Refusal
 		if errors.As(err, &ref) {
@@ -991,7 +997,12 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		if c.Others != nil {
 			others = c.Others()
 		}
-		d, err := c.Policy.PrepareLaunch(c.BindingsDir, c.IDKey, string(mission), string(attempt), others)
+		var d *credential.Durable
+		err := crashpoint.Around("launch.binding", func() error {
+			var err error
+			d, err = c.Policy.PrepareLaunch(c.BindingsDir, c.IDKey, string(mission), string(attempt), others)
+			return err
+		})
 		if err != nil {
 			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
 		}
@@ -1025,7 +1036,10 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	}
 	// S2: ACK_START commits before any runner bytes, so the pre-launch
 	// ownership boundary is durable first. A failed ACK launches nothing.
-	if _, err := s.st.Execute(ctx, "fabd", domain.CommandID("ack:"+string(attempt)), domain.Command{Kind: domain.CmdAckStart, Mission: mission, Attempt: attempt, Fence: fence}); err != nil {
+	if err := crashpoint.Around("launch.ack", func() error {
+		_, err := s.st.Execute(ctx, "fabd", domain.CommandID("ack:"+string(attempt)), domain.Command{Kind: domain.CmdAckStart, Mission: mission, Attempt: attempt, Fence: fence})
+		return err
+	}); err != nil {
 		return err
 	}
 	if s.afterAck != nil {
@@ -1409,8 +1423,11 @@ func (s *Scheduler) reconcileUnknown(ctx context.Context) int {
 		if !known || alive {
 			continue
 		}
-		_, err := s.st.Execute(ctx, "fabd", domain.CommandID("reconcile:gone:"+string(x.id)), domain.Command{Kind: domain.CmdReconcileAttempt,
-			Mission: x.mission, Attempt: x.id, Fence: x.fence, Result: "QUARANTINED", Reason: "runner gone after its lease lapsed; outcome unverified"})
+		err := crashpoint.Around("recovery.quarantine", func() error {
+			_, err := s.st.Execute(ctx, "fabd", domain.CommandID("reconcile:gone:"+string(x.id)), domain.Command{Kind: domain.CmdReconcileAttempt,
+				Mission: x.mission, Attempt: x.id, Fence: x.fence, Result: "QUARANTINED", Reason: "runner gone after its lease lapsed; outcome unverified"})
+			return err
+		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "fabd: reconcile %s: %v\n", x.id, err) // per-attempt: never stops the loop
 			continue
@@ -1482,7 +1499,7 @@ func settleCommand(d dispatch.Dispatcher, mission domain.MissionID, attempt doma
 		return nil, err
 	}
 	if st.Usage != nil {
-		os.WriteFile(filepath.Join(runDir, "usage.json"), st.Usage, 0o644) //nolint:errcheck
+		crashpoint.Around("settle.usage", func() error { return os.WriteFile(filepath.Join(runDir, "usage.json"), st.Usage, 0o644) }) //nolint:errcheck
 	}
 	if st.None {
 		return nil, nil
@@ -1500,8 +1517,10 @@ func (s *Scheduler) abandonPrelaunch(ctx context.Context, mission domain.Mission
 // abandonPrelaunchWait with wait set marks the cause as a full resource:
 // the mission backs off but the attempt does not count toward parking (D2).
 func (s *Scheduler) abandonPrelaunchWait(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, reason string, wait bool) error {
-	return s.finishRetry(ctx, domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence,
-		Outcome: "abandoned", Prelaunch: true, CapacityWait: wait, Reason: reason})
+	return crashpoint.Around("finish.prelaunch", func() error {
+		return s.finishRetry(ctx, domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence,
+			Outcome: "abandoned", Prelaunch: true, CapacityWait: wait, Reason: reason})
+	})
 }
 
 func (s *Scheduler) finish(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, outcome, waitKey, reason string) error {

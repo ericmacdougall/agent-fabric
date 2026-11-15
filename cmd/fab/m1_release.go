@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"fabric/internal/crashpoint"
 	"fabric/internal/credential"
 	"fabric/internal/domain"
 	"fabric/internal/records"
@@ -112,10 +113,17 @@ func releaseOperatorHold(ctx context.Context, st *store.Store, m domain.MissionI
 		return usageError{fmt.Errorf("mission release: %s's held run (%s) was never swept; pass --ack-unswept after removing its run roots (docs/m1-runbook.md); nothing released", m, orUnknown(class))}
 	}
 	var gen int64
-	released, err := st.ReleaseOperatorHold(ctx, m, func(g int64) error {
-		gen = g
-		return records.Append(recordsDir, records.Record{Mission: m, Attempt: attempt, Kind: records.ReleaseAuthorized,
-			Class: releaseClass, Generation: g, Reason: reason, AckUnswept: ackUnswept})
+	var released bool
+	err = crashpoint.Around("release.commit", func() error {
+		var err error
+		released, err = st.ReleaseOperatorHold(ctx, m, func(g int64) error {
+			gen = g
+			return crashpoint.Around("release.record", func() error {
+				return records.Append(recordsDir, records.Record{Mission: m, Attempt: attempt, Kind: records.ReleaseAuthorized,
+					Class: releaseClass, Generation: g, Reason: reason, AckUnswept: ackUnswept})
+			})
+		})
+		return err
 	})
 	if err != nil {
 		return fmt.Errorf("mission release: hold kept: %w", err)

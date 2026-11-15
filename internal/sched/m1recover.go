@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"fabric/internal/crashpoint"
 	"fabric/internal/credential"
 	"fabric/internal/domain"
 	"fabric/internal/host"
@@ -121,7 +122,9 @@ func (s *Scheduler) recoverOne(ctx context.Context, mission domain.MissionID, at
 	fmt.Fprintf(os.Stderr, "fabd: quarantined %s not verified gone (%s); kept quarantined and unswept\n", attempt, why)
 	c := s.cfg.Credential
 	if s.cfg.RecordsDir != "" {
-		if err := records.Append(s.cfg.RecordsDir, records.Record{Mission: mission, Attempt: attempt, Kind: records.SweepIncomplete, Class: classRestartUnverified}); err != nil {
+		if err := crashpoint.Around("recovery.unverified.record", func() error {
+			return records.Append(s.cfg.RecordsDir, records.Record{Mission: mission, Attempt: attempt, Kind: records.SweepIncomplete, Class: classRestartUnverified})
+		}); err != nil {
 			fmt.Fprintf(os.Stderr, "fabd: m1 record sweep_incomplete for %s not written\n", attempt)
 		}
 	}
@@ -133,7 +136,7 @@ func (s *Scheduler) recoverOne(ctx context.Context, mission domain.MissionID, at
 		fmt.Fprintf(os.Stderr, "fabd: bound values of %s not loadable; no sweep material saved\n", attempt)
 	} else if input, err := credential.BuildSweepInput(b); err != nil {
 		fmt.Fprintf(os.Stderr, "fabd: sweep input of %s not built\n", attempt)
-	} else if err := credential.SaveMaterial(c.BindingsDir, string(attempt), input); err != nil && !errors.Is(err, os.ErrExist) {
+	} else if err := crashpoint.Around("recovery.material", func() error { return credential.SaveMaterial(c.BindingsDir, string(attempt), input) }); err != nil && !errors.Is(err, os.ErrExist) {
 		fmt.Fprintf(os.Stderr, "fabd: sweep material for %s not saved: %v\n", attempt, err)
 	}
 	return s.holdRecovered(ctx, mission, attempt, classRestartUnverified) == nil
@@ -167,12 +170,14 @@ func (s *Scheduler) holdRecovered(ctx context.Context, mission domain.MissionID,
 	if err := s.settleFail(stepOpHold); err != nil {
 		return err
 	}
-	if err := s.st.OperatorHold(ctx, mission); err != nil {
+	if err := crashpoint.Around("recovery.hold", func() error { return s.st.OperatorHold(ctx, mission) }); err != nil {
 		fmt.Fprintf(os.Stderr, "fabd: operator hold for %s (%s) not written: %v\n", mission, class, err)
 		return err
 	}
 	if s.cfg.RecordsDir != "" {
-		if err := records.Append(s.cfg.RecordsDir, records.Record{Mission: mission, Attempt: attempt, Kind: records.MissionHold, Class: class}); err != nil {
+		if err := crashpoint.Around("recovery.hold.record", func() error {
+			return records.Append(s.cfg.RecordsDir, records.Record{Mission: mission, Attempt: attempt, Kind: records.MissionHold, Class: class})
+		}); err != nil {
 			fmt.Fprintf(os.Stderr, "fabd: hold record for %s not written\n", mission)
 		}
 	}
