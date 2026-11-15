@@ -450,3 +450,22 @@ func (p Policy) GC(bindingsDir string) (GCReport, error) {
 	defer lk.Unlock()
 	return p.GCLocked(lk, bindingsDir)
 }
+
+// Unsettled reports whether attempt has a binding record and no settled
+// marker (spec v16 prior_attempt_unsettled). An attempt that never got a
+// binding (refused or abandoned before it, or a pre-M1 attempt) is not
+// unsettled: no token version was bound to it. Lstat, so a planted link
+// counts as present and fails closed.
+func Unsettled(bindingsDir, attempt string) (bool, error) {
+	if _, err := os.Lstat(filepath.Join(bindingsDir, attempt+".json")); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return true, err
+	}
+	if _, err := os.Lstat(filepath.Join(bindingsDir, attempt+".settled")); errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	} else if err != nil {
+		return true, err
+	}
+	return false, nil
+}

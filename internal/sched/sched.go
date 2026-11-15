@@ -817,6 +817,16 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		fmt.Fprintf(os.Stderr, "fabd: %s is operator-held; nothing started (fab mission release)\n", mission)
 		return nil
 	}
+	// Spec v16: on the token path no attempt starts while an earlier
+	// attempt of the mission holds a binding without its AC-18 settled
+	// marker (prior_attempt_unsettled): its token version, raw streams and
+	// run roots are still owed a settle. No flag bypasses this
+	// (docs/m1-runbook.md).
+	if s.cfg.Credential != nil {
+		if err := s.checkPriorSettled(ctx, mission); err != nil {
+			return err
+		}
+	}
 	// goodqa#15966 AC-22, AC-25: the M1 config is checked before START; a
 	// refusal parks the mission with a log line naming the field, writes no
 	// event and starts nothing.
@@ -1642,6 +1652,37 @@ func writeExclusive(path string, data []byte, mode os.FileMode) error {
 // Querier is the read side DispatchCandidates needs (a pool or a transaction).
 type Querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// classPriorUnsettled is the pre-START refusal class of a mission whose
+// earlier attempt is bound and not yet settled (spec v16).
+const classPriorUnsettled = "prior_attempt_unsettled"
+
+func (s *Scheduler) checkPriorSettled(ctx context.Context, mission domain.MissionID) error {
+	rows, err := s.st.Pool().Query(ctx, `SELECT id FROM attempts WHERE mission_id = $1`, string(mission))
+	if err != nil {
+		return fmt.Errorf("earlier attempts of %s not readable, nothing started: %w", mission, err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		u, err := credential.Unsettled(s.cfg.Credential.BindingsDir, id)
+		if err != nil || u {
+			return fmt.Errorf("%s refused before START, nothing started (%s): attempt %s is bound and not settled", mission, classPriorUnsettled, id)
+		}
+	}
+	return nil
 }
 
 // classIssueMismatch is the pre-START refusal class of an issue binding

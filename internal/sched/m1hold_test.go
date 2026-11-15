@@ -95,7 +95,7 @@ func TestM1FailClosedHoldsMission(t *testing.T) {
 		}
 	}
 	noNewAttempt("after restart")
-	if released, err := st.ReleaseOperatorHold(ctx, m); err != nil || !released {
+	if released, err := st.ReleaseOperatorHold(ctx, m, func(int64) error { return nil }); err != nil || !released {
 		t.Fatalf("release: %v %v", released, err)
 	}
 	s2.cfg.Credential = nil // the released mission dispatches on the plain path here
@@ -127,7 +127,7 @@ func TestDispatchCandidatesSkipOperatorHold(t *testing.T) {
 	if got, _ := DispatchCandidates(ctx, st.Pool(), nil, "m_oph1"); len(got) != 0 {
 		t.Fatalf("--only-mission selected a held mission: %v", got)
 	}
-	if _, err := st.ReleaseOperatorHold(ctx, "m_oph1"); err != nil {
+	if _, err := st.ReleaseOperatorHold(ctx, "m_oph1", func(int64) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := DispatchCandidates(ctx, st.Pool(), nil, ""); err != nil || fmt.Sprint(got) != "[m_oph0 m_oph1]" {

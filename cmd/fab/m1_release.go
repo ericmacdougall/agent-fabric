@@ -15,17 +15,9 @@ import (
 	"fabric/internal/store"
 )
 
-// Release record classes: the pending record is written before the hold
-// row is deleted and the final one after, so an audited release never
-// depends on a write that happens after the hold is gone (red-team M-3).
-const (
-	releasePending = "operator_release_pending"
-	releaseDone    = "operator_release"
-	// releaseAckUnswept is the final class of a release whose run was never
-	// swept (its bound values could not be loaded): the operator passed
-	// --ack-unswept (spec v15, NEG-35).
-	releaseAckUnswept = "operator_release_ack_unswept"
-)
+// releaseClass is the class of a release_authorized record; the reason and
+// the ack are its own fields (spec v16).
+const releaseClass = "operator_release"
 
 // unsweptClasses are the hold classes whose settle loaded no bound values,
 // so no sweep ran over the worker's files.
@@ -56,8 +48,11 @@ func missionReleaseMain(args []string) error {
 	if r == "" {
 		return usageError{errors.New("mission release: --reason is required")}
 	}
-	if strings.ContainsAny(r, "\r\n") || len(r) > 200 {
-		return usageError{errors.New("mission release: --reason must be one line of at most 200 bytes")}
+	if len(r) > 200 || strings.IndexFunc(r, func(c rune) bool { return c < 0x20 || c > 0x7e }) >= 0 {
+		return usageError{errors.New("mission release: --reason must be one line of printable ASCII, at most 200 bytes")}
+	}
+	if hit, class := credential.ScanUnbound(r); hit {
+		return usageError{fmt.Errorf("mission release: --reason looks like it holds a credential (%s); refused", class)}
 	}
 	dir := releaseRecordsDir(*recordsDir, *runArea, *workRoot)
 	if dir == "" {
@@ -80,10 +75,14 @@ func releaseRecordsDir(recordsDir, runArea, workRoot string) string {
 	return ""
 }
 
-// releaseOperatorHold checks the hold and the records directory, writes the
-// pending release record, deletes the hold row, then writes the final
-// record. A failure before the delete leaves the hold in place; a failure
-// of the final record is loud and non-zero, and the pending record remains.
+// releaseOperatorHold checks the records directory and the hold's class,
+// then releases in one store transaction (spec v16 AC-34): the row is
+// locked FOR UPDATE and its generation G read, the release_authorized
+// record naming the mission, G, the reason and the ack is written durably
+// (lock, temporary file, fsync, rename, directory fsync), and only then is
+// the row deleted where the generation is still G. Any record failure
+// rolls back and keeps the hold. Lock order (v16 p2): the row lock is held
+// before the records file lock is taken, never the other way round.
 func releaseOperatorHold(ctx context.Context, st *store.Store, m domain.MissionID, reason, recordsDir string, ackUnswept bool) error {
 	if fi, err := os.Stat(recordsDir); err != nil || !fi.IsDir() {
 		return fmt.Errorf("mission release: records directory %s is missing; nothing released", recordsDir)
@@ -110,29 +109,21 @@ func releaseOperatorHold(ctx context.Context, st *store.Store, m domain.MissionI
 		}
 	}
 	if unswept && !ackUnswept {
-		return usageError{fmt.Errorf("mission release: %s's held run (%s) was never swept; pass --ack-unswept after checking its files; nothing released", m, orUnknown(class))}
+		return usageError{fmt.Errorf("mission release: %s's held run (%s) was never swept; pass --ack-unswept after removing its run roots (docs/m1-runbook.md); nothing released", m, orUnknown(class))}
 	}
-	final := releaseDone
-	if unswept {
-		final = releaseAckUnswept
-	}
-	rec := records.Record{Mission: m, Attempt: attempt, Kind: records.MissionRelease, Class: releasePending}
-	if err := records.Append(recordsDir, rec); err != nil {
-		return fmt.Errorf("mission release: release record not written; nothing released: %w", err)
-	}
-	released, err := st.ReleaseOperatorHold(ctx, m)
+	var gen int64
+	released, err := st.ReleaseOperatorHold(ctx, m, func(g int64) error {
+		gen = g
+		return records.Append(recordsDir, records.Record{Mission: m, Attempt: attempt, Kind: records.ReleaseAuthorized,
+			Class: releaseClass, Generation: g, Reason: reason, AckUnswept: ackUnswept})
+	})
 	if err != nil {
-		return fmt.Errorf("mission release: hold not released (a pending release record remains): %w", err)
+		return fmt.Errorf("mission release: hold kept: %w", err)
 	}
 	if !released {
-		return fmt.Errorf("mission release: %s's hold vanished during release (a pending release record remains)", m)
+		return fmt.Errorf("mission release: %s's hold was released by someone else", m)
 	}
-	fmt.Fprintf(os.Stderr, "fab: released the operator hold on %s (attempt %s): %s\n", m, attempt, reason)
-	rec.Class = final
-	if err := records.Append(recordsDir, rec); err != nil {
-		fmt.Fprintf(os.Stderr, "fab: ERROR: the hold on %s IS RELEASED but its final release record was not written; only the pending record exists: %v\n", m, err)
-		return fmt.Errorf("mission release: final release record not written: %w", err)
-	}
+	fmt.Fprintf(os.Stderr, "fab: released the operator hold on %s (attempt %s, generation %d): %s\n", m, attempt, gen, reason)
 	return nil
 }
 

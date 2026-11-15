@@ -4,8 +4,9 @@
 // mode 0600, one JSON array per attempt. A record names the mission, the
 // attempt, its kind, a class code and the time; late_write also names the
 // remote comment id. A record never holds body bytes or credential bytes:
-// every field is checked against a closed grammar, so free text cannot be
-// written through it. No column, event kind or migration is involved (I-4).
+// every field is checked against a closed grammar, except the operator's
+// release reason, which is one bounded line of printable ASCII refused on
+// any credential-scan hit. No column, event kind or migration is involved (I-4).
 package records
 
 import (
@@ -20,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"fabric/internal/credential"
 	"fabric/internal/domain"
 )
 
@@ -34,11 +36,16 @@ const (
 	LateWrite          Kind = "late_write"
 	// MissionHold and MissionRelease record an operator hold (goodqa#15966
 	// owner ruling R1) and its release; Class is the reason class.
-	MissionHold    Kind = "mission_hold"
-	MissionRelease Kind = "mission_release"
+	MissionHold Kind = "mission_hold"
+	// ReleaseAuthorized is the operator's release of one hold generation
+	// (spec v16 AC-34): written durably while the hold row is locked and
+	// before the row is deleted, so a release is never unrecorded. It
+	// carries Generation, Reason and AckUnswept. On its own it releases
+	// nothing.
+	ReleaseAuthorized Kind = "release_authorized"
 )
 
-var kinds = map[Kind]bool{DeliveryBlocked: true, DeliveredEarlier: true, CredentialExposure: true, SweepIncomplete: true, LateWrite: true, MissionHold: true, MissionRelease: true}
+var kinds = map[Kind]bool{DeliveryBlocked: true, DeliveredEarlier: true, CredentialExposure: true, SweepIncomplete: true, LateWrite: true, MissionHold: true, ReleaseAuthorized: true}
 
 // Record is one AC-29 record.
 type Record struct {
@@ -53,6 +60,12 @@ type Record struct {
 	CommentID string `json:"comment_id,omitempty"`
 	// Effect is the effect id the record is about, when there is one.
 	Effect string `json:"effect,omitempty"`
+	// Generation, Reason and AckUnswept belong to release_authorized only.
+	// Reason is the operator's text: one line of printable ASCII, at most
+	// 200 bytes, refused when the unbound credential scan hits.
+	Generation int64  `json:"generation,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	AckUnswept bool   `json:"ack_unswept,omitempty"`
 }
 
 var (
@@ -76,8 +89,18 @@ func (r Record) Validate() error {
 	if r.Class != "" && !classRE.MatchString(r.Class) {
 		return fmt.Errorf("%w: class must match %s", ErrRecord, classRE)
 	}
-	if (r.Kind == DeliveryBlocked || r.Kind == MissionHold || r.Kind == MissionRelease) && r.Class == "" {
+	if (r.Kind == DeliveryBlocked || r.Kind == MissionHold || r.Kind == ReleaseAuthorized) && r.Class == "" {
 		return fmt.Errorf("%w: %s needs a class", ErrRecord, r.Kind)
+	}
+	if r.Kind == ReleaseAuthorized {
+		if r.Generation <= 0 {
+			return fmt.Errorf("%w: release_authorized needs the hold generation", ErrRecord)
+		}
+		if err := checkReason(r.Reason); err != nil {
+			return err
+		}
+	} else if r.Generation != 0 || r.Reason != "" || r.AckUnswept {
+		return fmt.Errorf("%w: generation, reason and ack belong to release_authorized only", ErrRecord)
 	}
 	if r.CommentID != "" && !remoteRE.MatchString(r.CommentID) {
 		return fmt.Errorf("%w: comment id must match %s", ErrRecord, remoteRE)
@@ -87,6 +110,23 @@ func (r Record) Validate() error {
 	}
 	if r.Effect != "" && !effectRE.MatchString(r.Effect) {
 		return fmt.Errorf("%w: effect id", ErrRecord)
+	}
+	return nil
+}
+
+// checkReason admits an operator reason: one line of printable ASCII, at
+// most 200 bytes, with no credential shape in it.
+func checkReason(reason string) error {
+	if reason == "" || len(reason) > 200 || strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: reason must be 1-200 bytes", ErrRecord)
+	}
+	for i := 0; i < len(reason); i++ {
+		if c := reason[i]; c < 0x20 || c > 0x7e {
+			return fmt.Errorf("%w: reason must be one line of printable ASCII", ErrRecord)
+		}
+	}
+	if hit, class := credential.ScanUnbound(reason); hit {
+		return fmt.Errorf("%w: reason refused by the credential scan (%s)", ErrRecord, class)
 	}
 	return nil
 }
@@ -124,7 +164,7 @@ func Append(dir string, r Record) error {
 		return err
 	}
 	for _, x := range cur {
-		if x.Kind == r.Kind && x.Class == r.Class && x.Effect == r.Effect && x.CommentID == r.CommentID && x.Mission == r.Mission {
+		if x.Kind == r.Kind && x.Class == r.Class && x.Effect == r.Effect && x.CommentID == r.CommentID && x.Mission == r.Mission && x.Generation == r.Generation {
 			return nil
 		}
 	}
@@ -218,6 +258,26 @@ func lockDir(dir string) (func(), error) {
 	}, nil
 }
 
+// Fault points of writeAtomic, for tests.
+const (
+	FaultWrite  = "write"
+	FaultSync   = "fsync"
+	FaultRename = "rename"
+)
+
+var testFault func(point string) error
+
+// SetTestFault installs a failure at a writeAtomic fault point; nil removes
+// it. Tests only: production never sets it.
+func SetTestFault(f func(point string) error) { testFault = f }
+
+func fault(point string) error {
+	if testFault != nil {
+		return testFault(point)
+	}
+	return nil
+}
+
 func writeAtomic(dir, path string, data []byte) error {
 	tmp := path + ".tmp"
 	os.Remove(tmp) //nolint:errcheck // a leftover from a crash; we hold the lock
@@ -225,12 +285,20 @@ func writeAtomic(dir, path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(data); err != nil {
+	_, err = f.Write(data)
+	if err == nil {
+		err = fault(FaultWrite)
+	}
+	if err != nil {
 		f.Close()
 		os.Remove(tmp) //nolint:errcheck
 		return err
 	}
-	if err := f.Sync(); err != nil {
+	err = f.Sync()
+	if err == nil {
+		err = fault(FaultSync)
+	}
+	if err != nil {
 		f.Close()
 		os.Remove(tmp) //nolint:errcheck
 		return err
@@ -239,7 +307,11 @@ func writeAtomic(dir, path string, data []byte) error {
 		os.Remove(tmp) //nolint:errcheck
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	err = fault(FaultRename)
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
 		os.Remove(tmp) //nolint:errcheck
 		return err
 	}
