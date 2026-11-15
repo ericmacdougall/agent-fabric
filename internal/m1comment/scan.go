@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"fabric/internal/credential"
 )
 
 // BoundCredentials is the credential set bound to the attempt (AC-18), as W3
@@ -97,7 +99,26 @@ func Scan(modelText string, creds BoundCredentials, allow Allow) (blocked bool, 
 }
 
 func scanOne(modelText string, creds BoundCredentials, allow Allow) (blocked bool, class string) {
-	if hit, c := creds.ScanTextExcluding(modelText, allow.list()); hit {
+	// The entropy rule below first blanks every allowed string, longest
+	// first, so an allowed id glued to model text (for example by Neutralise
+	// removing brackets) is not counted, while the model bytes around it
+	// still are.
+	ent := modelText
+	al := allow.list()
+	sort.Slice(al, func(i, j int) bool { return len(al[i]) > len(al[j]) })
+	for _, s := range al {
+		ent = strings.ReplaceAll(ent, s, " ")
+	}
+	hit, c := creds.ScanTextExcluding(modelText, allow.list())
+	if hit && c == credential.ClassEntropy {
+		// The matcher's own entropy rule exempts only runs that equal an
+		// allowed string exactly, so a glued allowed id trips it. Every
+		// other rule already ran clean on the full text (the matcher checks
+		// forms, literals and URLs first); rescan the blanked text so the
+		// entropy and fragment rules judge only model-chosen bytes.
+		hit, c = creds.ScanTextExcluding(ent, allow.list())
+	}
+	if hit {
 		if c == "" || !classRE.MatchString(c) {
 			c = ClassCredential
 		}
@@ -108,15 +129,6 @@ func scanOne(modelText string, creds BoundCredentials, allow Allow) (blocked boo
 	}
 	if pgRE.MatchString(modelText) {
 		return true, ClassPostgresURL
-	}
-	// The entropy rule first blanks every allowed string, longest first, so
-	// an allowed id glued to model text (for example by Neutralise removing
-	// brackets) is not counted, while the model bytes around it still are.
-	ent := modelText
-	al := allow.list()
-	sort.Slice(al, func(i, j int) bool { return len(al[i]) > len(al[j]) })
-	for _, s := range al {
-		ent = strings.ReplaceAll(ent, s, " ")
 	}
 	for _, run := range entropyRE.FindAllString(ent, -1) {
 		if allow.exempt(run) {
