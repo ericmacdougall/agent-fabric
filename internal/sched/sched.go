@@ -145,6 +145,11 @@ type Config struct {
 	// manager for that attempt. nil, or an error, makes the sweep
 	// incomplete (sweep_incomplete, never clean).
 	SweepFor func(mission domain.MissionID, attempt domain.AttemptID, runDir string) (sweep.Launcher, error)
+	// VerifyGone (goodqa#15966 AC-35(i), E9) stands in for W1's verified
+	// Stop after a restart: it verifies that a quarantined attempt's runner
+	// is gone (host.LinuxManager.VerifyGone). nil: never verified, so a
+	// quarantined token-path attempt stays unswept and its mission held.
+	VerifyGone func(run domain.AttemptID, attemptStart time.Time) (host.StopReceipt, error)
 	// Mission is the M1 mission path (goodqa#15966 W5), set only by an M1
 	// build; nil keeps today's behaviour and never reads mission.json.
 	Mission *missioncfg.Preparer
@@ -204,6 +209,9 @@ type Scheduler struct {
 	st  *store.Store
 	cfg Config
 	ln  Launcher
+	// recovered: quarantined token-path attempts restart recovery has
+	// finished with in this process (goodqa#15966 AC-35(i)).
+	recovered map[domain.AttemptID]bool
 	// afterRead is a test barrier between reading the mission and starting
 	// its attempt (owner_test.go); nil in production.
 	afterRead func()
@@ -439,6 +447,7 @@ func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 		}
 		s.Expired += len(exp)
 		s.reconcileUnknown(ctx)
+		s.recoverQuarantined(ctx) // token path only (AC-35(i))
 	}
 	if s.gated() {
 		if _, err := s.st.ExpireEndedReservations(ctx, 50); err != nil {

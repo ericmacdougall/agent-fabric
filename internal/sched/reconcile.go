@@ -99,6 +99,13 @@ func ReconcileHost(ctx context.Context, st *store.Store, host, local domain.Host
 	}
 	s := &Scheduler{st: st, cfg: Config{Host: host}, prober: p, lockProber: lp}
 	r.Quarantined = s.reconcileUnknown(ctx)
+	if r.Quarantined > 0 {
+		// goodqa#15966 AC-35(i): a bare pass holds no credential state. A
+		// token-path attempt it quarantined stays quarantined and unsettled
+		// (no settle, no FINISH, no START) until fabd verifies its runner
+		// gone and settles it.
+		fmt.Fprintf(os.Stderr, "fab reconcile: %d attempt(s) quarantined; a token-path attempt is settled only by fabd after a verified stop\n", r.Quarantined)
+	}
 	return r, err
 }
 

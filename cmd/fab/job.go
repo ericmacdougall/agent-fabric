@@ -357,6 +357,12 @@ func daemonMain(args []string) error {
 		} else if cfg.Credential != nil {
 			fmt.Fprintln(os.Stderr, "fabd: no worker manager for the M1 sweep; every settle records sweep_incomplete")
 		}
+		// AC-35(i), E9: restart recovery verifies a quarantined runner gone.
+		if v, ok := ln.(interface {
+			VerifyGone(domain.AttemptID, time.Time) (host.StopReceipt, error)
+		}); ok && cfg.Credential != nil {
+			cfg.VerifyGone = v.VerifyGone
+		}
 		s := sched.New(st, cfg, ln)
 		if loop != nil {
 			loop.Bump = s.Bump

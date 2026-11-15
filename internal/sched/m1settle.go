@@ -111,7 +111,16 @@ func sweepRoots(runDir string) []string {
 // settleM1 runs the sequence. rc is the verified stop receipt of the exited
 // worker, or nil when none was taken (the sweep is then incomplete).
 func (s *Scheduler) settleM1(mission domain.MissionID, attempt domain.AttemptID, fence int64, sdir, runDir string, code int,
-	rc *host.StopReceipt, effect func(cmd *domain.Command, redacted string, b *credential.Bound)) (out m1Settled) {
+	rc *host.StopReceipt, effect func(cmd *domain.Command, redacted string, b *credential.Bound)) m1Settled {
+	return s.settleM1Mark(mission, attempt, fence, sdir, runDir, code, rc, effect, nil)
+}
+
+// settleM1Mark is settleM1 with beforeMark, which runs after the sequence
+// and before MarkSettled. An error from it leaves the attempt unsettled (no
+// MarkSettled, no GC): restart recovery commits a hold the settle owes
+// before the marker, so a failed hold write is retried (owner ruling on E).
+func (s *Scheduler) settleM1Mark(mission domain.MissionID, attempt domain.AttemptID, fence int64, sdir, runDir string, code int,
+	rc *host.StopReceipt, effect func(cmd *domain.Command, redacted string, b *credential.Bound), beforeMark func(m1Settled) error) (out m1Settled) {
 	c := s.cfg.Credential
 	rec := func(k records.Kind, class string) {
 		if s.cfg.RecordsDir == "" {
@@ -141,6 +150,12 @@ func (s *Scheduler) settleM1(mission domain.MissionID, attempt domain.AttemptID,
 			fmt.Fprintf(os.Stderr, "fabd: settle of %s panicked; failing closed\n", attempt)
 			out = m1Settled{Blocked: classSettlePanic}
 			rec(records.DeliveryBlocked, classSettlePanic)
+		}
+		if beforeMark != nil {
+			if err := beforeMark(out); err != nil {
+				fmt.Fprintf(os.Stderr, "fabd: %s left unsettled for a retry: %v\n", attempt, err)
+				return
+			}
 		}
 		if err := s.settleFail(stepMark); err == nil {
 			err = credential.MarkSettled(c.BindingsDir, string(attempt))
