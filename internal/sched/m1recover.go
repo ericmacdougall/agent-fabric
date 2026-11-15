@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"fabric/internal/crashpoint"
@@ -30,55 +31,77 @@ import (
 // quarantined attempt whose runner could not be verified gone.
 const classRestartUnverified = "restart_unverified"
 
-// recoverQuarantined runs on the token path after reconcileUnknown. Each
-// quarantined attempt of this host that holds a binding without its settled
-// marker is handled at most once per fabd process.
+// recoverQuarantined runs on the token path after reconcileUnknown. It
+// visits every binding of this host without its settled marker, whatever
+// its attempt's state (crash-point finding F2), except an attempt that is
+// still live (LEASED, PREPARING, RUNNING, or UNKNOWN until reconcile
+// quarantines it):
+//   - never launched (no ATTEMPT_ACKED, or finished abandoned in
+//     prelaunch): nothing ran, so the unstarted settle runs at once;
+//   - otherwise restart recovery as for a quarantined attempt: a verified
+//     restart stop settles it, anything else keeps it unsettled and holds.
+//
+// Each attempt is handled at most once per fabd process.
 func (s *Scheduler) recoverQuarantined(ctx context.Context) int {
 	c := s.cfg.Credential
 	if c == nil {
 		return 0
 	}
-	rows, err := s.st.Pool().Query(ctx, `SELECT id, mission_id, fence, started_at FROM attempts
-		WHERE state = 'QUARANTINED' AND host = $1 ORDER BY started_at LIMIT 20`, string(s.cfg.Host))
+	ents, err := os.ReadDir(c.BindingsDir)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "fabd: quarantine recovery:", err)
+		fmt.Fprintln(os.Stderr, "fabd: binding recovery: bindings directory unreadable:", err)
 		return 0
 	}
-	type q struct {
-		id      domain.AttemptID
-		mission domain.MissionID
-		fence   int64
-		started time.Time
-	}
-	var page []q
-	for rows.Next() {
-		var x q
-		if err := rows.Scan(&x.id, &x.mission, &x.fence, &x.started); err != nil {
-			rows.Close()
-			return 0
-		}
-		page = append(page, x)
-	}
-	rows.Close()
 	n := 0
-	for _, x := range page {
+	for _, e := range ents {
+		name, ok := strings.CutSuffix(e.Name(), ".json")
+		if !ok || e.Name() == "retained.json" {
+			continue
+		}
+		a, err := domain.ParseAttemptID(name)
+		if err != nil {
+			continue
+		}
 		s.mu.Lock()
-		done := s.recovered[x.id]
+		done := s.recovered[a]
 		s.mu.Unlock()
 		if done {
 			continue
 		}
-		if u, err := credential.Unsettled(c.BindingsDir, string(x.id)); err == nil && !u {
-			continue // no binding (not a token launch), or already settled
+		if u, err := credential.Unsettled(c.BindingsDir, string(a)); err == nil && !u {
+			continue
 		}
-		if !s.recoverOne(ctx, x.mission, x.id, x.fence, x.started) {
+		var mission domain.MissionID
+		var fence int64
+		var started time.Time
+		var state string
+		var launched bool
+		err = s.st.Pool().QueryRow(ctx, `SELECT a.mission_id, a.fence, a.started_at, a.state,
+			EXISTS (SELECT 1 FROM events e WHERE e.mission_id = a.mission_id AND e.kind = 'ATTEMPT_ACKED' AND e.payload->>'attempt' = a.id)
+			AND NOT EXISTS (SELECT 1 FROM events e WHERE e.mission_id = a.mission_id AND e.kind = 'ATTEMPT_FINISHED'
+				AND e.payload->>'attempt' = a.id AND COALESCE((e.payload->>'prelaunch')::boolean, false))
+			FROM attempts a WHERE a.id = $1 AND a.host = $2`, string(a), string(s.cfg.Host)).Scan(&mission, &fence, &started, &state, &launched)
+		if err != nil {
+			continue // another host's attempt, or no attempt row: not ours to settle
+		}
+		switch domain.AttemptState(state) {
+		case domain.AttemptLeased, domain.AttemptPreparing, domain.AttemptRunning, domain.AttemptUnknown:
+			continue // live, or awaiting reconcile
+		}
+		if !launched {
+			s.settleUnstarted(a)
+			if u, err := credential.Unsettled(c.BindingsDir, string(a)); err != nil || u {
+				continue // retried on the next tick
+			}
+			fmt.Fprintf(os.Stderr, "fabd: settled %s, which never launched (%s)\n", a, state)
+		} else if !s.recoverOne(ctx, mission, a, fence, started) {
 			continue // the hold was not written: retried on the next tick
 		}
 		s.mu.Lock()
 		if s.recovered == nil {
 			s.recovered = map[domain.AttemptID]bool{}
 		}
-		s.recovered[x.id] = true
+		s.recovered[a] = true
 		s.mu.Unlock()
 		n++
 	}

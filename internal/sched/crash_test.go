@@ -416,10 +416,6 @@ var crashKnown = map[string]string{
 	"material-unavailable/settle.record:after:2":     "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
 	"material-unavailable/settle.record:before:1":    "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
 	"material-unavailable/settle.record:before:2":    "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
-	"refused-after-binding/finish.prelaunch:after:1": "F2: an unsettled binding no scan visits (fix: unstarted settle first, generalised scan)",
-	"refused-after-binding/launch.start:before:1":    "F2: an unsettled binding no scan visits (fix: unstarted settle first, generalised scan)",
-	"unstarted/finish.prelaunch:after:1":             "F2: an unsettled binding no scan visits (fix: unstarted settle first, generalised scan)",
-	"unstarted/settle.unstarted.mark:before:1":       "F2: an unsettled binding no scan visits (fix: unstarted settle first, generalised scan)",
 }
 
 func (w *crashWorld) attempts(t *testing.T) []domain.AttemptID {

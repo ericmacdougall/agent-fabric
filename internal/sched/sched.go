@@ -213,6 +213,10 @@ type Scheduler struct {
 	// recovered: quarantined token-path attempts restart recovery has
 	// finished with in this process (goodqa#15966 AC-35(i)).
 	recovered map[domain.AttemptID]bool
+	// unstarted are this process's bindings whose worker has not been
+	// started: abandonPrelaunch settles them before its FINISH.
+	unstarted   map[domain.AttemptID]bool
+	unstartedMu sync.Mutex
 	// afterRead is a test barrier between reading the mission and starting
 	// its attempt (owner_test.go); nil in production.
 	afterRead func()
@@ -1006,6 +1010,20 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		if err != nil {
 			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
 		}
+		// goodqa#15966 AC-18, crash-point finding F2: a binding whose worker
+		// never starts is settled at once (nothing ran, so nothing to redact
+		// or sweep), so GC never keeps its token version. It is owed from
+		// here on, every refusal below included, and abandonPrelaunch
+		// settles it before its FINISH, so a crash between the two leaves a
+		// settled binding on a leased attempt, never a finished attempt with
+		// an unsettled binding. Once start is called the outcome is the
+		// settle sequence's (or recovery's) to decide.
+		s.owedUnstarted(attempt, true)
+		defer func() {
+			if !startCalled && s.owedUnstarted(attempt, false) {
+				s.settleUnstarted(attempt)
+			}
+		}()
 		home := filepath.Join(runDir, "home")
 		if err := os.MkdirAll(home, 0o775); err != nil {
 			return s.abandonPrelaunch(ctx, mission, attempt, fence, "run home not prepared: "+err.Error())
@@ -1015,15 +1033,6 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 			return s.abandonPrelaunch(ctx, mission, attempt, fence, "launch refused: "+err.Error())
 		}
 		bound = d
-		// goodqa#15966 AC-18: a binding whose worker never starts is
-		// settled at once (nothing ran, so nothing to redact or sweep), so
-		// GC never keeps its token version. Once start is called the
-		// outcome is the settle sequence's (or recovery's) to decide.
-		defer func() {
-			if !startCalled {
-				s.settleUnstarted(attempt)
-			}
-		}()
 	}
 	pin := ""
 	if s.cfg.Credential != nil {
@@ -1119,6 +1128,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	var h host.Handle
 	start := func() error {
 		startCalled = true
+		s.owedUnstarted(attempt, false)
 		s.startAttempts++ // AC-10: every physical start call counts, ambiguous ones too
 		var serr error
 		if stdin != nil {
@@ -1523,6 +1533,9 @@ func (s *Scheduler) abandonPrelaunch(ctx context.Context, mission domain.Mission
 // abandonPrelaunchWait with wait set marks the cause as a full resource:
 // the mission backs off but the attempt does not count toward parking (D2).
 func (s *Scheduler) abandonPrelaunchWait(ctx context.Context, mission domain.MissionID, attempt domain.AttemptID, fence int64, reason string, wait bool) error {
+	if s.owedUnstarted(attempt, false) {
+		s.settleUnstarted(attempt) // before FINISH (F2)
+	}
 	return crashpoint.Around("finish.prelaunch", func() error {
 		return s.finishRetry(ctx, domain.Command{Kind: domain.CmdFinishAttempt, Mission: mission, Attempt: attempt, Fence: fence,
 			Outcome: "abandoned", Prelaunch: true, CapacityWait: wait, Reason: reason})
@@ -1786,4 +1799,21 @@ func DispatchCandidates(ctx context.Context, q Querier, parked []string, only do
 		ids = append(ids, domain.MissionID(id))
 	}
 	return ids, rows.Err()
+}
+
+// owedUnstarted sets (owe) or takes (!owe) the attempt's pending unstarted
+// settle; taking reports whether one was pending.
+func (s *Scheduler) owedUnstarted(attempt domain.AttemptID, owe bool) bool {
+	s.unstartedMu.Lock()
+	defer s.unstartedMu.Unlock()
+	if owe {
+		if s.unstarted == nil {
+			s.unstarted = map[domain.AttemptID]bool{}
+		}
+		s.unstarted[attempt] = true
+		return true
+	}
+	was := s.unstarted[attempt]
+	delete(s.unstarted, attempt)
+	return was
 }
