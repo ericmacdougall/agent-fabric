@@ -34,6 +34,10 @@ type Launch struct {
 	// (goodqa#15161 review N1) while the launch never execs through a
 	// symlink in a directory the Darwin profile denies (review C).
 	Resolve func(string) string
+	// PreExec, when set, is called with argv[0] immediately before the host
+	// starts the worker (goodqa#15966 AC-21); an error refuses the launch
+	// with nothing started.
+	PreExec func(argv0 string) error
 }
 
 // Argv builds the launch line from the grant and the launch config. It is the
