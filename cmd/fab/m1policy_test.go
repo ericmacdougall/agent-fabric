@@ -359,7 +359,7 @@ func TestDBRolesCommentPolicyNeedsM1Build(t *testing.T) {
 func TestDaemonPolicyCheck(t *testing.T) {
 	e := newM1Env(t, false)
 	t.Setenv("FABRIC_DSN", storetest.DSN)
-	err := daemonPolicyCheck()
+	err := daemonPolicyCheck(false)
 	if !m1build.Enabled {
 		if err != nil {
 			t.Fatalf("non-m1 build: %v", err)
@@ -370,7 +370,7 @@ func TestDaemonPolicyCheck(t *testing.T) {
 		t.Fatalf("m1 build, no marker: %v", err)
 	}
 	e.st.Pool().Exec(e.ctx, `INSERT INTO fabric_settings (key, value) VALUES ('comment_policy', 'm1')`) //nolint:errcheck
-	if err := daemonPolicyCheck(); err != nil {
+	if err := daemonPolicyCheck(false); err != nil {
 		t.Fatalf("m1 build, marker: %v", err)
 	}
 }
@@ -442,4 +442,91 @@ func TestDaemonMarkerRefusedBeforeControls(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(wr, "controls")); !os.IsNotExist(err) {
 		t.Fatalf("the containment controls ran before the marker refusal (controls dir: %v)", err)
 	}
+}
+
+// goodqa#15966 item 4(a), erratum E12: a non-M1 fabd that dispatches is
+// refused exit 3 on a database with the comment_policy=m1 marker, before
+// the containment controls; with --no-dispatch it starts and logs one line.
+func TestNonM1DaemonRefusesMarkedDatabase(t *testing.T) {
+	if m1build.Enabled {
+		t.Skip("non-M1 build only: an M1 fabd requires the marker")
+	}
+	tiers := filepath.Join(t.TempDir(), "tiers.json")
+	if err := os.WriteFile(tiers, []byte(`{"rungs":{"r1":{"effort":"medium","models":{"claude":"m"}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake, err := filepath.Abs(filepath.Join("..", "..", "tools", "fakeclaude", "fakeclaude.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// runner "" is a DSN never dialled: a refusal comes first.
+	run := func(t *testing.T, runner string, extra ...string) (string, string, error) {
+		t.Helper()
+		t.Setenv("FABRIC_DSN", storetest.DSN)
+		t.Setenv("FABRIC_RUNNER_DSN_ENV", "")
+		if runner == "" {
+			runner = "postgres://runner@127.0.0.1:1/none?connect_timeout=1"
+		}
+		t.Setenv("FABRIC_RUNNER_DSN", runner)
+		wr := filepath.Join(t.TempDir(), "wr")
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		saved := os.Stderr
+		os.Stderr = w
+		args := append([]string{"--work-root", wr, "--provider", fake, "--tier-table", tiers, "--rung", "r1", "--once", "--worker-user", ""}, extra...)
+		derr := daemonMain(args)
+		os.Stderr = saved
+		w.Close()
+		var b strings.Builder
+		buf := make([]byte, 4096)
+		for {
+			n, rerr := r.Read(buf)
+			b.Write(buf[:n])
+			if rerr != nil {
+				break
+			}
+		}
+		r.Close()
+		return b.String(), wr, derr
+	}
+	const line = "fabd: non-M1 build on a database with the comment_policy=m1 marker: --no-dispatch"
+	t.Run("dispatching, marked: exit 3", func(t *testing.T) {
+		newM1Env(t, true)
+		stderr, wr, err := run(t, "")
+		if !effects.IsPolicyRefusal(err, CodeMarkedNonM1) || exitCode(err) != 3 || !strings.Contains(err.Error(), "comment_policy=m1") {
+			t.Fatalf("want %s (exit 3) naming the marker, got %v (exit %d)", CodeMarkedNonM1, err, exitCode(err))
+		}
+		if strings.Contains(stderr, line) {
+			t.Fatal("the --no-dispatch line was logged for a dispatching fabd")
+		}
+		if _, err := os.Stat(filepath.Join(wr, "controls")); !os.IsNotExist(err) {
+			t.Fatalf("the containment controls ran before the refusal (controls dir: %v)", err)
+		}
+	})
+	t.Run("no-dispatch, marked: starts, one line", func(t *testing.T) {
+		e := newM1Env(t, true)
+		_, runner := storetest.AppRunnerDSNs(t, e.st)
+		stderr, _, err := run(t, runner, "--no-dispatch", "--trust-provider")
+		if effects.IsPolicyRefusal(err, CodeMarkedNonM1) {
+			t.Fatalf("--no-dispatch was refused: %v", err)
+		}
+		if err != nil {
+			t.Fatalf("--no-dispatch daemon did not start: %v", err)
+		}
+		if c := strings.Count(stderr, line); c != 1 {
+			t.Fatalf("want the --no-dispatch line once, got %d in %q", c, stderr)
+		}
+	})
+	t.Run("dispatching, unmarked: not refused", func(t *testing.T) {
+		newM1Env(t, false)
+		stderr, _, err := run(t, "", "--trust-provider")
+		if effects.IsPolicyRefusal(err, CodeMarkedNonM1) {
+			t.Fatalf("an unmarked database was refused: %v", err)
+		}
+		if strings.Contains(stderr, line) {
+			t.Fatal("the marker line was logged on an unmarked database")
+		}
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"fabric/internal/domain"
@@ -65,15 +66,37 @@ func checkEffectPolicy(ctx context.Context, b *effects.Broker) error {
 	return b.CheckPolicy(ctx)
 }
 
-// daemonPolicyCheck is fabd's start check; see daemonMain.
-func daemonPolicyCheck() error {
-	if !m1build.Enabled {
-		return nil
+// daemonPolicyCheck is fabd's start check; see daemonMain. An M1 build
+// refuses a database without the comment_policy marker (NEG-23). A non-M1
+// build that dispatches refuses a database WITH the comment_policy=m1
+// marker (goodqa#15966 item 4, PR erratum E12): it would START attempts
+// without the M1 token launch. With --no-dispatch it starts nothing, so it
+// may run there, and says so once.
+func daemonPolicyCheck(noDispatch bool) error {
+	if m1build.Enabled {
+		return withStore(func(ctx context.Context, st *store.Store) error {
+			return checkEffectPolicy(ctx, effects.New(st))
+		})
 	}
 	return withStore(func(ctx context.Context, st *store.Store) error {
-		return checkEffectPolicy(ctx, effects.New(st))
+		v, ok, err := st.CommentPolicyMarker(ctx)
+		if err != nil {
+			return fmt.Errorf("read the comment_policy marker: %w", err)
+		}
+		if !ok || v != effects.PolicyMarkerM1 {
+			return nil
+		}
+		if noDispatch {
+			fmt.Fprintln(os.Stderr, "fabd: non-M1 build on a database with the comment_policy=m1 marker: --no-dispatch, so no attempt is started")
+			return nil
+		}
+		return &effects.PolicyRefusal{Code: CodeMarkedNonM1, Detail: "this is not an M1 build and the database carries the fabric_settings comment_policy=m1 marker; a dispatching fabd here would START attempts without the M1 token launch; run the M1 build, or --no-dispatch"}
 	})
 }
+
+// CodeMarkedNonM1 is the refusal of a dispatching non-M1 fabd on an
+// M1-marked database (exit 3).
+const CodeMarkedNonM1 = "m1_marked_non_m1_build"
 
 // eventsMain: `fab events --mission M [--json]` (goodqa#15966 AC-12): the
 // mission's events with its effect rows joined at read time, ordered by

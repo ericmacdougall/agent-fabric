@@ -277,10 +277,11 @@ func daemonMain(args []string) error {
 	// (exit 3, 0 processes) on a database without the comment_policy marker
 	// or with an unknown value. It runs after every configuration refusal
 	// above (which open no store, goodqa#15373 AC-2) and before the
-	// containment controls below start any probe unit. A non-M1 build passes
-	// by definition (its decisions still honour the marker), so it does not
-	// open the database here.
-	if err := daemonPolicyCheck(); err != nil {
+	// containment controls below start any probe unit. A non-M1 build that
+	// dispatches refuses (exit 3) a database WITH the comment_policy=m1
+	// marker, since it has no M1 token launch (goodqa#15966 item 4, E12);
+	// with --no-dispatch it starts and says so once.
+	if err := daemonPolicyCheck(*noDispatch); err != nil {
 		return err
 	}
 	// An untrusted provider (anything but the recorded fake) runs only on a
