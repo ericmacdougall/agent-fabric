@@ -124,6 +124,8 @@ func daemonMain(args []string) error {
 	onlyMission := fs.String("only-mission", "", "dispatch only this mission id")
 	missionsRoot := fs.String("missions-root", "/srv/fabric/missions", "M1 builds: directory of {mission}/mission.json (goodqa#15966 AC-22)")
 	fabSecretGroup := fs.String("fab-secret-group", "fab-secret", "M1 builds: the group that owns mission.json")
+	secretDir := fs.String("secret-dir", "/srv/fabric/secret", "M1 builds: the subscription token directory (goodqa#15966 AC-13)")
+	runAreaFlag := fs.String("run-area", "", "M1 builds: fabd-only run area, 0700 (default {work-root}/run-area; goodqa#15966 AC-15, AC-29)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -304,10 +306,34 @@ func daemonMain(args []string) error {
 			return fmt.Errorf("refusing to start an M1 fabd without its GoodQA executor: %w", err)
 		}
 	}
+	// goodqa#15966 AC-14 to AC-18, AC-29: an M1 fabd that dispatches
+	// launches with the subscription token, keeps streams, bindings and
+	// records in the checked fabd-only run area, and redacts at settle.
+	runArea := *runAreaFlag
+	if runArea == "" {
+		runArea = m1DefaultRunArea(filepath.Clean(*workRoot))
+	}
+	recordsDir := filepath.Join(runArea, runAreaRecords)
+	if m1Enabled && !*noDispatch {
+		if m1g == nil {
+			return errors.New("refusing to start the M1 token launch (goodqa#15966): no GoodQA executor")
+		}
+		who, err := m1WorkerPrincipals(*workerUser)
+		if err != nil {
+			return err
+		}
+		cl, ra, err := m1CredentialLaunch(m1CredentialOptions{runArea: runArea, secretDir: *secretDir, workerUser: *workerUser,
+			secretGroup: *fabSecretGroup, providerSHA: *providerSHA, goodqaKeyFile: m1g.KeyFile, runnerDSN: runnerDSN, who: who})
+		if err != nil {
+			return err
+		}
+		cfg.Credential, cfg.StreamRoot, recordsDir = cl, ra.Streams, ra.Records
+	}
+	cfg.RecordsDir = recordsDir
 	return withStoreService(func(ctx context.Context, st *store.Store) error {
 		var loop *m1effect.Loop
 		if m1g != nil {
-			loop = &m1effect.Loop{Store: st, Broker: effects.New(st), Exec: m1g, RecordsDir: m1RecordsDir(*workRoot)}
+			loop = &m1effect.Loop{Store: st, Broker: effects.New(st), Exec: m1g, RecordsDir: recordsDir}
 			cfg.EffectPass = loop.MaybePass
 		}
 		s := sched.New(st, cfg, ln)

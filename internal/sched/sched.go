@@ -134,6 +134,10 @@ type Config struct {
 	// removed. nil launches as before; credential.CheckManifest still refuses
 	// any launch whose environment carries the token or ANTHROPIC_API_KEY.
 	Credential *CredentialLaunch
+	// RecordsDir (goodqa#15966 AC-29) is {run area}/records, fabd-only:
+	// settle writes the credential_exposure, sweep_incomplete and
+	// delivery_blocked records there. "" writes none.
+	RecordsDir string
 	// Mission is the M1 mission path (goodqa#15966 W5), set only by an M1
 	// build; nil keeps today's behaviour and never reads mission.json.
 	Mission *missioncfg.Preparer

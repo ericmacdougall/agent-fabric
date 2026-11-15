@@ -48,28 +48,9 @@ func m1MissionPreparer(o m1MissionOptions) (*mission.Preparer, error) {
 	if o.hooksDir == "" || !filepath.IsAbs(o.hooksDir) {
 		return nil, refuse("FABRIC_HOOKS_DIR must be an absolute path holding %s", mission.BashGateName)
 	}
-	wu, err := user.Lookup(o.workerUser)
+	who, err := m1WorkerPrincipals(o.workerUser)
 	if err != nil {
-		return nil, refuse("worker account %q: %v", o.workerUser, err)
-	}
-	uid, err := strconv.ParseUint(wu.Uid, 10, 32)
-	if err != nil {
-		return nil, refuse("worker account uid %q", wu.Uid)
-	}
-	gids, err := wu.GroupIds()
-	if err != nil {
-		return nil, refuse("worker account groups: %v", err)
-	}
-	who := checkout.Principals{OperatorUID: uint32(os.Getuid()), WorkerUID: uint32(uid)}
-	for _, g := range gids {
-		n, err := strconv.ParseUint(g, 10, 32)
-		if err != nil {
-			return nil, refuse("worker group id %q", g)
-		}
-		who.WorkerGIDs = append(who.WorkerGIDs, uint32(n))
-	}
-	if err := who.Validate(); err != nil {
-		return nil, refuse("%v", err)
+		return nil, err
 	}
 	grp, err := user.LookupGroup(o.fabSecretGroup)
 	if err != nil {
@@ -127,4 +108,39 @@ func m1ReadRoots(workRoot, hooksDir string) []string {
 		out = append(out, filepath.Clean(hooksDir))
 	}
 	return out
+}
+
+// m1WorkerPrincipals resolves fabd's uid and the worker account's uid and
+// groups, the principals every M1 ownership check uses.
+func m1WorkerPrincipals(workerUser string) (checkout.Principals, error) {
+	refuse := func(format string, a ...any) (checkout.Principals, error) {
+		return checkout.Principals{}, fmt.Errorf("refusing to start the M1 mission path (goodqa#15966): "+format, a...)
+	}
+	if workerUser == "" {
+		return refuse("--worker-user (FABRIC_WORKER_USER) is required")
+	}
+	wu, err := user.Lookup(workerUser)
+	if err != nil {
+		return refuse("worker account %q: %v", workerUser, err)
+	}
+	uid, err := strconv.ParseUint(wu.Uid, 10, 32)
+	if err != nil {
+		return refuse("worker account uid %q", wu.Uid)
+	}
+	gids, err := wu.GroupIds()
+	if err != nil {
+		return refuse("worker account groups: %v", err)
+	}
+	who := checkout.Principals{OperatorUID: uint32(os.Getuid()), WorkerUID: uint32(uid)}
+	for _, g := range gids {
+		n, err := strconv.ParseUint(g, 10, 32)
+		if err != nil {
+			return refuse("worker group id %q", g)
+		}
+		who.WorkerGIDs = append(who.WorkerGIDs, uint32(n))
+	}
+	if err := who.Validate(); err != nil {
+		return refuse("%v", err)
+	}
+	return who, nil
 }
