@@ -280,9 +280,6 @@ func (b *Bound) ScanTextExcluding(text string, exclusions []string) (hit bool, c
 			}
 		}
 	}
-	if strings.Contains(text, PublicLiteral) {
-		return true, ClassSkAnt
-	}
 	low := strings.ToLower(text)
 	if strings.Contains(low, "postgres://") || strings.Contains(low, "postgresql://") {
 		return true, ClassPostgres
@@ -315,8 +312,11 @@ func (b *Bound) ScanTextExcluding(text string, exclusions []string) (hit bool, c
 			public = true
 		}
 	}
-	if public {
-		// Only the public prefix: still blocked (AC-10), as the literal.
+	// The literal is checked after the fragment windows (AC-35(b)): the
+	// prefix plus 8 secret characters is credential_fragment, an exposure,
+	// not the literal; the prefix alone or with fewer than 8 secret bytes
+	// is the literal and still blocks.
+	if public || strings.Contains(text, PublicLiteral) {
 		return true, ClassSkAnt
 	}
 	return false, ""

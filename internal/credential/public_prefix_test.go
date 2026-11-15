@@ -13,7 +13,20 @@ import (
 // (AC-10, sk_ant_literal). A fragment of 8 or more bytes from the secret
 // part is an exposure.
 func TestPublicPrefixIsNotAnExposure(t *testing.T) {
-	tok := synthToken(t, 108)
+	// The comment scan also reads an alnum-stripped view, where ')' and the
+	// spaces vanish and " for" joins the 7 secret bytes. Draw a token whose
+	// first 8 secret characters are alphanumeric and whose 8th is not 'f',
+	// so the case below holds exactly 7 secret bytes in every view (a
+	// random draw made it 8 about once in 60 runs once the literal check
+	// moved after the fragment windows, AC-35(b)).
+	var tok []byte
+	for {
+		tok = synthToken(t, 108)
+		sec := tok[13:21]
+		if bytes.IndexFunc(sec, func(r rune) bool { return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') }) < 0 && sec[7] != 'f' {
+			break
+		}
+	}
 	b := testBound(t, tok)
 	pre := PublicPrefix(tok)
 	if string(pre) != "sk-"+"ant-oat01-" {

@@ -384,3 +384,34 @@ func TestM1SettleLoadFailureRecordsUnswept(t *testing.T) {
 		})
 	}
 }
+
+// AC-35(h), spec v16: with no sweep launcher configured the settle is
+// sweep_incomplete, never clean: the report is incomplete with the
+// no-launcher reason, the record is written, and only the sweep material
+// is kept for a later re-sweep.
+func TestM1SettleNoLauncherIsIncomplete(t *testing.T) {
+	f := newM1Fixture(t, false)
+	if f.s.cfg.Sweep != nil {
+		t.Fatal("fixture: a launcher is configured")
+	}
+	out, _ := f.settle(verified)
+	if out.Sweep.Complete {
+		t.Fatal("no launcher reported a complete sweep")
+	}
+	found := false
+	for _, r := range out.Sweep.Reasons {
+		found = found || r == reasonNoLauncher
+	}
+	if !found {
+		t.Fatalf("sweep reasons %v lack %s", out.Sweep.Reasons, reasonNoLauncher)
+	}
+	if _, ok := f.kinds(t)[records.SweepIncomplete]; !ok {
+		t.Fatal("no sweep_incomplete record")
+	}
+	if _, err := os.Lstat(filepath.Join(f.bindings, string(f.attempt)+".material")); err != nil {
+		t.Fatal("no sweep material kept")
+	}
+	if !f.settled() || f.versionKept(t) {
+		t.Fatalf("settled=%v version kept=%v", f.settled(), f.versionKept(t))
+	}
+}

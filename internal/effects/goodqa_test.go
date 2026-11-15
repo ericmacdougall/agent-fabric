@@ -248,7 +248,7 @@ func TestGoodQAPreconditionAndRefusals(t *testing.T) {
 // refused before transport ("issue ticket mismatch"), and so is an issue
 // with no number: the check fails closed. Before the fix the precondition
 // compared only the UUID and posted.
-func TestGoodQAPreconditionRefusesOtherTicket(t *testing.T) {
+func TestIssueTicketBinding(t *testing.T) {
 	ctx, _, b, _ := setup(t)
 	legacyTicketComment(t, ctx)
 	for i, n := range []any{15000, nil, "14914", 14913.5} {
