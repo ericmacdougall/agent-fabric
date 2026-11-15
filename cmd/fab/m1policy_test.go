@@ -431,7 +431,11 @@ func TestDaemonMarkerRefusedBeforeControls(t *testing.T) {
 		t.Fatal(err)
 	}
 	wr := filepath.Join(t.TempDir(), "wr")
-	err = daemonMain([]string{"--work-root", wr, "--provider", fake, "--tier-table", tiers, "--rung", "r1", "--once", "--worker-user", ""})
+	// --no-dispatch: a dispatching M1 fabd first meets the W5 mission-path
+	// configuration refusals (P0, worker user, hooks dir), which precede
+	// the marker as configuration does; the marker check itself runs either
+	// way, before the controls.
+	err = daemonMain([]string{"--work-root", wr, "--provider", fake, "--tier-table", tiers, "--rung", "r1", "--once", "--worker-user", "", "--no-dispatch"})
 	if !effects.IsPolicyRefusal(err, effects.CodeMarkerMissing) || exitCode(err) != 3 {
 		t.Fatalf("want m1_policy_marker_missing (exit 3), got %v", err)
 	}

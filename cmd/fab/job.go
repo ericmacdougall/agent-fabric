@@ -265,6 +265,14 @@ func daemonMain(args []string) error {
 	if err := sched.CheckConfig(cfg, ln); err != nil {
 		return err
 	}
+	// goodqa#15966 W5: only an M1 build that dispatches reads mission.json.
+	// Its refusals are configuration refusals, so they come before the
+	// marker check, which opens the store (W2 cd22a36: configuration before
+	// the marker), and before the containment controls start any unit.
+	if cfg.Mission, err = m1MissionPreparer(m1MissionOptions{enabled: m1Enabled && !*noDispatch, workRoot: *workRoot, missionsRoot: *missionsRoot,
+		fabSecretGroup: *fabSecretGroup, workerUser: *workerUser, profile: *profile, hooksDir: hooksDir, self: selfPath()}); err != nil {
+		return err
+	}
 	// goodqa#15966 M1 comment policy (NEG-23): an M1 fabd refuses to start
 	// (exit 3, 0 processes) on a database without the comment_policy marker
 	// or with an unknown value. It runs after every configuration refusal
@@ -273,13 +281,6 @@ func daemonMain(args []string) error {
 	// by definition (its decisions still honour the marker), so it does not
 	// open the database here.
 	if err := daemonPolicyCheck(); err != nil {
-		return err
-	}
-	// goodqa#15966 W5: only an M1 build that dispatches reads mission.json.
-	// It runs after the marker check (NEG-23 names the marker first) and,
-	// like it, before the containment controls start any unit.
-	if cfg.Mission, err = m1MissionPreparer(m1MissionOptions{enabled: m1Enabled && !*noDispatch, workRoot: *workRoot, missionsRoot: *missionsRoot,
-		fabSecretGroup: *fabSecretGroup, workerUser: *workerUser, profile: *profile, hooksDir: hooksDir, self: selfPath()}); err != nil {
 		return err
 	}
 	// An untrusted provider (anything but the recorded fake) runs only on a
