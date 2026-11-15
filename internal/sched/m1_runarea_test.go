@@ -39,8 +39,21 @@ func TestRunAreaNeverReachesTheWorker(t *testing.T) {
 	setCap(t, st, 5)
 	admitSpec(t, st, "m_ra", domain.ProviderClaudeCode, 1)
 	ln := &fakeLauncher{st: st, block: make(chan struct{})}
-	t.Cleanup(func() { close(ln.block) })
 	work := t.TempDir()
+	// Registered after both TempDirs, so it runs first: release the runner
+	// and wait for its settle to stop writing into the run area before the
+	// directories are removed (a cleanup race seen on t2).
+	t.Cleanup(func() {
+		close(ln.block)
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			var live int
+			st.Pool().QueryRow(context.Background(), `SELECT count(*) FROM attempts WHERE mission_id = 'm_ra' AND state IN ('LEASED','PREPARING','RUNNING')`).Scan(&live) //nolint:errcheck
+			if live == 0 {
+				time.Sleep(100 * time.Millisecond) // the settle's last file writes follow FINISH
+				return
+			}
+		}
+	})
 	cfg := Config{Host: "h_t2", Model: "fake-model", Effort: "n/a", Rung: "R0", TierTableSHA: "test", Profile: "P1", MaxTurns: 5,
 		MaxBudgetUSD: 0.01, Wall: time.Minute, WorkRoot: work, RunnerDSN: storetest.RunnerDSN(t, st),
 		StreamRoot: filepath.Join(runArea, "streams"), RecordsDir: filepath.Join(runArea, "records"),

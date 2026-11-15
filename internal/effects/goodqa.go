@@ -82,13 +82,55 @@ func (g *GoodQA) Validate(spec IntentSpec) error {
 	return nil
 }
 
-// Precondition: the issue is readable and not closed.
+// IssueNumberField is the get_issue field that carries the ticket number
+// the issue UUID belongs to. ASSUMPTION (goodqa#15966 red-team M-5): the
+// live get_issue response shape is unverified; the owner verifies it live,
+// and this constant is the only place the name lives.
+const IssueNumberField = "number"
+
+var ticketRE = regexp.MustCompile(`(?i)^(?:goodqa )?goodqa#([1-9][0-9]{0,9})$`)
+
+// ticketNumber is N of an effect's "goodqa#N" ticket, or "" when it has none.
+func ticketNumber(ticket string) string {
+	m := ticketRE.FindStringSubmatch(strings.TrimSpace(ticket))
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// issueNumber is the issue's ticket number as decimal text, or "" when the
+// field is absent or not a positive integer.
+func issueNumber(issue map[string]any) string {
+	switch v := issue[IssueNumberField].(type) {
+	case float64:
+		if v >= 1 && v < 1e10 && v == float64(int64(v)) {
+			return fmt.Sprint(int64(v))
+		}
+	case string:
+		if ticketRE.MatchString("goodqa#" + v) {
+			return v
+		}
+	}
+	return ""
+}
+
+// Precondition: the issue is readable, not closed, and is the effect's
+// ticket: a valid open issue UUID of another ticket is refused (red-team
+// M-5), and a missing number or ticket fails closed.
 func (g *GoodQA) Precondition(ctx context.Context, e Effect) (bool, string, error) {
 	var r commentRequest
 	if err := json.Unmarshal(e.Request, &r); err != nil {
 		return false, "", err
 	}
-	data, err := g.call(ctx, "get_issue", map[string]any{"issueId": r.IssueID})
+	return g.CheckIssue(ctx, r.IssueID, r.Ticket)
+}
+
+// CheckIssue reads the issue and reports whether it is readable, open and
+// the ticket's own issue. fabd also runs it once before START on the M1
+// path (spec v15, NEG-34), so a mismatched binding starts nothing.
+func (g *GoodQA) CheckIssue(ctx context.Context, issueID, ticket string) (bool, string, error) {
+	data, err := g.call(ctx, "get_issue", map[string]any{"issueId": issueID})
 	if err != nil {
 		return false, "", err
 	}
@@ -99,8 +141,11 @@ func (g *GoodQA) Precondition(ctx context.Context, e Effect) (bool, string, erro
 	if inner, ok := data["issue"].(map[string]any); ok {
 		issue = inner
 	}
-	if id, _ := issue["id"].(string); id != r.IssueID {
+	if id, _ := issue["id"].(string); id != issueID {
 		return false, "issue id mismatch", nil
+	}
+	if want, got := ticketNumber(ticket), issueNumber(issue); want == "" || got != want {
+		return false, "issue ticket mismatch", nil
 	}
 	if closed, _ := issue["closedAt"].(string); closed != "" {
 		return false, "issue is closed", nil

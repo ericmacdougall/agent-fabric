@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,7 +94,8 @@ func (r *m1Rig) writeConfig(t *testing.T, id domain.MissionID, caps map[string]a
 
 func m1Config(t *testing.T, st interface{}, workRoot string) Config {
 	return Config{Host: "h_t2", Model: "fake-model", Effort: "n/a", Rung: "R0", TierTableSHA: "test", Profile: "P0", MaxTurns: 999,
-		MaxBudgetUSD: 999, Wall: 24 * time.Hour, WorkRoot: workRoot}
+		MaxBudgetUSD: 999, Wall: 24 * time.Hour, WorkRoot: workRoot,
+		IssueCheck: func(context.Context, string, string) (bool, string, error) { return true, "", nil }}
 }
 
 func countRows(t *testing.T, s *Scheduler, q string, id domain.MissionID) int {
@@ -300,5 +302,73 @@ func TestM1PrepareFailureKeepsConfigOutOfEvents(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(r.prep.AttemptRoot); len(entries) != 0 {
 		t.Errorf("attempt dir left behind")
+	}
+}
+
+// Spec v15 NEG-34: the issue binding is checked once before START on the M1
+// path. A mismatched or missing number, an unreadable issue, or no checker
+// at all starts nothing: no attempt, no event, 0 processes, the refusal
+// class issue_ticket_mismatch. The checker sees the mission's own ticket
+// and the mission.json issue id.
+func TestM1IssueBindingCheckedBeforeStart(t *testing.T) {
+	st := storetest.Open(t)
+	setCap(t, st, 20)
+	r := newM1Rig(t)
+	caps := map[string]any{"max_turns": 10, "wall_minutes": 10, "max_budget_usd": 1}
+	type seen struct{ issue, ticket string }
+	cases := []struct {
+		id    domain.MissionID
+		check func(context.Context, string, string) (bool, string, error)
+	}{
+		{"m_m1iss1", func(context.Context, string, string) (bool, string, error) {
+			return false, "issue ticket mismatch", nil
+		}},
+		{"m_m1iss2", func(context.Context, string, string) (bool, string, error) {
+			return false, "", errors.New("transport down")
+		}},
+		{"m_m1iss3", nil},
+	}
+	for i, c := range cases {
+		admitSpec(t, st, c.id, domain.ProviderClaudeCode, i+1)
+		r.writeConfig(t, c.id, caps)
+		ln := &fakeLauncher{st: st, block: make(chan struct{})}
+		cfg := m1Config(t, st, t.TempDir())
+		cfg.RunnerDSN = storetest.RunnerDSN(t, st)
+		cfg.Launch.Binary = "/bin/true"
+		cfg.Mission = r.prep
+		var got []seen
+		if c.check != nil {
+			check := c.check
+			cfg.IssueCheck = func(ctx context.Context, issue, ticket string) (bool, string, error) {
+				got = append(got, seen{issue, ticket})
+				return check(ctx, issue, ticket)
+			}
+		} else {
+			cfg.IssueCheck = nil
+		}
+		s := New(st, cfg, ln)
+		before := countRows(t, s, "SELECT count(*) FROM events WHERE mission_id = $1", c.id)
+		err := s.runOnce(context.Background(), c.id)
+		close(ln.block)
+		if err == nil {
+			t.Fatalf("%s: runOnce accepted", c.id)
+		}
+		if c.check == nil || i == 0 {
+			if !strings.Contains(err.Error(), "issue_ticket_mismatch") {
+				t.Errorf("%s: refusal %q lacks the class", c.id, err)
+			}
+		}
+		if n := countRows(t, s, "SELECT count(*) FROM attempts WHERE mission_id = $1", c.id); n != 0 {
+			t.Errorf("%s: %d attempts, want 0", c.id, n)
+		}
+		if after := countRows(t, s, "SELECT count(*) FROM events WHERE mission_id = $1", c.id); after != before {
+			t.Errorf("%s: events %d -> %d", c.id, before, after)
+		}
+		if n := atomic.LoadInt32(&ln.starts); n != 0 {
+			t.Errorf("%s: %d processes", c.id, n)
+		}
+		if c.check != nil && (len(got) != 1 || got[0].ticket == "" || got[0].issue == "") {
+			t.Errorf("%s: checker calls %+v, want one with the issue id and the mission ticket", c.id, got)
+		}
 	}
 }

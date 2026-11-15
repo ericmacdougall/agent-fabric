@@ -330,6 +330,9 @@ func daemonMain(args []string) error {
 		}
 		cfg.Credential, cfg.StreamRoot, recordsDir = cl, ra.Streams, ra.Records
 	}
+	if m1g != nil {
+		cfg.IssueCheck = m1g.CheckIssue // spec v15 NEG-34: once before START on the M1 path
+	}
 	cfg.RecordsDir = recordsDir
 	return withStoreService(func(ctx context.Context, st *store.Store) error {
 		var loop *m1effect.Loop

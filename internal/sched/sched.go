@@ -147,6 +147,11 @@ type Config struct {
 	// Mission is the M1 mission path (goodqa#15966 W5), set only by an M1
 	// build; nil keeps today's behaviour and never reads mission.json.
 	Mission *missioncfg.Preparer
+	// IssueCheck (goodqa#15966 spec v15, NEG-34) reads the mission's issue
+	// once before START on the M1 path: a UUID that is not the mission
+	// ticket's own issue (or has no number) starts nothing. The M1 daemon
+	// always sets it; nil on the M1 path refuses every START.
+	IssueCheck func(ctx context.Context, issueID, ticket string) (ok bool, detail string, err error)
 }
 
 // EffectAttempt is the settled attempt the EffectStep sees.
@@ -804,6 +809,14 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		return err
 	}
 	attempt := domain.AttemptID(fmt.Sprintf("r_%s_%d", strings.TrimPrefix(string(mission), "m_"), m.Version.AttemptFence+1))
+	// goodqa#15966 owner ruling R1: an operator-held mission starts nothing
+	// (no START, no event, 0 processes) until an operator releases it.
+	if held, err := s.st.OperatorHeld(ctx, mission); err != nil {
+		return fmt.Errorf("operator hold of %s not readable, nothing started: %w", mission, err)
+	} else if held {
+		fmt.Fprintf(os.Stderr, "fabd: %s is operator-held; nothing started (fab mission release)\n", mission)
+		return nil
+	}
 	// goodqa#15966 AC-22, AC-25: the M1 config is checked before START; a
 	// refusal parks the mission with a log line naming the field, writes no
 	// event and starts nothing.
@@ -814,6 +827,9 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 		}
 		if mc, err = s.cfg.Mission.Load(mission); err != nil {
 			return fmt.Errorf("mission config refused before START, nothing started (%s): %w", missioncfg.Class(err), err)
+		}
+		if err := s.checkIssueBinding(ctx, mission, mc.IssueID()); err != nil {
+			return err
 		}
 	}
 	if s.afterRead != nil {
@@ -1628,6 +1644,31 @@ type Querier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
+// classIssueMismatch is the pre-START refusal class of an issue binding
+// that is not the mission ticket's own issue (spec v15, NEG-34).
+const classIssueMismatch = "issue_ticket_mismatch"
+
+// checkIssueBinding is the once-per-START issue check of the M1 path. Any
+// failure (a mismatch, a missing number, an unreadable issue, no checker)
+// starts nothing: no START, no event, no process.
+func (s *Scheduler) checkIssueBinding(ctx context.Context, mission domain.MissionID, issueID string) error {
+	if s.cfg.IssueCheck == nil {
+		return fmt.Errorf("issue binding of %s refused before START, nothing started (%s): no issue checker", mission, classIssueMismatch)
+	}
+	var ticket string
+	if err := s.st.Pool().QueryRow(ctx, `SELECT COALESCE(ticket, '') FROM missions WHERE id = $1`, string(mission)).Scan(&ticket); err != nil {
+		return fmt.Errorf("issue binding of %s not checked, nothing started: %w", mission, err)
+	}
+	ok, detail, err := s.cfg.IssueCheck(ctx, issueID, ticket)
+	if err != nil {
+		return fmt.Errorf("issue binding of %s not checked, nothing started: %w", mission, err)
+	}
+	if !ok {
+		return fmt.Errorf("issue binding of %s refused before START, nothing started (%s): %s", mission, classIssueMismatch, detail)
+	}
+	return nil
+}
+
 // DispatchCandidates is the dispatch selection, shared by the scheduler and
 // `fab job dispatch-candidates` (the goodqa#15373 live-step gate), so the gate
 // cannot drift from what dispatch would start. It only reads.
@@ -1641,10 +1682,11 @@ func DispatchCandidates(ctx context.Context, q Querier, parked []string, only do
 		  AND (m.not_before IS NULL OR m.not_before <= now())
 		  AND NOT (m.id = ANY($1))
 		  AND NOT EXISTS (SELECT 1 FROM outbox_cursors hc WHERE hc.consumer = 'sched.hold.' || m.id)
+		  AND NOT EXISTS (SELECT 1 FROM outbox_cursors oh WHERE oh.consumer = $3 || m.id)
 		  AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.mission_id = m.id
 		                  AND a.state IN ('ADMITTED','LEASED','PREPARING','RUNNING','SUCCEEDED_UNVERIFIED','UNKNOWN','RECONCILING'))
 		  AND ($2 = '' OR m.id = $2)
-		ORDER BY m.priority, m.id LIMIT 10`, parked, string(only))
+		ORDER BY m.priority, m.id LIMIT 10`, parked, string(only), store.OpHoldPrefix)
 	if err != nil {
 		return nil, err
 	}

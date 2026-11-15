@@ -272,9 +272,11 @@ func actor() string {
 
 func missionMain(args []string) error {
 	if len(args) == 0 {
-		return errors.New("mission new|list|show")
+		return errors.New("mission new|list|show|release")
 	}
 	switch args[0] {
+	case "release":
+		return missionReleaseMain(args[1:])
 	case "new":
 		fs := flag.NewFlagSet("mission new", flag.ContinueOnError)
 		id := fs.String("id", "", "mission id (m_...)")

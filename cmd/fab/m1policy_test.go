@@ -50,7 +50,7 @@ func (f *fakeGoodQA) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isErr := false
 	switch req.Params.Name {
 	case "get_issue":
-		payload = map[string]any{"issue": map[string]any{"id": m1Issue}}
+		payload = map[string]any{"issue": map[string]any{"id": m1Issue, effects.IssueNumberField: 15966}}
 	case "comment_on_issue":
 		f.sends++
 		if f.refuse {

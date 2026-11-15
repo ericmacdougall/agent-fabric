@@ -32,9 +32,13 @@ const (
 	CredentialExposure Kind = "credential_exposure"
 	SweepIncomplete    Kind = "sweep_incomplete"
 	LateWrite          Kind = "late_write"
+	// MissionHold and MissionRelease record an operator hold (goodqa#15966
+	// owner ruling R1) and its release; Class is the reason class.
+	MissionHold    Kind = "mission_hold"
+	MissionRelease Kind = "mission_release"
 )
 
-var kinds = map[Kind]bool{DeliveryBlocked: true, DeliveredEarlier: true, CredentialExposure: true, SweepIncomplete: true, LateWrite: true}
+var kinds = map[Kind]bool{DeliveryBlocked: true, DeliveredEarlier: true, CredentialExposure: true, SweepIncomplete: true, LateWrite: true, MissionHold: true, MissionRelease: true}
 
 // Record is one AC-29 record.
 type Record struct {
@@ -72,8 +76,8 @@ func (r Record) Validate() error {
 	if r.Class != "" && !classRE.MatchString(r.Class) {
 		return fmt.Errorf("%w: class must match %s", ErrRecord, classRE)
 	}
-	if r.Kind == DeliveryBlocked && r.Class == "" {
-		return fmt.Errorf("%w: delivery_blocked needs a class", ErrRecord)
+	if (r.Kind == DeliveryBlocked || r.Kind == MissionHold || r.Kind == MissionRelease) && r.Class == "" {
+		return fmt.Errorf("%w: %s needs a class", ErrRecord, r.Kind)
 	}
 	if r.CommentID != "" && !remoteRE.MatchString(r.CommentID) {
 		return fmt.Errorf("%w: comment id must match %s", ErrRecord, remoteRE)

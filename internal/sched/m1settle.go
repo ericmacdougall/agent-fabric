@@ -36,6 +36,10 @@ import (
 //  7. MarkSettled, deferred: every path.
 //  8. GC, after MarkSettled.
 
+// sweepMaterialUnavailable is the sweep_incomplete class of a settle that
+// could not load its bound values, so it never swept (spec v15).
+const sweepMaterialUnavailable = "material_unavailable"
+
 // Settle steps, the names the fault-injection seam sees.
 const (
 	stepLoad      = "load"
@@ -47,6 +51,8 @@ const (
 	stepRawRemove = "raw_remove"
 	stepMark      = "mark"
 	stepGC        = "gc"
+	stepOpHold    = "ophold" // finishM1: the operator hold write
+	stepFinish    = "finish" // finishM1: after the hold, before FINISH
 )
 
 // Fail-closed classes that hold the mission for an operator look (owner
@@ -162,13 +168,16 @@ func (s *Scheduler) settleM1(mission domain.MissionID, attempt domain.AttemptID,
 		b, err = c.Policy.LoadBound(c.BindingsDir, string(attempt), c.IDKey, others)
 	}
 	if err != nil {
-		// No bound values: no redaction, no sweep, raw files kept.
+		// No bound values: no stream read, no redaction, no sweep, raw
+		// files kept. Spec v15: the unswept run is recorded, so its release
+		// needs --ack-unswept (NEG-35).
 		class := credential.ClassMaterialUnavailable
 		var se *credential.SettleError
 		if errors.As(err, &se) {
 			class = se.Class
 		}
 		block(class)
+		rec(records.SweepIncomplete, sweepMaterialUnavailable)
 		return out
 	}
 	red := filepath.Join(sdir, redactedDirName)
@@ -336,26 +345,54 @@ func writeFileAtomic(path string, data []byte) error {
 // token was refused (AC-19). A held mission admits no further attempt
 // until the operator releases it.
 func (s *Scheduler) finishM1(ctx context.Context, mission domain.MissionID, out m1Settled) error {
-	if out.Cmd != nil {
-		if err := s.finishRetry(ctx, *out.Cmd); err != nil {
-			return err
-		}
-	}
 	if out.Cmd == nil {
 		// Nothing finished: the attempt is still leased, and a hold would
 		// exempt it from lease expiry and reconcile (review M2).
 		return nil
 	}
-	refused := out.Cmd != nil && out.Cmd.Outcome == "abandoned" && strings.Contains(out.Cmd.Reason, claude.ReasonCredentialRejected)
-	if !out.Hold && !refused {
+	refused := out.Cmd.Outcome == "abandoned" && strings.Contains(out.Cmd.Reason, claude.ReasonCredentialRejected)
+	hold := out.Hold || refused
+	class := out.Blocked
+	why := "settle failed closed (" + class + ")"
+	if refused {
+		class, why = "credential_rejected", "the subscription token was refused"
+	}
+	if hold {
+		// AC-34 (owner ruling R1, red-team H-1): the durable operator hold
+		// is written before FINISH, so no crash or failed write can leave a
+		// fail-closed mission finished and dispatchable without it. If it
+		// cannot be written the attempt is not finished: it stays leased,
+		// its lease lapses into UNKNOWN and reconcile (the operator hold
+		// never exempts a leased attempt from either), and the mission
+		// cannot start while that attempt is live.
+		err := s.settleFail(stepOpHold)
+		if err == nil {
+			err = s.st.OperatorHold(ctx, mission)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "fabd: operator hold for %s (%s) not written; %s left to lease expiry: %v\n", mission, class, out.Cmd.Attempt, err)
+			return fmt.Errorf("operator hold after %s: %w", class, err)
+		}
+		if s.cfg.RecordsDir != "" {
+			if err := records.Append(s.cfg.RecordsDir, records.Record{Mission: mission, Attempt: out.Cmd.Attempt, Kind: records.MissionHold, Class: class}); err != nil {
+				fmt.Fprintf(os.Stderr, "fabd: hold record for %s not written\n", mission)
+			}
+		}
+		if err := s.settleFail(stepFinish); err != nil {
+			return err // the crash seam between the hold and FINISH (tests)
+		}
+	}
+	if err := s.finishRetry(ctx, *out.Cmd); err != nil {
+		return err
+	}
+	if !hold {
 		return nil
 	}
+	// W3's undecodable-log hold as well, after FINISH only: it exempts a
+	// leased attempt from lease expiry (review M2). The prior binary honours
+	// it; it is drained on the next tick.
 	if err := s.st.HoldMission(ctx, s.st.Pool(), mission); err != nil {
 		return fmt.Errorf("hold after a fail-closed settle: %w", err)
-	}
-	why := "settle failed closed (" + out.Blocked + ")"
-	if refused {
-		why = "the subscription token was refused"
 	}
 	fmt.Fprintf(os.Stderr, "fabd: held %s: %s\n", mission, why)
 	return nil

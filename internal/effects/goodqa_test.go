@@ -18,11 +18,13 @@ import (
 // fakeGoodQA speaks the MCP tools/call shape with operationId dedupe, like
 // the real service. Faults reproduce lost responses.
 type fakeGoodQA struct {
-	mu        sync.Mutex
-	comments  []map[string]any
-	byOp      map[string]string
-	issueID   string
-	closed    bool
+	mu       sync.Mutex
+	comments []map[string]any
+	byOp     map[string]string
+	issueID  string
+	closed   bool
+	// number overrides the issue's ticket number when set (nil: omitted).
+	number    func() any
 	loseAfter bool
 	calls     int
 	// archiveStates records the archiveState argument of every readback call.
@@ -85,7 +87,14 @@ func (f *fakeGoodQA) handler(w http.ResponseWriter, r *http.Request) {
 			reply(map[string]any{"error": map[string]any{"code": "not_found"}}, true)
 			return
 		}
-		issue := map[string]any{"id": f.issueID, "number": 14913}
+		issue := map[string]any{"id": f.issueID, IssueNumberField: 14913}
+		if f.number != nil {
+			if n := f.number(); n == nil {
+				delete(issue, IssueNumberField)
+			} else {
+				issue[IssueNumberField] = n
+			}
+		}
 		if f.closed {
 			issue["closedAt"] = "2026-11-06T00:00:00Z"
 		}
@@ -233,4 +242,34 @@ func TestGoodQAPreconditionAndRefusals(t *testing.T) {
 		t.Fatalf("missing key should fail the precondition call, got state %s", e.State)
 	}
 	_ = errors.Is
+}
+
+// Red-team M-5: a valid, open issue UUID that belongs to another ticket is
+// refused before transport ("issue ticket mismatch"), and so is an issue
+// with no number: the check fails closed. Before the fix the precondition
+// compared only the UUID and posted.
+func TestGoodQAPreconditionRefusesOtherTicket(t *testing.T) {
+	ctx, _, b, _ := setup(t)
+	legacyTicketComment(t, ctx)
+	for i, n := range []any{15000, nil, "14914", 14913.5} {
+		f, g := fakeServer(t)
+		n := n
+		f.set(func() { f.number = func() any { return n } })
+		e, _ := b.Submit(ctx, g, gqSpec(fmt.Sprintf("gqm%d", i), "x"))
+		e, err := b.Dispatch(ctx, g, e.ID)
+		if err != nil || e.State != FailedDefinite || f.count() != 0 || !strings.Contains(e.LastError, "issue ticket mismatch") {
+			t.Fatalf("number %v: %s %v comments=%d %q", n, e.State, err, f.count(), e.LastError)
+		}
+	}
+	f, g := fakeServer(t)
+	f.set(func() { f.number = func() any { return "14913" } })
+	e, _ := b.Submit(ctx, g, gqSpec("gqm-ok", "x"))
+	if e, err := b.Dispatch(ctx, g, e.ID); err != nil || e.State != Confirmed {
+		t.Fatalf("matching string number: %s %v", e.State, err)
+	}
+	for in, want := range map[string]string{"goodqa#15966": "15966", "GoodQA goodqa#7": "7", "goodqa#0": "", "goodqa#12x": "", "15966": "", "": ""} {
+		if got := ticketNumber(in); got != want {
+			t.Errorf("ticketNumber(%q) = %q, want %q", in, got, want)
+		}
+	}
 }

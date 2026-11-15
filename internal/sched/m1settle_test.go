@@ -331,3 +331,56 @@ func TestM1SettleReentryReusesRedaction(t *testing.T) {
 		t.Fatal("rerun did not settle")
 	}
 }
+
+// Spec v15 item 1 (NEG-35 precondition): each load-failure class reads
+// nothing (no redacted copy), runs no sweep (no sweep record, the launcher
+// never called), keeps every raw file, and records sweep_incomplete with
+// class material_unavailable beside its delivery_blocked record.
+func TestM1SettleLoadFailureRecordsUnswept(t *testing.T) {
+	for class, breakIt := range map[string]func(f *m1Fixture){
+		credential.ClassMaterialUnavailable: func(f *m1Fixture) { os.Remove(filepath.Join(f.bindings, string(f.attempt)+".json")) },
+		credential.ClassRotatedMidAttempt: func(f *m1Fixture) {
+			f.s.cfg.Credential.Others = func() []credential.OtherCredential {
+				return []credential.OtherCredential{{Kind: credential.KindGoodQA, Name: "goodqa", Value: []byte("synthetic-goodqa-key-CHANGED-0123456")},
+					{Kind: credential.KindDSN, Name: "runner", Value: []byte(numericPW)}}
+			}
+		},
+	} {
+		t.Run(class, func(t *testing.T) {
+			f := newM1Fixture(t, true)
+			launched := 0
+			f.s.cfg.Sweep = func(argv, env []string, stdin []byte) ([]byte, int, error) {
+				launched++
+				return inProcessSweep(argv, env, stdin)
+			}
+			breakIt(f)
+			out, redacted := f.settle(verified)
+			if out.Blocked != class || !out.Hold || redacted != "" {
+				t.Fatalf("settle: %+v", out)
+			}
+			if launched != 0 {
+				t.Fatal("a sweep ran without bound values")
+			}
+			for _, p := range []string{filepath.Join(f.sdir, redactedDirName), filepath.Join(f.sdir, sweepRecordName)} {
+				if _, err := os.Lstat(p); err == nil {
+					t.Fatalf("%s exists: the stream was read or swept", filepath.Base(p))
+				}
+			}
+			for _, p := range []string{filepath.Join(f.sdir, "stream.jsonl"), filepath.Join(f.sdir, "stderr.log"), filepath.Join(f.run, "home", ".claude.json")} {
+				if _, err := os.Lstat(p); err != nil {
+					t.Fatalf("%s removed", filepath.Base(p))
+				}
+			}
+			k := f.kinds(t)
+			if k[records.DeliveryBlocked] != class {
+				t.Fatalf("delivery_blocked %q", k[records.DeliveryBlocked])
+			}
+			if c, ok := k[records.SweepIncomplete]; !ok || c != sweepMaterialUnavailable {
+				t.Fatalf("sweep_incomplete record %q present=%v", c, ok)
+			}
+			if !f.settled() {
+				t.Fatal("not marked settled")
+			}
+		})
+	}
+}
