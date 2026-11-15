@@ -10,7 +10,7 @@ type Point struct {
 	Name      string
 	Path      string // launch, hold, finish, settle, release or recovery
 	Order     int    // its place in the path
-	Kind      string // db, file, remove, rename or marker
+	Kind      string // db, file, mkdir, remove, rename or marker
 	Effect    string // what becomes durable
 	Invariant string // the invariants (I1..I6) a crash at this point tests
 }
@@ -45,6 +45,11 @@ var Table = []Point{
 	{"recovery.material", "recovery", 4, "file", "<attempt>.material for the unverified attempt", "I6"},
 	{"recovery.hold", "recovery", 5, "db", "the operator hold placed by restart recovery, before MarkSettled", "I1, I2, I4"},
 	{"recovery.hold.record", "recovery", 6, "file", "the recovery's mission_hold record", "I1, I3"},
+	{"recovery.bindings.mkdir", "recovery", 7, "mkdir", "a lost bindings directory is recreated (0700), as at fabd start (F3)", "I1, I6"},
+	{"recovery.lost.record", "recovery", 8, "file", "sweep_incomplete (material_unavailable) for a launched M1 attempt whose binding record is lost (F3)", "I1, I4"},
+	{"recovery.lost.mark", "recovery", 9, "marker", "<attempt>.settled for a lost binding, after its hold commits (F3)", "I1, I4"},
+	{"recovery.lost.gc", "recovery", 10, "remove", "GC after a lost binding is settled", "I6"},
+	{"recovery.bindings_lost.record", "recovery", 11, "file", "the bindings_lost alert record, counts only (F3)", "I1"},
 }
 
 // Markdown renders the table for the PR evidence.

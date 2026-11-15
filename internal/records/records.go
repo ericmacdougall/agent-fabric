@@ -43,9 +43,14 @@ const (
 	// carries Generation, Reason and AckUnswept. On its own it releases
 	// nothing.
 	ReleaseAuthorized Kind = "release_authorized"
+	// BindingsLost is restart recovery's alert that the bindings directory
+	// was lost or emptied (goodqa#15966 F3): counts only (Attempts held as
+	// material lost, Missions held), filed under the first such attempt.
+	// docs/m1-runbook.md#bindings-lost is the operator's path.
+	BindingsLost Kind = "bindings_lost"
 )
 
-var kinds = map[Kind]bool{DeliveryBlocked: true, DeliveredEarlier: true, CredentialExposure: true, SweepIncomplete: true, LateWrite: true, MissionHold: true, ReleaseAuthorized: true}
+var kinds = map[Kind]bool{DeliveryBlocked: true, DeliveredEarlier: true, CredentialExposure: true, SweepIncomplete: true, LateWrite: true, MissionHold: true, ReleaseAuthorized: true, BindingsLost: true}
 
 // Record is one AC-29 record.
 type Record struct {
@@ -66,6 +71,9 @@ type Record struct {
 	Generation int64  `json:"generation,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 	AckUnswept bool   `json:"ack_unswept,omitempty"`
+	// Attempts and Missions are bindings_lost's counts.
+	Attempts int `json:"attempts,omitempty"`
+	Missions int `json:"missions,omitempty"`
 }
 
 var (
@@ -101,6 +109,13 @@ func (r Record) Validate() error {
 		}
 	} else if r.Generation != 0 || r.Reason != "" || r.AckUnswept {
 		return fmt.Errorf("%w: generation, reason and ack belong to release_authorized only", ErrRecord)
+	}
+	if r.Kind == BindingsLost {
+		if r.Attempts <= 0 || r.Missions <= 0 || r.Missions > r.Attempts {
+			return fmt.Errorf("%w: bindings_lost needs its counts", ErrRecord)
+		}
+	} else if r.Attempts != 0 || r.Missions != 0 {
+		return fmt.Errorf("%w: counts belong to bindings_lost only", ErrRecord)
 	}
 	if r.CommentID != "" && !remoteRE.MatchString(r.CommentID) {
 		return fmt.Errorf("%w: comment id must match %s", ErrRecord, remoteRE)

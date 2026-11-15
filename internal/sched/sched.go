@@ -884,8 +884,7 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	var resp store.Response
 	err = crashpoint.Around("launch.start", func() error {
 		var err error
-		resp, err = s.st.Execute(ctx, "fabd", domain.CommandID("start:"+string(attempt)), domain.Command{Kind: domain.CmdStartAttempt, Mission: mission, Attempt: attempt, Host: s.cfg.Host, Role: "writer",
-			Path: domain.ProviderClaudeCode})
+		resp, err = s.st.Execute(ctx, "fabd", domain.CommandID("start:"+string(attempt)), s.startCommand(mission, attempt))
 		return err
 	})
 	if err != nil {
@@ -1729,6 +1728,15 @@ const classPriorUnsettled = "prior_attempt_unsettled"
 // admission rule refuses (seam 5).
 const classAdmission = "credential_admission"
 
+// startCommand is fabd's START_ATTEMPT for a writer: its path is
+// claude-code, from fabd's own identity, and on the token path it carries
+// the M1 flag (F3), which restart recovery reads back from the commands
+// table.
+func (s *Scheduler) startCommand(mission domain.MissionID, attempt domain.AttemptID) domain.Command {
+	return domain.Command{Kind: domain.CmdStartAttempt, Mission: mission, Attempt: attempt, Host: s.cfg.Host, Role: "writer",
+		Path: domain.ProviderClaudeCode, M1: s.cfg.Credential != nil}
+}
+
 // classMarkedWithoutCredential is the pre-START refusal of a fabd with no
 // M1 token launch on a database with the comment_policy=m1 marker.
 const classMarkedWithoutCredential = "m1_marked_without_credential"
@@ -1765,6 +1773,17 @@ func (s *Scheduler) checkPriorSettled(ctx context.Context, mission domain.Missio
 		u, err := credential.Unsettled(s.cfg.Credential.BindingsDir, id)
 		if err != nil || u {
 			return fmt.Errorf("%s refused before START, nothing started (%s): attempt %s is bound and not settled", mission, classPriorUnsettled, id)
+		}
+	}
+	// F3: an M1 attempt that launched and whose binding record is lost is
+	// unsettled too, until restart recovery holds it and marks it settled.
+	starts, err := s.st.M1Starts(ctx, "", mission)
+	if err != nil {
+		return fmt.Errorf("earlier M1 attempts of %s not readable, nothing started: %w", mission, err)
+	}
+	for _, r := range starts {
+		if hasBinding, settled := bindingState(s.cfg.Credential.BindingsDir, r.Attempt); r.Launched && !hasBinding && !settled {
+			return fmt.Errorf("%s refused before START, nothing started (%s): attempt %s launched, its binding record is lost and it is not settled", mission, classPriorUnsettled, r.Attempt)
 		}
 	}
 	return nil

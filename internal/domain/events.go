@@ -63,8 +63,14 @@ type Command struct {
 	// worktree the attempt is bound to. omitempty keeps the request hash of
 	// every command without it byte-identical to earlier binaries.
 	Worktree string `json:"worktree,omitempty"`
-	Receipt  string `json:"receipt,omitempty"`
-	Outcome  string `json:"outcome,omitempty"` // FINISH_ATTEMPT: checkpoint|wait|ready_for_review|blocked|abandoned
+	// START_ATTEMPT, M1 token path (goodqa#15966 F3): the attempt is
+	// launched with a token binding. Stored as data in the command's
+	// canonical request, in the START transaction, so restart recovery
+	// finds the attempt even when its binding record is lost. omitempty
+	// keeps every other command's request hash byte-identical.
+	M1      bool   `json:"m1,omitempty"`
+	Receipt string `json:"receipt,omitempty"`
+	Outcome string `json:"outcome,omitempty"` // FINISH_ATTEMPT: checkpoint|wait|ready_for_review|blocked|abandoned
 	// FINISH_ATTEMPT abandoned: the runner was never started (red-team F1).
 	Prelaunch bool `json:"prelaunch,omitempty"`
 	// With Prelaunch: the cause is a full resource, a wait not a failure (red-team D2).

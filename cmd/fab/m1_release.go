@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"fabric/internal/crashpoint"
 	"fabric/internal/credential"
@@ -164,4 +165,48 @@ func heldAttempt(ctx context.Context, st *store.Store, m domain.MissionID, recor
 		return "", "", fmt.Errorf("mission release: no attempt to record the release against; nothing released: %w", err)
 	}
 	return domain.AttemptID(a), "", nil
+}
+
+// printOperatorHolds is `fab status`'s view of the AC-34 operator holds
+// (goodqa#15966 F3): each held mission with the class and attempt of its
+// latest mission_hold record, and any bindings_lost alert record, which
+// points at docs/m1-runbook.md#bindings-lost. Without a records directory
+// the classes are not shown. Read-only.
+func printOperatorHolds(ctx context.Context, st *store.Store, recordsDir string) error {
+	held, err := st.OperatorHolds(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("operator holds: %d\n", len(held))
+	var holds, lost []records.Record
+	if recordsDir != "" {
+		if holds, err = records.List(recordsDir, records.MissionHold); err != nil {
+			return fmt.Errorf("status: records unreadable: %w", err)
+		}
+		if lost, err = records.List(recordsDir, records.BindingsLost); err != nil {
+			return fmt.Errorf("status: records unreadable: %w", err)
+		}
+	}
+	for _, m := range held {
+		if recordsDir == "" {
+			fmt.Printf("  %s  class: not shown (pass --work-root, --run-area or --records-dir)\n", m)
+			continue
+		}
+		var best records.Record
+		for _, h := range holds {
+			if h.Mission == m && (best.Attempt == "" || h.Time.After(best.Time)) {
+				best = h
+			}
+		}
+		if best.Attempt == "" {
+			fmt.Printf("  %s  class: none recorded\n", m)
+			continue
+		}
+		fmt.Printf("  %s  class: %s  attempt: %s\n", m, best.Class, best.Attempt)
+	}
+	for _, r := range lost {
+		fmt.Printf("ALERT bindings lost at %s: %d M1 attempts, %d missions held; see docs/m1-runbook.md#bindings-lost\n",
+			r.Time.Format(time.RFC3339), r.Attempts, r.Missions)
+	}
+	return nil
 }

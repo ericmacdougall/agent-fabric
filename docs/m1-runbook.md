@@ -5,7 +5,8 @@ This runbook covers goodqa#15966, spec v16, AC-34 and AC-35(i).
 An M1 fabd puts an **operator hold** on a mission in these cases:
 
 - a settle failed closed;
-- the subscription token was refused (AC-19).
+- the subscription token was refused (AC-19);
+- an attempt's binding record was lost (section 5).
 
 While the hold stands, the mission starts nothing. Only an operator can lift it. This page explains how to inspect a hold and release it safely.
 
@@ -91,6 +92,65 @@ The path out:
 1. On the host, verify that the attempt's worker unit is gone from the worker manager's unit listing (the listing W1's verified stop reads, AC-4). Nothing of that attempt may still run.
 2. Restart fabd, or wait for the prober. Once W1's verified stop returns Verified, fabd runs the same settle sequence: redact, gate, sweep, records, MarkSettled, GC. The `.settled` marker then exists and the refusal lifts.
 3. **If the stop never verifies, stop and escalate.** Do not write a `.settled` marker by hand, and do not delete the binding record. No flag bypasses the settled marker, because the marker is what lets GC drop the token version.
+
+<a id="bindings-lost"></a>
+
+## 5. Bindings lost
+
+Each M1 START records, in the same database transaction, that the attempt runs on the token path. On every scan, restart recovery visits every such attempt that has no `.settled` marker. It also visits every binding record in `{run area}/bindings/`.
+
+An attempt that launched (it has `ATTEMPT_ACKED` and no prelaunch FINISH) but whose binding record is gone has lost its bound material. Nothing can be swept for it. fabd then does three things, in this order:
+
+1. It records `sweep_incomplete` with class `material_unavailable`.
+2. It places the `credential_material_unavailable` hold and writes its `mission_hold` record.
+3. Only after the hold commits does it write the `.settled` marker.
+
+Until then, START of that mission is refused with `prior_attempt_unsettled`.
+
+**If the whole bindings directory is lost or emptied, every M1 attempt on the host is held.** The settled markers are gone too, so even attempts that were already settled become owed. This fails closed, and the operator releases each mission.
+
+fabd alerts on this when one scan finds two or more lost bindings, or finds the directory itself missing (it recreates it, 0700, as it does at start). It never exits. The alert has three parts:
+
+- one `bindings_lost` record in `{run area}/records/`. It holds counts only: `attempts` and `missions` held;
+- one stderr line for that scan:
+  `fabd: ALERT bindings directory lost or emptied; N M1 missions held; see docs/m1-runbook.md#bindings-lost`;
+- `fab status --work-root {work-root}`, which lists `operator holds: N` and each held mission's class and attempt, followed by `ALERT bindings lost at <time>: A M1 attempts, M missions held; ...`.
+
+A single lost binding is still held. It writes no `bindings_lost` record and no ALERT line.
+
+Steps, each with its expected output:
+
+1. **Confirm that no worker unit runs.** Restart recovery's verified stop (VerifyGone) is one way. The other, as root on the fabd host:
+
+   ```
+   systemctl --user -M fab-worker@ list-units 'fab-*'
+   ```
+
+   Expected: `0 loaded units listed.` If any unit is listed, stop here and escalate. Nothing may be released while a worker runs.
+
+2. **Find the affected missions and attempts:**
+
+   ```
+   fab status --work-root {work-root}
+   ```
+
+   Expected: `operator holds: N`, then one line per mission ending in `class: credential_material_unavailable  attempt: r_...`, then the `ALERT bindings lost` line.
+
+3. **Remove each affected attempt's run roots, as root:**
+
+   ```
+   sudo rm -rf -- {work-root}/run/{attempt}/claude-config {work-root}/run/{attempt}/home {work-root}/run/{attempt}/tmp
+   ```
+
+   Expected: no output, exit 0, and `ls {work-root}/run/{attempt}` no longer lists those three directories.
+
+4. **Release each mission:**
+
+   ```
+   fab mission release --mission M --reason "bindings lost: <ticket>" --ack-unswept --work-root {work-root}
+   ```
+
+   Expected: exit 0, and `fab status` no longer lists M. Without `--ack-unswept` the release refuses and the hold stays. A restarted fabd does not hold M again, because the attempt's `.settled` marker was written after its hold.
 
 ## Limitations
 

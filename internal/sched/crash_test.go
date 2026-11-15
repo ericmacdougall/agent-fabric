@@ -204,8 +204,8 @@ func (w *crashWorld) bound(t *testing.T, stream func(tok []byte) string) {
 	ctx := context.Background()
 	tok := w.base(t)
 	a := domain.AttemptID("r_crash_1")
-	resp, err := w.st.Execute(ctx, "fabd", domain.CommandID("start:"+string(a)), domain.Command{Kind: domain.CmdStartAttempt, Mission: crashMission, Attempt: a,
-		Host: w.cfg.Host, Role: "writer", Path: domain.ProviderClaudeCode})
+	// fabd's own START, M1 flag included (F3).
+	resp, err := w.st.Execute(ctx, "fabd", domain.CommandID("start:"+string(a)), New(w.st, w.cfg, w.ln).startCommand(crashMission, a))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,6 +329,17 @@ func crashScenarios() []crashScenario {
 		{name: "recovery-verified-hold", owes: credential.ClassRotatedMidAttempt, arrange: boundWith(okStream, lapsed(rotateOthers)), act: restartAct},
 		{name: "recovery-unverified", owes: classRestartUnverified, unverified: true,
 			arrange: boundWith(okStream, lapsed(func(t *testing.T, w *crashWorld) { w.setMode(t, "verify", "no") })), act: restartAct},
+		// F3: the binding record is lost and fabd restarts; the scan finds
+		// the attempt through its START's M1 flag and holds it.
+		{name: "binding-lost-restart", owes: credential.ClassMaterialUnavailable, arrange: boundWith(okStream, lapsed(func(t *testing.T, w *crashWorld) {
+			os.Remove(filepath.Join(w.bindings(), string(w.state().Attempt)+".json")) //nolint:errcheck
+		})), act: restartAct},
+		// F3 alert: the whole bindings directory is lost.
+		{name: "bindings-dir-lost-restart", owes: credential.ClassMaterialUnavailable, arrange: boundWith(okStream, lapsed(func(t *testing.T, w *crashWorld) {
+			if err := os.RemoveAll(w.bindings()); err != nil {
+				t.Fatal(err)
+			}
+		})), act: restartAct},
 		{name: "launch", arrange: func(t *testing.T, w *crashWorld) { w.base(t) }, act: func(ctx context.Context, w *crashWorld) error {
 			return New(w.st, w.cfg, w.ln).runOnce(ctx, crashMission)
 		}},
@@ -410,13 +421,7 @@ func traced(stderr string) []string {
 // crashKnown are invariant failures with a fix commit pending; the case
 // logs KNOWN instead of failing. FABRIC_CRASH_STRICT=1 fails them too (the
 // failing-first evidence), and an entry that no longer fails is an error.
-var crashKnown = map[string]string{
-	"material-unavailable/hold.operator:before:1": "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
-	"material-unavailable/settle.record:after:1":  "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
-	"material-unavailable/settle.record:after:2":  "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
-	"material-unavailable/settle.record:before:1": "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
-	"material-unavailable/settle.record:before:2": "F3: a lost binding record is never held (fix: M1 flag on START, generalised scan)",
-}
+var crashKnown = map[string]string{}
 
 func (w *crashWorld) attempts(t *testing.T) []domain.AttemptID {
 	t.Helper()

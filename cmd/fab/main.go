@@ -376,6 +376,14 @@ func simpleCommand(name string, args []string) error {
 }
 
 func statusMain(args []string) error {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	workRoot := fs.String("work-root", "", "fabd's --work-root: show each operator hold's class from {work-root}/run-area/records")
+	runArea := fs.String("run-area", "", "fabd's --run-area, when it set one")
+	recordsDir := fs.String("records-dir", "", "fabd's records directory, overriding --run-area and --work-root")
+	if err := fs.Parse(args); err != nil {
+		return usageError{err}
+	}
+	dir := releaseRecordsDir(*recordsDir, *runArea, *workRoot)
 	return withStore(func(ctx context.Context, st *store.Store) error {
 		held, err := st.SlotsHeld(ctx)
 		if err != nil {
@@ -391,6 +399,9 @@ func statusMain(args []string) error {
 			return err
 		}
 		fmt.Printf("held streams: %d\n", heldStreams)
+		if err := printOperatorHolds(ctx, st, dir); err != nil {
+			return err
+		}
 		if err := printMissions(ctx, st); err != nil {
 			return err
 		}
