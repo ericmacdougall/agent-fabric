@@ -46,6 +46,10 @@ const (
 	EndInterrupted EndKind = "interrupted"
 )
 
+// ReasonCredentialRejected prefixes the finish reason of a run whose token
+// was refused (goodqa#15966 AC-19). The reason never carries CLI text.
+const ReasonCredentialRejected = "credential_rejected"
+
 // Run is what the adapter reports to the daemon for one worker process.
 type Run struct {
 	SessionID        string
@@ -68,8 +72,11 @@ type Run struct {
 	ResultUUID       string
 	APIRetries       int
 	RateLimited      bool
-	End              EndKind
-	ParseErrors      []string
+	// AuthFailed is set when any event reports authentication_failed or an
+	// HTTP 401 (AC-19): an expired or revoked token.
+	AuthFailed  bool
+	End         EndKind
+	ParseErrors []string
 	// Contradictions are identity or ordering faults (goodqa#15082): a
 	// second init, a result before init, init after a result, a second
 	// result, a changed session id. The daemon never verifies a run that
@@ -100,8 +107,9 @@ type envelope struct {
 	StopReason        string            `json:"stop_reason"`
 	PermissionDenials []json.RawMessage `json:"permission_denials"`
 	StructuredOutput  json.RawMessage   `json:"structured_output"`
-	// system/api_retry
-	Error string `json:"error"`
+	// system/api_retry, and the assistant error marker
+	Error       string `json:"error"`
+	ErrorStatus int    `json:"error_status"`
 }
 
 // Parse reads a stream-json run to its end. expectStructured says the grant
@@ -135,6 +143,9 @@ func Parse(r io.Reader, expectStructured bool) (Run, error) {
 				run.ParseErrors = append(run.ParseErrors, fmt.Sprintf("event %d: session id changed %s -> %s", run.Events, run.SessionID, e.SessionID))
 				contradict("session id changed %s -> %s", run.SessionID, e.SessionID)
 			}
+		}
+		if e.Error == "authentication_failed" || e.ErrorStatus == 401 {
+			run.AuthFailed = true
 		}
 		switch e.Type {
 		case "system":

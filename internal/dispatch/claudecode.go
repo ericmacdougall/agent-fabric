@@ -97,6 +97,12 @@ func (ClaudeCode) Settle(stream io.Reader, code int) (Settlement, error) {
 		return fin("abandoned", "", "stream unreadable: "+perr.Error(), nil)
 	}
 	usage, _ := json.Marshal(map[string]any{"session": run.SessionID, "turns": run.Turns, "context_last_turn": run.LastTurn.Context(), "cost_usd": run.TotalCostUSD, "exit": code})
+	if run.AuthFailed {
+		// goodqa#15966 AC-19: an expired or revoked token fails definite on
+		// its first try, whatever else the stream says; the reason is fixed
+		// text, never the CLI's message.
+		return fin("abandoned", "", claude.ReasonCredentialRejected+": the subscription token was refused (401)", usage)
+	}
 	switch run.End {
 	case claude.EndCheckpoint:
 		// goodqa#15082 T1: success needs the process to agree (exit 0) and

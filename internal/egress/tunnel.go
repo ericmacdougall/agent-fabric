@@ -30,7 +30,7 @@ type relayResult struct {
 	err error
 }
 
-func (m *Mediator) runTunnel(client, target net.Conn, clientReader *bufio.Reader, total time.Time) {
+func (m *Mediator) runTunnel(client, target net.Conn, clientReader *bufio.Reader, total time.Time, hc *hostCounter) {
 	t := &tunnel{
 		client: client, target: target,
 		idle: m.limits.IdleTimeout, total: total,
@@ -43,11 +43,11 @@ func (m *Mediator) runTunnel(client, target net.Conn, clientReader *bufio.Reader
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		t.relay(results, target, clientReader)
+		t.relay(results, target, clientReader, &hc.up)
 	}()
 	go func() {
 		defer wg.Done()
-		t.relay(results, client, target)
+		t.relay(results, client, target, &hc.down)
 	}()
 	go func() {
 		defer wg.Done()
@@ -66,7 +66,7 @@ func (m *Mediator) runTunnel(client, target net.Conn, clientReader *bufio.Reader
 	wg.Wait()
 }
 
-func (t *tunnel) relay(results chan<- relayResult, dst net.Conn, src io.Reader) {
+func (t *tunnel) relay(results chan<- relayResult, dst net.Conn, src io.Reader, count *atomic.Int64) {
 	buf := make([]byte, 32<<10)
 	for {
 		t.mu.Lock()
@@ -84,7 +84,9 @@ func (t *tunnel) relay(results chan<- relayResult, dst net.Conn, src io.Reader) 
 		allowed := t.consume(n)
 		if allowed > 0 {
 			t.lastActivity.Store(time.Now().UnixNano())
-			if _, err := dst.Write(buf[:allowed]); err != nil {
+			w, err := dst.Write(buf[:allowed])
+			count.Add(int64(w))
+			if err != nil {
 				results <- relayResult{dst: dst, err: err}
 				return
 			}

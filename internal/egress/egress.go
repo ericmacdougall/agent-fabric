@@ -109,6 +109,9 @@ type Mediator struct {
 	active    int
 	conns     map[net.Conn]struct{}
 	wg        sync.WaitGroup
+
+	countMu sync.Mutex
+	counts  map[string]*hostCounter
 }
 
 // Start resolves and pins every enabled destination, then starts a loopback
@@ -324,14 +327,17 @@ func (m *Mediator) handle(client net.Conn) {
 	}
 	key, err := validateConnect(raw)
 	if err != nil {
+		m.counter(RefusedHost).refused.Add(1)
 		writeStatus(client, http.StatusForbidden)
 		return
 	}
 	d := m.dests[key]
 	if d == nil {
+		m.counter(RefusedHost).refused.Add(1)
 		writeStatus(client, http.StatusForbidden)
 		return
 	}
+	hc := m.counter(d.host)
 	m.mu.Lock()
 	closed := m.closed
 	m.mu.Unlock()
@@ -368,9 +374,11 @@ func (m *Mediator) handle(client net.Conn) {
 	// H1 (goodqa#15235): the pinned IP may be a shared edge that serves any
 	// site by SNI, so nothing is relayed until the ClientHello names d.host.
 	if err := checkClientHello(br, d.host); err != nil {
+		hc.refused.Add(1)
 		return
 	}
-	m.runTunnel(client, target, br, totalDeadline)
+	hc.conns.Add(1)
+	m.runTunnel(client, target, br, totalDeadline, hc)
 }
 
 func readHeader(br *bufio.Reader, max int) ([]byte, error) {

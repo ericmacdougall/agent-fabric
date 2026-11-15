@@ -18,6 +18,9 @@ import (
 )
 
 func providerMain(args []string) error {
+	if len(args) > 0 && args[0] == "token" {
+		return tokenMain(args[1:])
+	}
 	if len(args) == 0 || args[0] != "capture" {
 		return errors.New("provider capture --grant F --out DIR [--scenarios a,b]")
 	}

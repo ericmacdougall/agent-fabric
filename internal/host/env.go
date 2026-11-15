@@ -18,8 +18,17 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // on Darwin, USER, TMPDIR, SHELL), the claude launch's private config and
 // cache paths and run identity, and the scheduler's run paths and runner
 // DSN. A name outside it is refused, so a new variable is a reviewed change.
+//
+// goodqa#15966 AC-14 adds the claude-code M1 names: the subscription token
+// (passed only to a pinned real claude; credential.ClaudeEnv and
+// credential.CheckManifest enforce that before any launch) and the fixed
+// scrub, history, traffic, telemetry, error-report and autoupdater
+// switches. ANTHROPIC_API_KEY is never on the list.
 var WorkerEnvNames = []string{
 	"CLAUDE_CODE_DISABLE_CLAUDE_MDS", "CLAUDE_CONFIG_DIR",
+	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_OAUTH_TOKEN",
+	"CLAUDE_CODE_SKIP_PROMPT_HISTORY", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
+	"DISABLE_AUTOUPDATER", "DISABLE_ERROR_REPORTING", "DISABLE_TELEMETRY",
 	"FAB_ATTEMPT", "FAB_FENCE", "FAB_MISSION", "FAB_RUN", "FAB_RUN_DIR", "FAB_WORKTREE",
 	"FABRIC_DSN", "FABRIC_HOME",
 	"GIT_CONFIG_GLOBAL",

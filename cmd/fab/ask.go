@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"fabric/internal/domain"
+	"fabric/internal/egress"
 	"fabric/internal/store"
 )
 
@@ -129,6 +130,7 @@ func askMain(args []string) error {
 func missionShow(args []string) error {
 	fs := flag.NewFlagSet("mission show", flag.ContinueOnError)
 	events := fs.Bool("events", true, "include the event log")
+	egressDir := fs.String("egress-dir", os.Getenv("FABRIC_EGRESS_COUNTS_DIR"), "fabd-only directory of per-attempt egress counts (goodqa#15966 AC-20)")
 	id, err := parseWithID(fs, args, "mission show <id>")
 	if err != nil {
 		return err
@@ -149,6 +151,13 @@ func missionShow(args []string) error {
 				return err
 			}
 			out["events"] = evs
+		}
+		if *egressDir != "" {
+			counts, err := egress.ReadCounts(*egressDir, id)
+			if err != nil {
+				return fmt.Errorf("egress counts: %w", err)
+			}
+			out["egress"] = counts
 		}
 		return printJSON(out)
 	})
