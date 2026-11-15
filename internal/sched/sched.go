@@ -213,6 +213,8 @@ type Scheduler struct {
 	// recovered: quarantined token-path attempts restart recovery has
 	// finished with in this process (goodqa#15966 AC-35(i)).
 	recovered map[domain.AttemptID]bool
+	// m1Marked caches the comment_policy=m1 marker (item 4, E12).
+	m1Marked atomic.Bool
 	// unstarted are this process's bindings whose worker has not been
 	// started: abandonPrelaunch settles them before its FINISH.
 	unstarted   map[domain.AttemptID]bool
@@ -283,7 +285,9 @@ func New(st *store.Store, cfg Config, ln Launcher) *Scheduler {
 		cfg.MaxBackoff = 30 * time.Second
 	}
 	cfg = cfg.withDefaults()
-	return &Scheduler{st: st, cfg: cfg, ln: ln, cfgErr: CheckConfig(cfg, ln)}
+	s := &Scheduler{st: st, cfg: cfg, ln: ln, cfgErr: CheckConfig(cfg, ln)}
+	s.readM1Marker(context.Background()) // item 4: checked once at New, then per tick
+	return s
 }
 
 func (c Config) withDefaults() Config {
@@ -434,6 +438,7 @@ func (s *Scheduler) gated() bool { return len(s.cfg.Holds) > 0 }
 // Tick runs one pass of every sweep and reports whether it did any work.
 func (s *Scheduler) Tick(ctx context.Context) (bool, error) {
 	s.ticks.Add(1)
+	s.readM1Marker(ctx)
 	if err := s.ensureRunnerRole(ctx); err != nil {
 		return false, err // a configuration or role fault is global: stop before any write
 	}
@@ -837,6 +842,14 @@ func (s *Scheduler) runOnce(ctx context.Context, mission domain.MissionID) error
 	// marker (prior_attempt_unsettled): its token version, raw streams and
 	// run roots are still owed a settle. No flag bypasses this
 	// (docs/m1-runbook.md).
+	// goodqa#15966 item 4 (PR erratum E12): a database carrying the M1
+	// comment_policy marker admits no START from a fabd without the M1
+	// token launch. The marker read is cached per tick (and at New), so a
+	// marker set while fabd runs is seen within one tick; an unreadable
+	// marker refuses too.
+	if s.cfg.Credential == nil && s.m1Marked.Load() {
+		return fmt.Errorf("%s refused before START, nothing started (%s): the database carries the comment_policy=m1 marker and this fabd has no M1 token launch", mission, classMarkedWithoutCredential)
+	}
 	if s.cfg.Credential != nil {
 		if err := s.checkPriorSettled(ctx, mission); err != nil {
 			return err
@@ -1715,6 +1728,20 @@ const classPriorUnsettled = "prior_attempt_unsettled"
 // classAdmission is the pre-START refusal class of a token the AC-17
 // admission rule refuses (seam 5).
 const classAdmission = "credential_admission"
+
+// classMarkedWithoutCredential is the pre-START refusal of a fabd with no
+// M1 token launch on a database with the comment_policy=m1 marker.
+const classMarkedWithoutCredential = "m1_marked_without_credential"
+
+// readM1Marker caches whether the database carries the M1 marker. Only a
+// fabd without the token launch acts on it; a read error counts as marked.
+func (s *Scheduler) readM1Marker(ctx context.Context) {
+	if s.cfg.Credential != nil || s.st == nil {
+		return
+	}
+	v, ok, err := s.st.CommentPolicyMarker(ctx)
+	s.m1Marked.Store(err != nil || (ok && v == "m1"))
+}
 
 func (s *Scheduler) checkPriorSettled(ctx context.Context, mission domain.MissionID) error {
 	rows, err := s.st.Pool().Query(ctx, `SELECT id FROM attempts WHERE mission_id = $1`, string(mission))
