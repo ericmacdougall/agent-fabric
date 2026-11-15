@@ -339,6 +339,12 @@ func daemonMain(args []string) error {
 		if m1g != nil {
 			loop = &m1effect.Loop{Store: st, Broker: effects.New(st), Exec: m1g, RecordsDir: recordsDir}
 			cfg.EffectPass = loop.MaybePass
+			// goodqa#15966 seam 3: the pre-submit step posts from the
+			// redacted copy, the mission config and the missions row only.
+			if cfg.Credential != nil && cfg.Mission != nil {
+				step := &m1effect.Step{Store: st, Broker: effects.New(st), Exec: m1g, RecordsDir: recordsDir}
+				cfg.EffectStep = m1EffectStep(step, m1SourceFor(st, cfg.Mission, cfg.Credential.PinnedSHA, cfg.Model))
+			}
 		}
 		// goodqa#15966 AC-16, AC-35(h): the sweep runs as the worker through
 		// the worker manager. Without one (the shadow host.Linux) SweepFor
