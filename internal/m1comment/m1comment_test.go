@@ -223,7 +223,7 @@ commit 8297e422ad519e23152e7a21119ed9bc5c8991ad. Output: FAIL sum_to 5: want 15,
 }
 
 func fields() Fields {
-	return Fields{Mission: "m_canary-m1", Provider: "claude-code", ClaudeSHA: strings.Repeat("ab12", 16), Model: "claude-sonnet-4"}
+	return Fields{Mission: "m_canary-m1", Provider: "claude-code", ClaudeSHA: strings.Repeat("ab12", 16), Model: "tier-model-a"}
 }
 
 func validate(t *testing.T, body string) {
